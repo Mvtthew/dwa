@@ -52,6 +52,11 @@ export function startServer(options: ServerOptions) {
       case "POST /focus":
         await workspace.focusMain();
         return json({ ok: true });
+      case "POST /notify": {
+        const { message } = await body<{ message?: unknown }>(request);
+        if (typeof message === "string" && message) await workspace.notify(message);
+        return json({ ok: true });
+      }
       case "POST /down":
         await workspace.down();
         setTimeout(options.onShutdown, 50);

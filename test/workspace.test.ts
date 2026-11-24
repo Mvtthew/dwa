@@ -196,6 +196,31 @@ describe("agents", () => {
   });
 });
 
+describe("notify", () => {
+  test("shows a message and does not fail when no terminal is attached", async () => {
+    await workspace.up();
+    await workspace.notify("No agent at position 1");
+    expect(tmux.commands("display-message").at(-1)).toEqual([
+      "display-message",
+      "-d",
+      "3000",
+      "No agent at position 1",
+    ]);
+    const failing = new Workspace({
+      store,
+      run: async () => {
+        throw new Error("no current client");
+      },
+      provider: claudeProvider,
+      projectRoot: "/project",
+      socketPath: "/tmp/dwa.sock",
+      selfArgv: ["bun"],
+      loadConfig: async () => config,
+    });
+    await failing.notify("x");
+  });
+});
+
 describe("down", () => {
   test("kills the server and marks everything stopped", async () => {
     await workspace.up();

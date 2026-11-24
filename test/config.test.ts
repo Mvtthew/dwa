@@ -170,7 +170,7 @@ describe("tmux helpers", () => {
     expect(buildTmuxConf({ selfArgv: ["bun"], projectRoot: "/p", prefix: "C-a" })).toContain(
       "bind C-a send-prefix",
     );
-    expect(conf).toContain(`${tmuxQuote("/dwa/cli.ts").replaceAll("'", "'\\''")} agent open 3'`);
+    expect(conf).toContain(`${tmuxQuote("/dwa/cli.ts").replaceAll("'", "'\\''")} key open 3'`);
     expect(conf).toContain("/my proj");
   });
 

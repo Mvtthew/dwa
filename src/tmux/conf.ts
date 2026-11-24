@@ -26,10 +26,10 @@ export function buildTmuxConf(options: ConfOptions): string {
   const actions: [key: string, command: string][] = [
     ...Array.from({ length: 9 }, (_, i): [string, string] => [
       `${i + 1}`,
-      run(`agent open ${i + 1}`),
+      run(`key open ${i + 1}`),
     ]),
-    ["x", run("agent close")],
-    ["0", run("focus main")],
+    ["x", run("key close")],
+    ["0", run("key focus")],
     ["z", "resize-pane -Z"],
   ];
   const lines = [

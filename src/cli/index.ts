@@ -113,6 +113,26 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
   }
 }
 
+/**
+ * Actions bound to keys in the workspace. tmux shows a failing command's output over the active
+ * pane, so these never print or fail: a problem is reported as a short message instead.
+ */
+async function keyCommand(projectRoot: string, args: string[]): Promise<number> {
+  const [action, target] = args;
+  try {
+    if (action === "open") await call(projectRoot, "POST", "/agents/open", { target });
+    else if (action === "close") await call(projectRoot, "POST", "/agents/close");
+    else if (action === "focus") await call(projectRoot, "POST", "/focus");
+  } catch (error) {
+    const message =
+      action === "open" && /^No agent/.test((error as Error).message)
+        ? `No agent at position ${target}`
+        : (error as Error).message;
+    await call(projectRoot, "POST", "/notify", { message }).catch(() => undefined);
+  }
+  return 0;
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   const projectRoot = findProjectRoot();
@@ -135,7 +155,11 @@ async function main(argv: string[]): Promise<number> {
       return attach(projectRoot);
     }
     case "down":
-      if (await isDaemonRunning(projectRoot)) await call(projectRoot, "POST", "/down");
+      if (await isDaemonRunning(projectRoot)) {
+        await call(projectRoot, "POST", "/down");
+        // Wait for the daemon to exit, so an `up` right after this starts a fresh one.
+        for (let i = 0; i < 50 && (await isDaemonRunning(projectRoot)); i++) await Bun.sleep(50);
+      }
       console.log("Workspace stopped.");
       return 0;
     case "agent":
@@ -143,6 +167,8 @@ async function main(argv: string[]): Promise<number> {
     case "focus":
       await call(projectRoot, "POST", "/focus");
       return 0;
+    case "key":
+      return keyCommand(projectRoot, rest);
     case "ui": {
       const view = rest[0];
       if (view !== "status" && view !== "agents") {

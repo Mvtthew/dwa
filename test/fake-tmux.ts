@@ -74,6 +74,7 @@ export class FakeTmux {
         this.require(option(args, "-t"));
         return "";
       case "set-hook":
+      case "display-message":
         return "";
       default:
         throw new Error(`FakeTmux: unsupported command ${name}`);

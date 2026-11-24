@@ -184,6 +184,14 @@ export class Workspace {
     });
   }
 
+  /** Shows a short message in the attached terminal, e.g. why a shortcut did nothing. */
+  notify(message: string): Promise<void> {
+    return this.serial(async () => {
+      // Fails when no terminal is attached; there is nobody to tell then.
+      await this.deps.run(["display-message", "-d", "3000", message]).catch(() => undefined);
+    });
+  }
+
   /** Ends every session and the private tmux server. */
   down(): Promise<void> {
     return this.serial(() => this.killServer());
