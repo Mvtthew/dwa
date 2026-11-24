@@ -156,6 +156,8 @@ export class Workspace {
         profile,
         sessionId,
         name: "main",
+        model: config.main.model,
+        effort: config.main.effort,
         ...this.sessionFiles(id, "main"),
       });
       const panes = await createWorkspace(this.deps.run, {

@@ -315,6 +315,11 @@ describe("model and effort settings", () => {
     expect(mergeConfig(user, project).defaults).toEqual({ model: "sonnet", effort: "high" });
     expect(project.agents).toEqual([{ name: "rev", model: "opus", effort: "max" }]);
     expect(() => parseConfig('[defaults]\neffort = "extreme"', "cfg")).toThrow(/defaults\.effort/);
+
+    const mainUser = parseConfig('[main]\nmodel = "opus"\neffort = "medium"', "user");
+    const mainProject = parseConfig('[main]\neffort = "high"', "project");
+    expect(mergeConfig(mainUser, mainProject).main).toEqual({ model: "opus", effort: "high" });
+    expect(() => parseConfig('[main]\nprofile = "x"', "cfg")).toThrow(/main/);
   });
 
   test("a role file's frontmatter is read for model and effort", () => {

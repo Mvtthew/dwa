@@ -17,13 +17,14 @@ afterEach(() => {
 });
 
 describe("init", () => {
-  test("the config template is valid and changes nothing until edited", () => {
+  test("the config template is valid and sets only the models", () => {
     expect(parseConfig(CONFIG_TEMPLATE, "template")).toEqual({
       profiles: {},
       keys: {},
       agents: [],
       layout: {},
-      defaults: {},
+      defaults: { model: "sonnet", effort: "medium" },
+      main: { model: "opus", effort: "medium" },
     });
   });
 

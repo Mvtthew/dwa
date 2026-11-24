@@ -12,6 +12,7 @@ const baseConfig: Config = {
   agents: [],
   layout: {},
   defaults: {},
+  main: {},
   default_profile: "me",
   profiles: {
     me: { command: "/bin/claude_me", args: [], env: {} },
@@ -302,6 +303,19 @@ describe("model and effort", () => {
     expect(tuning()).toEqual(["--model", "sonnet", "--effort", "high"]);
     const main = [...tmux.panes.values()].find((pane) => pane.argv.includes("main"));
     expect(main?.argv).not.toContain("--model");
+  });
+
+  test("the main session takes its own section, after the profile's arguments", async () => {
+    config.main = { model: "opus", effort: "medium" };
+    config.default_profile = "work";
+    await workspace.up();
+    const main = [...tmux.panes.values()].find((pane) => pane.argv.includes("main"));
+    const argv = main?.argv ?? [];
+    expect(argv.slice(-4)).toEqual(["--model", "opus", "--effort", "medium"]);
+    expect(argv.indexOf("--verbose")).toBeLessThan(argv.indexOf("--model"));
+    // Agents do not inherit it.
+    await workspace.spawn({ name: "dev" });
+    expect(tuning()).toEqual([]);
   });
 
   test("an unknown effort level is refused", async () => {

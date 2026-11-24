@@ -13,6 +13,7 @@ const config: Config = {
   agents: [],
   layout: {},
   defaults: {},
+  main: {},
   default_profile: "me",
   profiles: { me: { command: "/bin/claude_me", args: [], env: {} } },
 };

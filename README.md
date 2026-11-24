@@ -165,7 +165,13 @@ model = "sonnet"
 effort = "medium"       # low, medium, high, xhigh or max
 ```
 
-`[defaults]` never overrides a role file and does not apply to the main session; set the main session's model through its profile's `args`.
+`[defaults]` never overrides a role file and does not apply to the main session. The main session has its own section, which overrides a model set in its profile:
+
+```toml
+[main]
+model = "opus"
+effort = "medium"
+```
 
 Agent roles are ordinary Claude Code agent definitions in `.claude/agents/`. `dwa init --roles` adds three to start from, `explore`, `developer` and `reviewer`, and an example workflow that uses them. `dwa init` never overwrites a file; in a git repository it also adds `.dwa/run/` to `.gitignore`.
 

@@ -10,7 +10,7 @@ const EXAMPLE_WORKFLOWS_DIR = join(import.meta.dir, "..", "..", "examples", "wor
 const IGNORE_LINE = `.${APP_NAME}/run/`;
 
 export const CONFIG_TEMPLATE = `# ${APP_NAME} project configuration. Personal settings go in ~/.config/${APP_NAME}/config.toml;
-# values here override them. Everything is optional.
+# values here override them. Everything is optional; delete what you do not want.
 
 # Which Claude command to run. Profiles let you switch accounts or wrappers.
 # default_profile = "me"
@@ -32,11 +32,17 @@ export const CONFIG_TEMPLATE = `# ${APP_NAME} project configuration. Personal se
 # effort = "high"
 # task = "Wait for review requests."
 
+# Model and effort for the main session only. They override a model set in the profile.
+# Without this section the Claude command's own default is used.
+[main]
+model = "opus"
+effort = "medium"       # low, medium, high, xhigh or max
+
 # Model and effort for agents that set neither. An agent's or workflow step's own setting
 # wins, then "model:" / "effort:" in its role file, then these. Not applied to the main session.
-# [defaults]
-# model = "sonnet"
-# effort = "medium"     # low, medium, high, xhigh or max
+[defaults]
+model = "sonnet"
+effort = "medium"
 
 # [keys]
 # prefix = "C-q"        # tmux key notation

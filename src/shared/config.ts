@@ -34,9 +34,18 @@ export const EffortSchema = z.enum(EFFORT_LEVELS);
 /**
  * Model and effort for agents that say nothing themselves. An agent's own setting wins, then
  * its role file (`model:` / `effort:` in `.claude/agents/<role>.md`), then these. The main
- * session is not affected; set its model through the profile's `args`.
+ * session is not affected; it has its own `[main]` section.
  */
 const DefaultsSchema = z.strictObject({
+  model: ModelSchema.optional(),
+  effort: EffortSchema.optional(),
+});
+
+/**
+ * Model and effort for the main session only. They are placed after the profile's own
+ * arguments, so they win over a model set there.
+ */
+const MainSchema = z.strictObject({
   model: ModelSchema.optional(),
   effort: EffortSchema.optional(),
 });
@@ -69,6 +78,7 @@ const ConfigSchema = z.strictObject({
   agents: z.array(AgentSchema).default([]),
   layout: LayoutSchema.default({}),
   defaults: DefaultsSchema.default({}),
+  main: MainSchema.default({}),
 });
 
 export type Profile = z.infer<typeof ProfileSchema>;
@@ -93,6 +103,7 @@ export const EMPTY_CONFIG: Config = {
   agents: [],
   layout: {},
   defaults: {},
+  main: {},
 };
 
 export function parseConfig(text: string, source: string): Config {
@@ -124,6 +135,7 @@ export function mergeConfig(user: Config, project: Config): Config {
     agents: project.agents.length > 0 ? project.agents : user.agents,
     layout: { ...user.layout, ...project.layout },
     defaults: { ...user.defaults, ...project.defaults },
+    main: { ...user.main, ...project.main },
   };
 }
 
