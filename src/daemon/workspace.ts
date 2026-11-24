@@ -1,12 +1,18 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Provider } from "../providers/provider.ts";
 import { type Config, resolveProfile } from "../shared/config.ts";
 import type {
   AgentInfo,
   AgentKind,
+  HookRequest,
   SpawnRequest,
+  StatuslineRequest,
+  Telemetry,
   UpRequest,
   WorkspaceState,
 } from "../shared/protocol.ts";
+import { tmuxQuote } from "../tmux/conf.ts";
 import type { TmuxRunner } from "../tmux/driver.ts";
 import {
   createWorkspace,
@@ -20,6 +26,7 @@ import {
   returnToPool,
   spawnPoolWindow,
 } from "../tmux/layout.ts";
+import { parseStatusline, reduceHook, snippet } from "./activity.ts";
 import type { AgentRow, Store } from "./db.ts";
 
 /** An error caused by the request (unknown agent, workspace not up), reported to the caller as is. */
@@ -35,8 +42,12 @@ export interface WorkspaceDeps {
   projectRoot: string;
   /** Path of the daemon socket, handed to every pane as DWA_SOCKET. */
   socketPath: string;
-  /** Command that runs the dwa CLI, used for the status and agents panes. */
+  /** Command that runs the dwa CLI, used for the status and agents panes and for hooks. */
   selfArgv: string[];
+  /** Directory for generated per-session files (`<project>/.dwa/run`). */
+  runDir: string;
+  /** Writes a generated file; replaced in tests. */
+  writeFile?: (path: string, content: string) => void;
   loadConfig: () => Promise<Config>;
   env?: Record<string, string | undefined>;
   newId?: () => string;
@@ -46,6 +57,8 @@ export interface WorkspaceDeps {
 /** The application service behind the CLI, the UI panes and (later) the MCP tools. */
 export class Workspace {
   private queue: Promise<unknown> = Promise.resolve();
+  /** Latest statusline figures per agent. Refreshed every few seconds, so not persisted. */
+  private readonly telemetry = new Map<string, Telemetry>();
   private readonly env: Record<string, string | undefined>;
   private readonly newId: () => string;
   private readonly now: () => number;
@@ -80,7 +93,12 @@ export class Workspace {
 
       const id = this.newId();
       const sessionId = this.newId();
-      const launch = this.deps.provider.buildLaunch({ profile, sessionId, name: "main" });
+      const launch = this.deps.provider.buildLaunch({
+        profile,
+        sessionId,
+        name: "main",
+        settingsPath: this.writeSettings(id),
+      });
       const panes = await createWorkspace(this.deps.run, {
         cwd: this.deps.projectRoot,
         left: this.uiPane("status", "status"),
@@ -118,6 +136,7 @@ export class Workspace {
         name,
         role: request.role,
         task: request.task,
+        settingsPath: this.writeSettings(id),
       });
       const paneId = await spawnPoolWindow(this.deps.run, {
         cwd: this.deps.projectRoot,
@@ -136,7 +155,7 @@ export class Workspace {
         },
         paneId,
       );
-      return { ...row, open: false };
+      return { ...row, telemetry: null, open: false };
     });
   }
 
@@ -184,6 +203,36 @@ export class Workspace {
     });
   }
 
+  /** Applies a lifecycle event reported by a session's hook. Unknown or stopped agents are ignored. */
+  hook(request: HookRequest): void {
+    const { store } = this.deps;
+    const row = store.getRunning(request.agentId);
+    if (!row) return;
+    const input = (
+      typeof request.input === "object" && request.input !== null ? request.input : {}
+    ) as Record<string, unknown>;
+    const change = reduceHook(request.event, input);
+    const now = this.now();
+    store.addEvent({
+      agentId: row.id,
+      at: now,
+      event: request.event,
+      summary: change?.detail ?? snippet(input.tool_name) ?? snippet(input.notification_type),
+    });
+    if (change && (change.activity !== row.activity || change.detail !== row.detail)) {
+      // Keep the time of the last real change, so "idle for 5 min" stays meaningful.
+      const since = change.activity === row.activity ? row.activitySince : now;
+      store.setActivity(row.id, change.activity, change.detail, since);
+    }
+  }
+
+  /** Stores the figures from a session's statusline. */
+  statusline(request: StatuslineRequest): void {
+    if (!this.deps.store.getRunning(request.agentId)) return;
+    const telemetry = parseStatusline(request.data, this.now());
+    if (telemetry) this.telemetry.set(request.agentId, telemetry);
+  }
+
   /** Shows a short message in the attached terminal, e.g. why a shortcut did nothing. */
   notify(message: string): Promise<void> {
     return this.serial(async () => {
@@ -221,9 +270,14 @@ export class Workspace {
         // remain-on-exit, so remove an agent's leftover pane.
         if (pane && row.kind === "agent") await killPane(run, row.paneId).catch(() => undefined);
         store.markStopped(row.id, this.now());
+        this.telemetry.delete(row.id);
         continue;
       }
-      live.push({ ...row, open: row.kind === "agent" && pane.inWorkspace });
+      live.push({
+        ...row,
+        telemetry: this.telemetry.get(row.id) ?? null,
+        open: row.kind === "agent" && pane.inWorkspace,
+      });
     }
 
     return {
@@ -290,9 +344,30 @@ export class Workspace {
       state: "running",
       task: agent.task ?? null,
       createdAt: this.now(),
+      activity: "starting",
+      detail: null,
+      activitySince: this.now(),
     };
     this.deps.store.insertAgent(row);
     return row;
+  }
+
+  /** Writes the per-session settings file that points the session's hooks at this daemon. */
+  private writeSettings(agentId: string): string {
+    const self = this.deps.selfArgv.map(tmuxQuote).join(" ");
+    const settings = this.deps.provider.buildSettings({
+      hook: `${self} hook`,
+      statusline: `${self} statusline`,
+    });
+    const path = join(this.deps.runDir, "agents", agentId, "settings.json");
+    const write =
+      this.deps.writeFile ??
+      ((file, content) => {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, content);
+      });
+    write(path, JSON.stringify(settings, null, 2));
+    return path;
   }
 
   private paneEnv(agentId?: string): Record<string, string> {

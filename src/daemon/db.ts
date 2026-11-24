@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import type { AgentKind, AgentState } from "../shared/protocol.ts";
+import type { AgentActivity, AgentKind, AgentState } from "../shared/protocol.ts";
 
 export interface AgentRow {
   id: string;
@@ -12,30 +12,55 @@ export interface AgentRow {
   state: AgentState;
   task: string | null;
   createdAt: number;
+  activity: AgentActivity;
+  detail: string | null;
+  activitySince: number;
 }
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS agents (
-  id          TEXT PRIMARY KEY,
-  kind        TEXT NOT NULL,
-  name        TEXT NOT NULL,
-  role        TEXT,
-  profile     TEXT NOT NULL,
-  session_id  TEXT NOT NULL,
-  pane_id     TEXT NOT NULL,
-  state       TEXT NOT NULL,
-  task        TEXT,
-  created_at  INTEGER NOT NULL,
-  stopped_at  INTEGER
-);
-CREATE TABLE IF NOT EXISTS meta (
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-`;
+export interface EventRow {
+  agentId: string;
+  at: number;
+  event: string;
+  summary: string | null;
+}
+
+/** Applied in order; `PRAGMA user_version` records how many have run. Only ever append. */
+const MIGRATIONS = [
+  `CREATE TABLE IF NOT EXISTS agents (
+     id          TEXT PRIMARY KEY,
+     kind        TEXT NOT NULL,
+     name        TEXT NOT NULL,
+     role        TEXT,
+     profile     TEXT NOT NULL,
+     session_id  TEXT NOT NULL,
+     pane_id     TEXT NOT NULL,
+     state       TEXT NOT NULL,
+     task        TEXT,
+     created_at  INTEGER NOT NULL,
+     stopped_at  INTEGER
+   );
+   CREATE TABLE IF NOT EXISTS meta (
+     key   TEXT PRIMARY KEY,
+     value TEXT NOT NULL
+   );`,
+  `ALTER TABLE agents ADD COLUMN activity TEXT NOT NULL DEFAULT 'starting';
+   ALTER TABLE agents ADD COLUMN detail TEXT;
+   ALTER TABLE agents ADD COLUMN activity_since INTEGER NOT NULL DEFAULT 0;
+   CREATE TABLE events (
+     id        INTEGER PRIMARY KEY AUTOINCREMENT,
+     agent_id  TEXT NOT NULL,
+     at        INTEGER NOT NULL,
+     event     TEXT NOT NULL,
+     summary   TEXT
+   );
+   CREATE INDEX events_agent ON events (agent_id, id);`,
+];
 
 const COLUMNS = `id, kind, name, role, profile, session_id AS sessionId, pane_id AS paneId,
-  state, task, created_at AS createdAt`;
+  state, task, created_at AS createdAt, activity, detail, activity_since AS activitySince`;
+
+/** Events kept in the log; older ones are dropped. */
+const MAX_EVENTS = 5000;
 
 /** Persistent state of one project's workspace. Pass ":memory:" in tests. */
 export class Store {
@@ -44,14 +69,27 @@ export class Store {
   constructor(path: string) {
     this.db = new Database(path, { create: true });
     if (path !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  private migrate(): void {
+    const { user_version: version } = this.db.query("PRAGMA user_version").get() as {
+      user_version: number;
+    };
+    for (let index = version; index < MIGRATIONS.length; index++) {
+      this.db.transaction(() => {
+        this.db.exec(MIGRATIONS[index] ?? "");
+        this.db.exec(`PRAGMA user_version = ${index + 1}`);
+      })();
+    }
   }
 
   insertAgent(row: AgentRow): void {
     this.db
       .query(
-        `INSERT INTO agents (id, kind, name, role, profile, session_id, pane_id, state, task, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO agents (id, kind, name, role, profile, session_id, pane_id, state, task,
+           created_at, activity, detail, activity_since)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -64,6 +102,9 @@ export class Store {
         row.state,
         row.task,
         row.createdAt,
+        row.activity,
+        row.detail,
+        row.activitySince,
       );
   }
 
@@ -77,8 +118,36 @@ export class Store {
       .all() as AgentRow[];
   }
 
+  getRunning(id: string): AgentRow | null {
+    return this.db
+      .query(`SELECT ${COLUMNS} FROM agents WHERE id = ? AND state = 'running'`)
+      .get(id) as AgentRow | null;
+  }
+
   markStopped(id: string, now: number): void {
     this.db.query("UPDATE agents SET state = 'stopped', stopped_at = ? WHERE id = ?").run(now, id);
+  }
+
+  setActivity(id: string, activity: AgentActivity, detail: string | null, now: number): void {
+    this.db
+      .query("UPDATE agents SET activity = ?, detail = ?, activity_since = ? WHERE id = ?")
+      .run(activity, detail, now, id);
+  }
+
+  addEvent(event: EventRow): void {
+    const { lastInsertRowid } = this.db
+      .query("INSERT INTO events (agent_id, at, event, summary) VALUES (?, ?, ?, ?)")
+      .run(event.agentId, event.at, event.event, event.summary);
+    if (Number(lastInsertRowid) % 500 === 0) {
+      this.db.query("DELETE FROM events WHERE id <= ?").run(Number(lastInsertRowid) - MAX_EVENTS);
+    }
+  }
+
+  /** Most recent events first. */
+  recentEvents(limit: number): EventRow[] {
+    return this.db
+      .query("SELECT agent_id AS agentId, at, event, summary FROM events ORDER BY id DESC LIMIT ?")
+      .all(limit) as EventRow[];
   }
 
   getMeta(key: string): string | null {

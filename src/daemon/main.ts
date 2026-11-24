@@ -10,11 +10,6 @@ import { Store } from "./db.ts";
 import { startServer } from "./server.ts";
 import { Workspace } from "./workspace.ts";
 
-/** Path of the generated tmux config for a project. */
-export function tmuxConfPath(projectRoot: string): string {
-  return join(runDir(projectRoot), "tmux.conf");
-}
-
 /** Runs the daemon for one project until it is told to shut down. */
 export async function runDaemon(projectRoot: string, selfArgv: string[]): Promise<void> {
   const run = runDir(projectRoot);
@@ -27,7 +22,7 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
 
   const env = cleanEnv(process.env);
   const config = await loadConfig(projectRoot, env);
-  const confPath = tmuxConfPath(projectRoot);
+  const confPath = join(run, "tmux.conf");
   writeFileSync(confPath, buildTmuxConf({ selfArgv, projectRoot, prefix: config.keys.prefix }));
 
   const store = new Store(join(run, "dwa.sqlite"));
@@ -38,6 +33,7 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
     projectRoot,
     socketPath,
     selfArgv,
+    runDir: run,
     loadConfig: () => loadConfig(projectRoot, env),
     env,
   });

@@ -1,16 +1,14 @@
 #!/usr/bin/env bun
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import pkg from "../../package.json" with { type: "json" };
-import { runDaemon, tmuxConfPath } from "../daemon/main.ts";
 import { APP_NAME } from "../shared/constants.ts";
 import { cleanEnv } from "../shared/env.ts";
-import { findProjectRoot, tmuxSocketName } from "../shared/paths.ts";
+import { findProjectRoot, runDir, tmuxSocketName } from "../shared/paths.ts";
 import type { AgentInfo, WorkspaceState } from "../shared/protocol.ts";
 import { tmuxArgv } from "../tmux/driver.ts";
 import { SESSION } from "../tmux/layout.ts";
 import { call, ensureDaemon, isDaemonRunning } from "./client.ts";
-import { doctor } from "./doctor.ts";
-import { runUi } from "./ui.ts";
 
 const USAGE = `${APP_NAME} ${pkg.version}
 
@@ -29,6 +27,7 @@ Agents
   agent stop <name|number>              End an agent's session
 
 Other
+  status     Print the workspace state as JSON
   doctor     Check that bun, tmux and the Claude command(s) are present and new enough
   version    Print the version
   help       Show this help
@@ -42,7 +41,7 @@ async function attach(projectRoot: string): Promise<number> {
     return 0;
   }
   const argv = tmuxArgv(
-    { socketName: tmuxSocketName(projectRoot), confPath: tmuxConfPath(projectRoot) },
+    { socketName: tmuxSocketName(projectRoot), confPath: join(runDir(projectRoot), "tmux.conf") },
     ["attach-session", "-t", `=${SESSION}`],
   );
   const proc = Bun.spawn(argv, {
@@ -133,8 +132,12 @@ async function keyCommand(projectRoot: string, args: string[]): Promise<number> 
   return 0;
 }
 
+// Heavier commands are imported only when used, so the commands Claude Code runs on every hook
+// event and status line refresh start quickly.
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
+  if (command === "hook") return (await import("./hook.ts")).hookCommand(rest[0]);
+  if (command === "statusline") return (await import("./hook.ts")).statuslineCommand();
   const projectRoot = findProjectRoot();
   switch (command) {
     case "up": {
@@ -162,6 +165,9 @@ async function main(argv: string[]): Promise<number> {
       }
       console.log("Workspace stopped.");
       return 0;
+    case "status":
+      console.log(JSON.stringify(await call(projectRoot, "GET", "/state"), null, 2));
+      return 0;
     case "agent":
       return agentCommand(projectRoot, rest);
     case "focus":
@@ -175,13 +181,13 @@ async function main(argv: string[]): Promise<number> {
         console.error("Usage: dwa ui <status|agents>");
         return 2;
       }
-      return runUi(view, projectRoot);
+      return (await import("./ui.ts")).runUi(view, projectRoot);
     }
     case "daemon":
-      await runDaemon(projectRoot, selfArgv);
+      await (await import("../daemon/main.ts")).runDaemon(projectRoot, selfArgv);
       return new Promise<number>(() => {});
     case "doctor":
-      return doctor(projectRoot);
+      return (await import("./doctor.ts")).doctor(projectRoot);
     case "version":
     case "--version":
     case "-v":

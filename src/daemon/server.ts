@@ -1,5 +1,10 @@
 import { ConfigError } from "../shared/config.ts";
-import type { SpawnRequest, UpRequest } from "../shared/protocol.ts";
+import type {
+  HookRequest,
+  SpawnRequest,
+  StatuslineRequest,
+  UpRequest,
+} from "../shared/protocol.ts";
 import { TmuxError } from "../tmux/driver.ts";
 import { type Workspace, WorkspaceError } from "./workspace.ts";
 
@@ -51,6 +56,12 @@ export function startServer(options: ServerOptions) {
         return json(await workspace.stop(requireTarget(await body(request))));
       case "POST /focus":
         await workspace.focusMain();
+        return json({ ok: true });
+      case "POST /hook":
+        workspace.hook(await body<HookRequest>(request));
+        return json({ ok: true });
+      case "POST /statusline":
+        workspace.statusline(await body<StatuslineRequest>(request));
         return json({ ok: true });
       case "POST /notify": {
         const { message } = await body<{ message?: unknown }>(request);

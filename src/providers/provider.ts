@@ -10,6 +10,8 @@ export interface LaunchRequest {
   role?: string;
   /** First prompt, given when the agent is spawned with a task. */
   task?: string;
+  /** Path of the per-session settings file written from `buildSettings`. */
+  settingsPath?: string;
 }
 
 export interface Launch {
@@ -17,8 +19,20 @@ export interface Launch {
   env: Record<string, string>;
 }
 
+export interface SessionCommands {
+  /** Shell command that reports a lifecycle event; the event name is appended as an argument. */
+  hook: string;
+  /** Shell command that receives the statusline JSON and prints the status line. */
+  statusline: string;
+}
+
 /** One coding-agent CLI. Claude Code is the only implementation for now. */
 export interface Provider {
   id: string;
   buildLaunch(request: LaunchRequest): Launch;
+  /**
+   * Contents of the per-session settings file that wires the session's lifecycle events and
+   * telemetry to dwa. It is passed on the command line, so the user's own settings stay untouched.
+   */
+  buildSettings(commands: SessionCommands): unknown;
 }

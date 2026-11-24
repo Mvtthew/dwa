@@ -18,9 +18,11 @@ const config: Config = {
 let tmux: FakeTmux;
 let store: Store;
 let workspace: Workspace;
+let files: Map<string, string>;
 
 beforeEach(() => {
   tmux = new FakeTmux();
+  files = new Map();
   store = new Store(":memory:");
   let id = 0;
   workspace = new Workspace({
@@ -30,6 +32,8 @@ beforeEach(() => {
     projectRoot: "/project",
     socketPath: "/tmp/dwa.sock",
     selfArgv: ["bun", "/dwa/cli.ts"],
+    runDir: "/project/.dwa/run",
+    writeFile: (path, content) => files.set(path, content),
     loadConfig: async () => config,
     env: {},
     newId: () => `id-${++id}`,
@@ -48,7 +52,15 @@ describe("up", () => {
     const panes = [...tmux.panes.values()];
     expect(panes.map((pane) => pane.window)).toEqual(Array(3).fill(WORKSPACE_WINDOW));
     expect(panes[0]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "status"]);
-    expect(panes[1]?.argv).toEqual(["/bin/claude_me", "--session-id", "id-2", "--name", "main"]);
+    expect(panes[1]?.argv).toEqual([
+      "/bin/claude_me",
+      "--session-id",
+      "id-2",
+      "--name",
+      "main",
+      "--settings",
+      "/project/.dwa/run/agents/id-1/settings.json",
+    ]);
     expect(panes[2]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "agents"]);
     expect(panes[1]?.env).toMatchObject({
       DWA_PROJECT: "/project",
@@ -99,6 +111,8 @@ describe("agents", () => {
       "id-4",
       "--name",
       "explore",
+      "--settings",
+      "/project/.dwa/run/agents/id-3/settings.json",
       "--agent",
       "explore",
       "find the bug",
@@ -196,6 +210,90 @@ describe("agents", () => {
   });
 });
 
+describe("live state", () => {
+  test("a new session is starting and has per-session settings pointing at dwa", async () => {
+    const { main } = await workspace.up();
+    expect(main).toMatchObject({ activity: "starting", detail: null, telemetry: null });
+    const settings = JSON.parse(files.get("/project/.dwa/run/agents/id-1/settings.json") ?? "{}");
+    expect(settings.hooks.Stop[0].hooks[0].command).toBe("'bun' '/dwa/cli.ts' hook Stop");
+    expect(settings.statusLine.command).toBe("'bun' '/dwa/cli.ts' statusline");
+  });
+
+  test("hook events move an agent through working, needs_user and idle", async () => {
+    await workspace.up();
+    const agent = await workspace.spawn({ name: "dev" });
+    const activity = async () => {
+      const [dev] = (await workspace.state()).agents;
+      return [dev?.activity, dev?.detail];
+    };
+    const send = (event: string, input: unknown = {}) =>
+      workspace.hook({ agentId: agent.id, event, input });
+
+    send("SessionStart");
+    expect(await activity()).toEqual(["idle", null]);
+    send("UserPromptSubmit", { prompt: "fix it" });
+    expect(await activity()).toEqual(["working", null]);
+    send("PreToolUse", { tool_name: "Bash" });
+    expect(await activity()).toEqual(["working", "Bash"]);
+    send("PermissionRequest", { tool_name: "Bash" });
+    expect(await activity()).toEqual(["needs_user", "permission: Bash"]);
+    send("Notification", { notification_type: "permission_prompt" });
+    expect(await activity()).toEqual(["needs_user", "permission: Bash"]);
+    send("PostToolUse", { tool_name: "Bash" });
+    expect(await activity()).toEqual(["working", null]);
+    send("Stop", { last_assistant_message: "\nAll done.\nDetails follow." });
+    expect(await activity()).toEqual(["idle", "All done."]);
+    send("StopFailure", { error: "Login expired" });
+    expect(await activity()).toEqual(["error", "Login expired"]);
+
+    expect(store.recentEvents(2).map((event) => event.event)).toEqual(["StopFailure", "Stop"]);
+  });
+
+  test("events for unknown or stopped agents are ignored", async () => {
+    await workspace.up();
+    const agent = await workspace.spawn({ name: "dev" });
+    await workspace.stop("dev");
+    workspace.hook({ agentId: agent.id, event: "Stop", input: {} });
+    workspace.hook({ agentId: "nope", event: "Stop", input: null });
+    expect(store.recentEvents(10)).toEqual([]);
+  });
+
+  test("statusline data becomes telemetry", async () => {
+    const { main } = await workspace.up();
+    workspace.statusline({
+      agentId: main?.id ?? "",
+      data: {
+        model: { id: "claude-fable-5-2", display_name: "Fable 5.2" },
+        context_window: { used_percentage: 41 },
+        cost: { total_cost_usd: 0.7 },
+        rate_limits: {
+          five_hour: { used_percentage: 9, resets_at: 1795559400 },
+          seven_day: { used_percentage: 12, resets_at: 1795766400 },
+        },
+      },
+    });
+    expect((await workspace.state()).main?.telemetry).toMatchObject({
+      contextPercent: 41,
+      costUsd: 0.7,
+      model: "Fable 5.2",
+      fiveHour: { usedPercent: 9, resetsAt: 1795559400 },
+      sevenDay: { usedPercent: 12, resetsAt: 1795766400 },
+    });
+  });
+
+  test("missing statusline fields are null, not guessed", async () => {
+    const { main } = await workspace.up();
+    workspace.statusline({ agentId: main?.id ?? "", data: { context_window: {} } });
+    expect((await workspace.state()).main?.telemetry).toMatchObject({
+      contextPercent: null,
+      costUsd: null,
+      model: null,
+      fiveHour: null,
+      sevenDay: null,
+    });
+  });
+});
+
 describe("notify", () => {
   test("shows a message and does not fail when no terminal is attached", async () => {
     await workspace.up();
@@ -215,6 +313,7 @@ describe("notify", () => {
       projectRoot: "/project",
       socketPath: "/tmp/dwa.sock",
       selfArgv: ["bun"],
+      runDir: "/project/.dwa/run",
       loadConfig: async () => config,
     });
     await failing.notify("x");
