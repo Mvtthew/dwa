@@ -2,9 +2,9 @@
 
 A terminal workspace for running several Claude Code sessions side by side and letting them work together.
 
-> Status: early development. The design is settled, the workspace itself is not built yet. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
+> Status: early development. The workspace, agent panes and profiles work; live agent state and messaging between agents are next. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
 
-## What it will do
+## What it does and will do
 
 - Run a main Claude Code session that is always visible, plus any number of agent sessions, all inside tmux.
 - Show the active agents in a side pane with their state: working, idle, waiting for you, waiting for another agent.
@@ -40,9 +40,35 @@ bun install
 bun run dwa doctor
 ```
 
+## Usage
+
+```sh
+bun run dwa up                      # start the workspace for this project and attach
+bun run dwa agent spawn explore     # start an agent (optionally --role, --profile, --task)
+bun run dwa agent open explore      # show it under the main session (or Alt+1..9)
+bun run dwa agent close             # hide it again, it keeps running (Alt+x)
+bun run dwa agent stop explore      # end its session
+bun run dwa down                    # stop everything
+```
+
+Closing the terminal leaves everything running; `dwa attach` brings it back. Inside the workspace, `Alt+0` focuses the main session and `Alt+z` zooms the focused pane.
+
 ## Using a different Claude command
 
-`claude` is only the default. Profiles for other commands (for example `~/claude_me` and `~/claude_work`) will be configured in `~/.config/dwa/config.toml`; until then, set `DWA_CLAUDE_COMMAND`.
+`claude` is only the default. Define profiles in `~/.config/dwa/config.toml` (personal) or `.dwa/config.toml` (project, overrides personal):
+
+```toml
+default_profile = "me"
+
+[profiles.me]
+command = "~/claude_me"
+
+[profiles.work]
+command = "~/claude_work"
+# optional: args = ["--model", "sonnet"], env = { KEY = "value" }
+```
+
+The command must accept the normal Claude Code arguments, for example a wrapper script ending in `exec claude "$@"`. Pick a profile for the whole workspace with `dwa up --profile work`, or for one agent with `dwa agent spawn reviewer --profile work`. `DWA_CLAUDE_COMMAND` overrides the default without a config file. `dwa doctor` checks every profile.
 
 ## Development
 

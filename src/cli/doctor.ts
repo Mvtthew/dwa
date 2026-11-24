@@ -1,3 +1,4 @@
+import { allProfiles, loadConfig } from "../shared/config.ts";
 import {
   CLAUDE_COMMAND_ENV,
   DEFAULT_CLAUDE_COMMAND,
@@ -5,7 +6,7 @@ import {
   MIN_CLAUDE_VERSION,
   MIN_TMUX_VERSION,
 } from "../shared/constants.ts";
-import { expandPath } from "../shared/paths.ts";
+import { expandPath, findProjectRoot } from "../shared/paths.ts";
 import { satisfiesMinimum } from "../shared/version.ts";
 
 export interface CheckResult {
@@ -78,8 +79,10 @@ export async function runChecks(options: DoctorOptions = {}): Promise<CheckResul
 }
 
 /** Prints the checks and returns the process exit code. */
-export async function doctor(): Promise<number> {
-  const results = await runChecks();
+export async function doctor(projectRoot: string = findProjectRoot()): Promise<number> {
+  const config = await loadConfig(projectRoot);
+  const commands = [...new Set(allProfiles(config).map((profile) => profile.command))];
+  const results = await runChecks({ claudeCommands: commands });
   for (const result of results) {
     console.log(`${result.ok ? "ok  " : "FAIL"}  ${result.name}: ${result.detail}`);
   }

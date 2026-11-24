@@ -24,6 +24,10 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 ## Layout of the code
 
 - `src/cli/` command entry points
-- `src/shared/` constants, paths, version helpers, protocol types
-- Planned, created when their milestone starts: `src/daemon/`, `src/tmux/`, `src/providers/`, `src/mcp/`, `src/ui/`
+- `src/shared/` constants, paths, config and profiles, environment cleaning, protocol types
+- `src/daemon/` one process per project: `workspace.ts` is the application service (all tmux changes go through its serial queue), `server.ts` the Unix-socket API, `db.ts` the SQLite store
+- `src/tmux/` private-server driver, generated config, layout operations
+- `src/providers/` the provider interface and the Claude Code launch command
+- Planned: `src/mcp/` (messaging tools), `src/ui/` (OpenTUI panes; `src/cli/ui.ts` is the plain-text stand-in)
+- Tests use `test/fake-tmux.ts` instead of a real tmux server
 - `spikes/` throwaway experiments; results are written up in `docs/spikes.md`
