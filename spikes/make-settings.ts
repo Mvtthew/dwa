@@ -15,6 +15,7 @@ const events = [
   "PermissionRequest",
   "Notification",
   "Stop",
+  "StopFailure",
   "SubagentStop",
   "SessionEnd",
 ];
@@ -25,6 +26,17 @@ const hooks = Object.fromEntries(
     [{ hooks: [{ type: "command", command: `${bun} ${hookScript} ${event}` }] }],
   ]),
 );
+
+// S3: a mailbox waiter armed at session start and re-armed after every turn.
+const waiter = {
+  type: "command",
+  command: `${bun} ${join(import.meta.dir, "wait-mail.ts")}`,
+  asyncRewake: true,
+  timeout: 86400,
+};
+for (const event of ["SessionStart", "Stop"]) {
+  (hooks[event] as { hooks: unknown[] }[])[0]?.hooks.push(waiter);
+}
 
 const settings = {
   hooks,
