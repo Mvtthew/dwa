@@ -6,7 +6,7 @@ The goal is an open source terminal workspace that runs a main Claude Code sessi
 
 Decisions made: MVP is **workspace + messaging** (workflow engine and shared memory come later), **Claude Code only** behind a provider interface, name and command **`dwa`**, license **MIT**, runtime **Bun + TypeScript**.
 
-Local state: Bun 1.4.3, Claude Code 2.1.331, **tmux is not installed** (needs `brew install tmux`, currently 3.8).
+The plan was written and tested against Bun 1.4.3, Claude Code 2.1.331 and tmux 3.8.
 
 ## Survey: what the research changes in the original document
 
