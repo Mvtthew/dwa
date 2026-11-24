@@ -175,7 +175,8 @@ describe("questions and messages", () => {
     expect(frame).toContain("Which database should I u…");
     expect(frame).toContain("◷ #4 rev → dev");
     expect(frame).toContain("Ctrl+Q q to answer");
-    expect(frame).toContain("MESSAGES");
+    expect(frame).toContain("MESSAGES TO YOU");
+    expect(frame).toContain("from dev  just now");
     expect(frame).toContain("The fix is ready for revi…");
   });
 });

@@ -227,11 +227,14 @@ export class Store {
     })();
   }
 
-  /** Latest messages addressed to someone, newest first. */
-  recentMessages(toId: string, limit: number): MessageRow[] {
+  /** Latest messages addressed to someone and sent at or after `since`, newest first. */
+  recentMessages(toId: string, limit: number, since = 0): MessageRow[] {
     return this.db
-      .query(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE to_id = ? ORDER BY id DESC LIMIT ?`)
-      .all(toId, limit) as MessageRow[];
+      .query(
+        `SELECT ${MESSAGE_COLUMNS} FROM messages
+         WHERE to_id = ? AND created_at >= ? ORDER BY id DESC LIMIT ?`,
+      )
+      .all(toId, since, limit) as MessageRow[];
   }
 
   addQuestion(question: {

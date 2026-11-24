@@ -172,9 +172,9 @@ export class Messaging {
     }));
   }
 
-  /** Latest messages sent to the user, newest first. */
-  inbox(limit: number): MessageInfo[] {
-    return this.deps.store.recentMessages(USER, limit).map((message) => ({
+  /** Latest messages sent to the user at or after `since`, newest first. */
+  inbox(limit: number, since = 0): MessageInfo[] {
+    return this.deps.store.recentMessages(USER, limit, since).map((message) => ({
       id: message.id,
       from: this.nameOf(message.fromId),
       body: message.body,

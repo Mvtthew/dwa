@@ -422,6 +422,8 @@ describe("messaging", () => {
   });
 
   test("messages to the user land in the inbox", async () => {
+    // A message from an earlier run of the workspace is not shown again.
+    store.addMessage({ fromId: "gone", toId: "user", body: "old news", createdAt: 1 });
     const { dev, m } = await team();
     m.send(dev, "user", "done with the fix");
     const state = await workspace.state();

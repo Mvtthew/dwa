@@ -38,6 +38,7 @@ export { WorkspaceError };
 const NAME_PATTERN = /^[A-Za-z0-9][\w.-]{0,39}$/;
 const META_PROFILE = "workspace_profile";
 const META_AGENT_HEIGHT = "agent_height";
+const META_STARTED_AT = "started_at";
 
 export interface WorkspaceDeps {
   store: Store;
@@ -106,6 +107,7 @@ export class Workspace {
       const config = await this.deps.loadConfig();
       const profile = resolveProfile(config, { workspaceProfile: request.profile }, this.env);
       this.deps.store.setMeta(META_PROFILE, request.profile ?? null);
+      this.deps.store.setMeta(META_STARTED_AT, String(this.now()));
 
       const id = this.newId();
       const sessionId = this.newId();
@@ -357,7 +359,8 @@ export class Workspace {
       main: live.find((agent) => agent.kind === "main") ?? null,
       agents: live.filter((agent) => agent.kind === "agent"),
       questions,
-      inbox: this.messaging.inbox(5),
+      // Only messages from this run of the workspace; older ones belong to sessions that are gone.
+      inbox: this.messaging.inbox(5, Number(this.deps.store.getMeta(META_STARTED_AT)) || 0),
     };
   }
 

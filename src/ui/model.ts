@@ -115,6 +115,15 @@ export function untilReset(resetsAt: number | null, nowMs: number): string | nul
   return `in ${minutes}m`;
 }
 
+/** "just now", "5 min ago", "2 h ago", "3 d ago". */
+export function ago(thenMs: number, nowMs: number): string {
+  const minutes = Math.floor((nowMs - thenMs) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)} h ago`;
+  return `${Math.floor(minutes / 1440)} d ago`;
+}
+
 /** "C-q" becomes "Ctrl+Q", "M-a" becomes "Alt+A"; anything else is shown as written. */
 export function formatKey(tmuxKey: string): string {
   const match = tmuxKey.match(/^([CMS])-(.+)$/);
@@ -145,7 +154,7 @@ export interface StatusModel {
   /** Open questions, oldest first. */
   questions: { id: number; forUser: boolean; heading: string; text: string }[];
   /** Latest messages to the user, newest first. */
-  inbox: { from: string; text: string }[];
+  inbox: { from: string; age: string; text: string }[];
 }
 
 function limitMeter(label: string, limit: UsageLimit | null | undefined, nowMs: number): Meter {
@@ -191,6 +200,10 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
       heading: `#${question.id} ${question.from} → ${question.to === "user" ? "you" : question.to}`,
       text: question.question,
     })),
-    inbox: state.inbox.map((message) => ({ from: message.from, text: message.body })),
+    inbox: state.inbox.map((message) => ({
+      from: message.from,
+      age: ago(message.createdAt, nowMs),
+      text: message.body,
+    })),
   };
 }

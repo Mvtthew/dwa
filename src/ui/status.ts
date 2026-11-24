@@ -85,9 +85,9 @@ export function createStatusView(renderer: CliRenderer): StatusView {
       }
 
       if (model.inbox.length > 0) {
-        lines.push([], [bold("MESSAGES")]);
+        lines.push([], [bold("MESSAGES TO YOU")]);
         for (const message of model.inbox.slice(0, 3)) {
-          lines.push([message.from]);
+          lines.push([`from ${message.from}`, dim(`  ${message.age}`)]);
           lines.push([dim(`  ${fit(oneLine(message.text), width - 2)}`)]);
         }
       }
