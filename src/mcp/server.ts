@@ -310,6 +310,20 @@ export async function runMcp(env: Env = process.env): Promise<void> {
   );
 
   server.registerTool(
+    "request_changes",
+    {
+      description:
+        "Only for a workflow step that reviews another step (your first prompt says so): send the reviewed work back for another pass instead of approving it. The feedback goes to the agent that did the work, so say exactly what must change. Your session ends after this; the next review pass is told what you asked for.",
+      inputSchema: { feedback: z.string() },
+    },
+    ({ feedback }) =>
+      tool(async () => {
+        await api("POST", "/workflows/step/changes", { agentId, feedback });
+        return "Changes requested.";
+      }),
+  );
+
+  server.registerTool(
     "fail_step",
     {
       description:

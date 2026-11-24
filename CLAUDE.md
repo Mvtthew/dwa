@@ -18,6 +18,7 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - Never write to `~/.claude` or the project's `.claude/settings.json`. Per-session settings are generated under `.dwa/run/` and passed with `--settings` and `--mcp-config`.
 - Agent state comes from hooks and the statusline JSON, not from reading the screen.
 - A workflow step ends only through `complete_step` or `fail_step` (from its agent, or from the user with `dwa workflow complete` / `fail`) or its session ending, never because a turn ended or time passed.
+- The workflow engine reads a step at its latest attempt only (`Store.workflowSteps`); a review that sends work back adds attempt rows, it never rewrites old ones.
 - `Workspace.onAgentEvent` listeners run inside the tmux queue: only enqueue work there, never await a `Workspace` call.
 - A blocking `ask` or `wait_for` has no timeout. Questions are stored and stay open until answered or cancelled.
 - The name "dwa" lives in `src/shared/constants.ts`; import it instead of repeating the string. "Claude Code" must not become part of the product name.
@@ -36,7 +37,7 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - `src/daemon/messaging.ts` messages and questions: delivery through the mailbox hook with a paste fallback, questions that never expire
 - `src/mcp/server.ts` the MCP server each session runs for the dwa tools; stateless, every tool is a daemon request
 - `src/cli/talk.ts` the user's `ask`, `answer` and `inbox` commands; `palette.ts` the command menu; `init.ts` project setup
-- `src/daemon/workflows.ts` the workflow engine: runs, steps, reminders, resume after a restart; `src/shared/workflow.ts` the TOML definition format (pure); `src/cli/workflow.ts` the `workflow` command
+- `src/daemon/workflows.ts` the workflow engine: runs, steps, review loops, reminders, resume after a restart; `src/shared/workflow.ts` the TOML definition format (pure); `src/cli/workflow.ts` the `workflow` command
 - `examples/agents/` the roles and `examples/workflows/` the workflow `dwa init --roles` copies into a project
 - Never test against the real project's workspace while the user may be using it; use a scratch project via `DWA_PROJECT`
 - Tests use `test/fake-tmux.ts` instead of a real tmux server

@@ -2,7 +2,7 @@
 
 A terminal workspace for running several Claude Code sessions side by side and letting them work together.
 
-> Status: early development. The workspace, live agent state, messaging between agents and you, and workflows all work. Review loops and live editing of workflows, and shared memory, are planned. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
+> Status: early development. The workspace, live agent state, messaging between agents and you, and workflows all work. Live editing of workflows and shared memory are planned. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
 
 ## What it does and will do
 
@@ -99,6 +99,7 @@ prompt = "Implement: {{input}}\nFindings:\n{{steps.explore.result}}"
 [steps.review]
 role = "reviewer"
 depends_on = ["build"]
+reviews = "build"                   # may send "build" back for another pass
 prompt = "Review the change. The developer reports:\n{{steps.build.result}}"
 ```
 
@@ -114,6 +115,8 @@ bun run dwa workflow fail 1 build "wrong approach"
 - Steps without a dependency between them run at the same time.
 - `{{input}}` is the text given to the run, and `{{steps.<name>.result}}` is what an earlier step handed over. A step may also set `profile`, `model` and `effort`, and `keep_agent = true` to leave its session open afterwards.
 - A step ends only when its agent calls `complete_step` or `fail_step`. If the agent just stops, it is reminded twice, then the status pane marks the step as needing you. Nothing times out; open the agent and sort it out, or close the step yourself with `workflow complete` or `workflow fail`.
+- A step with `reviews = "<step>"` is a review: its agent approves with `complete_step` or sends the work back with `request_changes` and its feedback. The reviewed step, any steps between the two, and the review then run again. The agent that did the work keeps its session until the review approves, so it gets the feedback as a message and still knows what it did; each review pass is a new agent.
+- After `max_rounds` review passes (3 unless the step sets it) the run waits and you get a question: `another pass`, `accept` or `fail`. A step that uses a reviewed step's result must come before or after the review, not beside it.
 - If a step fails, steps already running finish, the rest are skipped and the run fails.
 - The run's outcome arrives as a message to whoever started it. Agents can start runs too, with `run_workflow`.
 - Runs are stored, so they continue after a daemon restart. A run uses the file as it was when it started.

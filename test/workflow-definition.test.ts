@@ -11,6 +11,7 @@ import {
   parseWorkflow,
   readySteps,
   renderPrompt,
+  reworkSteps,
 } from "../src/shared/workflow.ts";
 
 const FEATURE = `
@@ -73,6 +74,46 @@ describe("parseWorkflow", () => {
       expect(() => parseWorkflow(text, "w")).toThrow(message);
     });
   }
+});
+
+describe("review steps", () => {
+  const reviewed = (extra: string) => `
+[steps.build]
+prompt = "b"
+[steps.test]
+depends_on = ["build"]
+prompt = "t"
+[steps.review]
+depends_on = ["test"]
+reviews = "build"
+prompt = "r"
+[steps.ship]
+depends_on = ["review"]
+prompt = "s"
+${extra}`;
+
+  test("a review names the step it may send back, and what is redone with it", () => {
+    const workflow = parseWorkflow(reviewed(""), "w");
+    expect(workflow.steps.review?.reviews).toBe("build");
+    expect(reworkSteps(workflow, "review")).toEqual(["build", "test", "review"]);
+    expect(reworkSteps(workflow, "ship")).toEqual([]);
+  });
+
+  test("rejects reviews that cannot work", () => {
+    const bad = (text: string) => () => parseWorkflow(text, "w");
+    expect(bad('[steps.a]\nprompt = "a"\nreviews = "nope"')).toThrow(
+      'step "a" reviews unknown step "nope"',
+    );
+    expect(bad('[steps.a]\nprompt = "a"\n[steps.b]\nprompt = "b"\nreviews = "a"')).toThrow(
+      'step "b" reviews "a" but does not depend on it',
+    );
+    expect(bad('[steps.a]\nprompt = "a"\nmax_rounds = 2')).toThrow(
+      'step "a" sets max_rounds but reviews nothing',
+    );
+    expect(bad(reviewed('[steps.docs]\ndepends_on = ["build"]\nprompt = "d"'))).toThrow(
+      'step "docs" depends on "build", which "review" reviews; make "docs" depend on "review", or "review" on "docs"',
+    );
+  });
 });
 
 describe("renderPrompt and readySteps", () => {
@@ -149,7 +190,14 @@ describe("workflow files", () => {
 });
 
 test("describeRun shows each step and, when asked, the results", () => {
-  const step = { dependsOn: [], agent: null, result: null, error: null, needsAttention: false };
+  const step = {
+    attempt: 1,
+    dependsOn: [],
+    agent: null,
+    result: null,
+    error: null,
+    needsAttention: false,
+  };
   const run: WorkflowRunInfo = {
     id: 3,
     name: "feature",

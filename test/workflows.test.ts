@@ -47,6 +47,21 @@ model = "haiku"
 effort = "low"
 prompt = "stay"
 `,
+  reviewed: `
+[steps.build]
+prompt = "Build {{input}}"
+[steps.test]
+depends_on = ["build"]
+prompt = "Test {{steps.build.result}}"
+[steps.review]
+depends_on = ["test"]
+reviews = "build"
+max_rounds = 2
+prompt = "Review {{steps.build.result}}"
+[steps.ship]
+depends_on = ["review"]
+prompt = "Ship {{steps.review.result}}"
+`,
   badprofile: `
 [steps.only]
 profile = "nope"
@@ -310,18 +325,177 @@ describe("closing a step by hand", () => {
   test("only a running step of an existing run can be closed", async () => {
     await workspace.up();
     await workflows.start("chain", "", "user");
-    expect(workflows.completeStepOf(2, "explore", "x")).rejects.toThrow(
+    await expect(workflows.completeStepOf(2, "explore", "x")).rejects.toThrow(
       "There is no workflow run #2.",
     );
-    expect(workflows.completeStepOf(1, "nope", "x")).rejects.toThrow(
+    await expect(workflows.completeStepOf(1, "nope", "x")).rejects.toThrow(
       'Workflow run #1 has no step "nope".',
     );
-    expect(workflows.completeStepOf(1, "build", "x")).rejects.toThrow(
+    await expect(workflows.completeStepOf(1, "build", "x")).rejects.toThrow(
       'Step "build" of workflow run #1 is pending, not running.',
     );
-    expect(workflows.failStepOf(1, "explore", " ")).rejects.toThrow("The reason is empty.");
+    await expect(workflows.failStepOf(1, "explore", " ")).rejects.toThrow("The reason is empty.");
     await workflows.settled();
     expect(states(workflows.status(1))).toEqual({ explore: "running", build: "pending" });
+  });
+});
+
+describe("review loops", () => {
+  const names = async () => (await agents()).map((entry) => entry.name);
+  const complete = async (name: string, result: string) =>
+    workflows.completeStep((await agent(name)).id, result);
+  const reject = async (feedback: string) =>
+    workflows.requestChanges((await agent("review")).id, feedback);
+  /** Runs one pass up to the point where the review step is running. */
+  const toReview = async (result: string) => {
+    await complete("build", result);
+    await complete("test", "tests pass");
+  };
+  const openQuestion = () => {
+    const [question] = workspace.messaging.openQuestions();
+    if (!question) throw new Error("no open question");
+    return question;
+  };
+  const answer = async (text: string) => {
+    workspace.messaging.answer(openQuestion().id, "user", text);
+    await workflows.settled();
+  };
+
+  test("a review sends the work back to the session that did it", async () => {
+    await workspace.up();
+    await workflows.start("reviewed", "x", "user");
+    const builder = await agent("build");
+    await complete("build", "v1");
+    expect(await names()).toEqual(["build", "test"]); // the builder waits for the review
+    await complete("test", "tests pass");
+
+    const sentBack = await reject("add a test for the empty case");
+    expect(states(sentBack)).toEqual({
+      build: "running",
+      test: "pending",
+      review: "pending",
+      ship: "pending",
+    });
+    expect(sentBack.steps.map((step) => step.attempt)).toEqual([2, 2, 2, 1]);
+    expect(await agents()).toEqual([expect.objectContaining({ id: builder.id })]);
+    const [message] = store.pendingMessages(builder.id);
+    expect(message?.body).toContain('was sent back by the review step "review" (pass 2)');
+    expect(message?.body).toContain("add a test for the empty case");
+
+    await toReview("v2");
+    const reviewer = await agent("review");
+    expect(reviewer.task).toContain("Review v2");
+    expect(reviewer.task).toContain("This is review pass 2.");
+    expect(reviewer.task).toContain("add a test for the empty case");
+    expect(reviewer.task).toContain('call "request_changes" with your feedback');
+
+    const approved = await complete("review", "looks good");
+    expect(states(approved)).toMatchObject({ review: "done", ship: "running" });
+    expect(await names()).toEqual(["ship"]); // approved: the builder is let go
+    expect((await agent("ship")).task).toContain("Ship looks good");
+    expect((await complete("ship", "shipped")).state).toBe("done");
+  });
+
+  test("a new agent redoes the work when the builder's session is gone", async () => {
+    await workspace.up();
+    await workflows.start("reviewed", "x", "user");
+    await complete("build", "v1");
+    await workspace.stop("build");
+    await complete("test", "tests pass");
+    const sentBack = await reject("handle the empty case");
+    expect(states(sentBack)).toMatchObject({ build: "running", test: "pending" });
+
+    const builder = await agent("build");
+    expect(builder.task).toContain("Build x");
+    expect(builder.task).toContain("a review sent it back (this is pass 2)");
+    expect(builder.task).toContain("handle the empty case");
+    expect(builder.task).toContain("The result of the previous pass:\n\nv1");
+  });
+
+  test("after the last pass the user decides, and may allow another pass or accept", async () => {
+    await workspace.up();
+    await workflows.start("reviewed", "x", "user");
+    await toReview("v1");
+    await reject("first");
+    await toReview("v2");
+
+    const waiting = await reject("second");
+    expect(waiting.state).toBe("running");
+    expect(waiting.steps[2]).toMatchObject({ state: "rejected", attempt: 2, needsAttention: true });
+    expect(await names()).toEqual(["build"]);
+    const question = openQuestion();
+    expect(question).toMatchObject({ from: "workflow", to: "user" });
+    expect(question.options).toEqual(["another pass", "accept", "fail"]);
+    expect(question.question).toContain('still asks for changes to "build" after 2 passes');
+    expect(question.question).toContain("second");
+
+    await answer("what?");
+    expect(openQuestion().question).toStartWith('"what?" is not one of the choices.');
+
+    await answer("another pass");
+    expect(states(workflows.status(1))).toMatchObject({ build: "running", review: "pending" });
+    await toReview("v3");
+    await reject("third");
+    await answer("Accept");
+    const run = workflows.status(1);
+    expect(states(run)).toMatchObject({ review: "done", ship: "running" });
+    expect(run.steps[2]?.result).toBe(
+      "Accepted by the user after 3 review passes, with this feedback still open:\nthird",
+    );
+    expect(await names()).toEqual(["ship"]);
+  });
+
+  test("the user may fail the run, or cancel it while it waits", async () => {
+    await workspace.up();
+    await workflows.start("reviewed", "x", "user");
+    await toReview("v1");
+    await reject("first");
+    await toReview("v2");
+    await reject("second");
+    await answer("fail");
+    const failed = workflows.status(1);
+    expect(failed.state).toBe("failed");
+    expect(failed.steps[2]?.error).toBe("still asked for changes after 2 passes: second");
+    expect(states(failed)).toMatchObject({ review: "failed", ship: "skipped" });
+    expect(await agents()).toEqual([]);
+
+    await workflows.start("reviewed", "y", "user");
+    await toReview("v1");
+    await reject("first");
+    await toReview("v2");
+    await reject("second");
+    const cancelled = await workflows.cancel(2);
+    expect(cancelled.state).toBe("cancelled");
+    expect(states(cancelled)).toMatchObject({ review: "failed", ship: "skipped" });
+    expect(workspace.messaging.openQuestions()).toEqual([]);
+    expect(await agents()).toEqual([]);
+  });
+
+  test("the decision survives a daemon restart, and can be made by hand", async () => {
+    await workspace.up();
+    await workflows.start("reviewed", "x", "user");
+    await toReview("v1");
+    await reject("first");
+    await toReview("v2");
+    await reject("second");
+
+    build();
+    await workflows.resume();
+    expect(workspace.messaging.openQuestions()).toHaveLength(1);
+    const run = await workflows.completeStepOf(1, "review", "good enough");
+    expect(states(run)).toMatchObject({ review: "done", ship: "running" });
+    expect(workspace.messaging.openQuestions()).toEqual([]);
+  });
+
+  test("only a review step can ask for changes", async () => {
+    await workspace.up();
+    await workflows.start("reviewed", "x", "user");
+    const builder = await agent("build");
+    await expect(workflows.requestChanges(builder.id, "no")).rejects.toThrow(
+      'Step "build" does not review another step.',
+    );
+    await toReview("v1");
+    await expect(reject(" ")).rejects.toThrow("The feedback is empty.");
   });
 });
 

@@ -164,6 +164,12 @@ export function startServer(options: ServerOptions) {
             : await workflows.failStepOf(Number(input.id), text(input.step, "step"), reason),
         );
       }
+      case "POST /workflows/step/changes": {
+        const input = await body<{ agentId?: string; feedback?: string }>(request);
+        return json(
+          await workflows.requestChanges(text(input.agentId, "agentId"), input.feedback ?? ""),
+        );
+      }
       case "POST /notify": {
         const { message } = await body<{ message?: unknown }>(request);
         if (typeof message === "string" && message) await workspace.notify(message);

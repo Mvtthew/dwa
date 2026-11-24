@@ -72,7 +72,7 @@ export interface WorkflowRunRow {
 export interface WorkflowStepRow {
   runId: number;
   stepId: string;
-  /** Always 1 until steps can be sent back for another pass. */
+  /** 1 on the first pass. A review that sends work back adds a row with the next number. */
   attempt: number;
   state: WorkflowStepState;
   agentId: string | null;
@@ -82,6 +82,10 @@ export interface WorkflowStepRow {
   reminders: number;
   startedAt: number | null;
   finishedAt: number | null;
+  /** Review feedback this attempt has to deal with (for a review step: what it asked for last time). */
+  feedback: string | null;
+  /** The question to the user a rejected review step waits on. */
+  questionId: number | null;
 }
 
 /** Applied in order; `PRAGMA user_version` records how many have run. Only ever append. */
@@ -162,6 +166,8 @@ const MIGRATIONS = [
      PRIMARY KEY (run_id, step_id, attempt)
    );
    CREATE INDEX workflow_steps_agent ON workflow_steps (agent_id);`,
+  `ALTER TABLE workflow_steps ADD COLUMN feedback TEXT;
+   ALTER TABLE workflow_steps ADD COLUMN question_id INTEGER;`,
 ];
 
 const COLUMNS = `id, kind, name, role, profile, session_id AS sessionId, pane_id AS paneId,
@@ -178,7 +184,8 @@ const RUN_COLUMNS = `id, name, definition, input, state, started_by AS startedBy
   created_at AS createdAt, finished_at AS finishedAt`;
 
 const STEP_COLUMNS = `run_id AS runId, step_id AS stepId, attempt, state, agent_id AS agentId,
-  result, error, reminders, started_at AS startedAt, finished_at AS finishedAt`;
+  result, error, reminders, started_at AS startedAt, finished_at AS finishedAt, feedback,
+  question_id AS questionId`;
 
 /** Events kept in the log; older ones are dropped. */
 const MAX_EVENTS = 5000;
@@ -414,10 +421,92 @@ export class Store {
   }
 
   /** A run's steps in the order of its definition. */
+  /** Each step of a run at its latest attempt. Earlier attempts are history. */
   workflowSteps(runId: number): WorkflowStepRow[] {
     return this.db
-      .query(`SELECT ${STEP_COLUMNS} FROM workflow_steps WHERE run_id = ? ORDER BY rowid`)
+      .query(
+        `SELECT ${STEP_COLUMNS} FROM workflow_steps AS s
+         WHERE run_id = ? AND attempt = (
+           SELECT MAX(i.attempt) FROM workflow_steps AS i
+           WHERE i.run_id = s.run_id AND i.step_id = s.step_id
+         )
+         ORDER BY rowid`,
+      )
       .all(runId) as WorkflowStepRow[];
+  }
+
+  workflowStepAttempt(runId: number, stepId: string, attempt: number): WorkflowStepRow | null {
+    return this.db
+      .query(
+        `SELECT ${STEP_COLUMNS} FROM workflow_steps
+         WHERE run_id = ? AND step_id = ? AND attempt = ?`,
+      )
+      .get(runId, stepId, attempt) as WorkflowStepRow | null;
+  }
+
+  /** The step attempt that waits on a question to the user, if any. */
+  stepOfQuestion(questionId: number): WorkflowStepRow | null {
+    return this.db
+      .query(`SELECT ${STEP_COLUMNS} FROM workflow_steps WHERE question_id = ?`)
+      .get(questionId) as WorkflowStepRow | null;
+  }
+
+  /**
+   * Adds the next attempt of a step that was sent back: pending, or running at once when the
+   * session that did the previous attempt carries on.
+   */
+  addStepAttempt(
+    runId: number,
+    stepId: string,
+    attempt: number,
+    start: { agentId?: string; feedback?: string; now: number },
+  ): void {
+    this.db
+      .query(
+        `INSERT INTO workflow_steps (run_id, step_id, attempt, state, agent_id, feedback, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        stepId,
+        attempt,
+        start.agentId ? "running" : "pending",
+        start.agentId ?? null,
+        start.feedback ?? null,
+        start.agentId ? start.now : null,
+      );
+  }
+
+  setStepQuestion(runId: number, stepId: string, attempt: number, questionId: number): void {
+    this.db
+      .query(
+        "UPDATE workflow_steps SET question_id = ? WHERE run_id = ? AND step_id = ? AND attempt = ?",
+      )
+      .run(questionId, runId, stepId, attempt);
+  }
+
+  /** Ends a rejected review step once it is decided. Returns false when it was not rejected any more. */
+  resolveRejectedStep(
+    runId: number,
+    stepId: string,
+    attempt: number,
+    outcome: { state: "done" | "failed"; result?: string; error?: string; now: number },
+  ): boolean {
+    const { changes } = this.db
+      .query(
+        `UPDATE workflow_steps SET state = ?, result = ?, error = ?, finished_at = ?
+         WHERE run_id = ? AND step_id = ? AND attempt = ? AND state = 'rejected'`,
+      )
+      .run(
+        outcome.state,
+        outcome.result ?? null,
+        outcome.error ?? null,
+        outcome.now,
+        runId,
+        stepId,
+        attempt,
+      );
+    return changes > 0;
   }
 
   /** The step an agent is working on, if any. */
@@ -440,7 +529,9 @@ export class Store {
 
   setStepAgent(runId: number, stepId: string, agentId: string): void {
     this.db
-      .query("UPDATE workflow_steps SET agent_id = ? WHERE run_id = ? AND step_id = ?")
+      .query(
+        "UPDATE workflow_steps SET agent_id = ? WHERE run_id = ? AND step_id = ? AND state = 'running'",
+      )
       .run(agentId, runId, stepId);
   }
 
@@ -448,7 +539,12 @@ export class Store {
   finishStep(
     runId: number,
     stepId: string,
-    outcome: { state: "done" | "failed"; result?: string; error?: string; now: number },
+    outcome: {
+      state: "done" | "failed" | "rejected";
+      result?: string;
+      error?: string;
+      now: number;
+    },
   ): boolean {
     const { changes } = this.db
       .query(
@@ -481,7 +577,7 @@ export class Store {
     const row = this.db
       .query(
         `UPDATE workflow_steps SET reminders = reminders + 1
-         WHERE run_id = ? AND step_id = ? RETURNING reminders`,
+         WHERE run_id = ? AND step_id = ? AND state = 'running' RETURNING reminders`,
       )
       .get(runId, stepId) as { reminders: number } | null;
     return row?.reminders ?? 0;

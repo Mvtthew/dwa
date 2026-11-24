@@ -147,6 +147,7 @@ const STEP: Record<WorkflowStepInfo["state"], ActivityStyle> = {
   done: { glyph: "✓", label: "done", tone: "good" },
   failed: { glyph: "✖", label: "failed", tone: "bad" },
   skipped: { glyph: "–", label: "skipped", tone: "muted" },
+  rejected: { glyph: "◆", label: "needs you", tone: "attention" },
 };
 
 const RUN_TONE: Record<WorkflowRunState, Tone> = {

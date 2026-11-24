@@ -21,7 +21,17 @@ const StepSchema = z.strictObject({
   depends_on: z.array(z.string()).default([]),
   /** Leave the step's session running after it completes. */
   keep_agent: z.boolean().default(false),
+  /**
+   * Makes this a review of an earlier step: its agent may send that step back for another pass
+   * with `request_changes` instead of completing.
+   */
+  reviews: z.string().optional(),
+  /** Review passes before the user is asked what to do. Only with `reviews`. */
+  max_rounds: z.number().int().min(1).optional(),
 });
+
+/** Review passes a review step gets when it does not set `max_rounds`. */
+export const DEFAULT_MAX_ROUNDS = 3;
 
 const WorkflowSchema = z.strictObject({
   description: z.string().optional(),
@@ -121,7 +131,49 @@ export function parseWorkflow(text: string, name: string, source = name): Workfl
       }
     }
   }
+
+  for (const [id, step] of Object.entries(steps)) {
+    const target = step.reviews;
+    if (target === undefined) {
+      if (step.max_rounds !== undefined) {
+        throw new ConfigError(`${source}: step "${id}" sets max_rounds but reviews nothing`);
+      }
+      continue;
+    }
+    if (!(target in steps)) {
+      throw new ConfigError(`${source}: step "${id}" reviews unknown step "${target}"`);
+    }
+    if (!before.get(id)?.has(target)) {
+      throw new ConfigError(
+        `${source}: step "${id}" reviews "${target}" but does not depend on it`,
+      );
+    }
+    // Work that can be sent back must not be used by a step the review does not gate.
+    for (const other of ids) {
+      if (other === id || !before.get(other)?.has(target)) continue;
+      if (before.get(id)?.has(other) || before.get(other)?.has(id)) continue;
+      throw new ConfigError(
+        `${source}: step "${other}" depends on "${target}", which "${id}" reviews; make "${other}" depend on "${id}", or "${id}" on "${other}"`,
+      );
+    }
+  }
   return { name, description, steps };
+}
+
+/**
+ * The steps redone when a review step sends its work back, in file order: the reviewed step,
+ * every step between it and the review, and the review itself.
+ */
+export function reworkSteps(definition: WorkflowDefinition, reviewer: string): string[] {
+  const target = definition.steps[reviewer]?.reviews;
+  if (!target) return [];
+  const before = ancestors(definition.steps, definition.name);
+  return Object.keys(definition.steps).filter(
+    (id) =>
+      id === target ||
+      id === reviewer ||
+      (before.get(id)?.has(target) && before.get(reviewer)?.has(id)),
+  );
 }
 
 function workflowPath(projectRoot: string, name: string): string {
@@ -198,13 +250,15 @@ export function describeRun(run: WorkflowRunInfo, results = false): string {
   for (const step of run.steps) {
     const notes: string[] = [];
     if (step.agent && step.state === "running") notes.push(`agent "${step.agent}"`);
-    if (step.needsAttention) notes.push("needs attention");
+    if (step.attempt > 1) notes.push(`pass ${step.attempt}`);
+    if (step.state === "rejected") notes.push("changes requested, waiting for your decision");
+    else if (step.needsAttention) notes.push("needs attention");
     if (step.state === "pending" && step.dependsOn.length > 0) {
       notes.push(`after ${step.dependsOn.join(", ")}`);
     }
     if (step.error) notes.push(step.error);
     lines.push(`  ${step.id}: ${step.state}${notes.length > 0 ? ` (${notes.join("; ")})` : ""}`);
-    if (results && step.result) {
+    if (results && step.result && step.state !== "rejected") {
       for (const line of step.result.split("\n")) lines.push(`      ${line}`);
     }
   }

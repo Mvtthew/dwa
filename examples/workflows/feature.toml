@@ -3,6 +3,9 @@
 # Each step runs as its own agent and starts when the steps it depends on are done.
 # {{input}} is the text given to the run; {{steps.<name>.result}} is what an earlier step
 # handed over with complete_step. "role" is an agent definition in .claude/agents/.
+#
+# The review step may send the build back with request_changes. The developer's session stays
+# open until the review approves; after max_rounds passes you are asked what to do.
 description = "Explore the code, implement the change, review it"
 
 [steps.explore]
@@ -26,8 +29,11 @@ Findings from the exploration:
 [steps.review]
 role = "reviewer"
 depends_on = ["build"]
+reviews = "build"
+max_rounds = 3
 prompt = """
 Review the change that was just made for: {{input}}
+Approve it only when nothing has to change; otherwise send it back with what must change.
 
 What the developer reports:
 {{steps.build.result}}

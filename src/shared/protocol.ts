@@ -79,19 +79,22 @@ export type WorkflowRunState = "running" | "done" | "failed" | "cancelled";
 
 /**
  * pending (waiting for its dependencies), running (an agent is working on it), done, failed,
- * skipped (never started because the run failed or was cancelled).
+ * skipped (never started because the run failed or was cancelled), rejected (a review step that
+ * asked for changes once too often and waits for the user's decision).
  */
-export type WorkflowStepState = "pending" | "running" | "done" | "failed" | "skipped";
+export type WorkflowStepState = "pending" | "running" | "done" | "failed" | "skipped" | "rejected";
 
 export interface WorkflowStepInfo {
   id: string;
   state: WorkflowStepState;
+  /** 1 on the first pass; higher when a review sent the work back. */
+  attempt: number;
   dependsOn: string[];
   /** Name of the agent that runs or ran the step. */
   agent: string | null;
   result: string | null;
   error: string | null;
-  /** True when the agent keeps ending its turn without completing the step. */
+  /** True when the agent keeps ending its turn without completing the step, or a review waits for the user's decision. */
   needsAttention: boolean;
 }
 

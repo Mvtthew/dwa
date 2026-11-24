@@ -184,7 +184,14 @@ describe("questions and messages", () => {
 });
 
 describe("workflows in the status pane", () => {
-  const step = { dependsOn: [], agent: null, result: null, error: null, needsAttention: false };
+  const step = {
+    attempt: 1,
+    dependsOn: [],
+    agent: null,
+    result: null,
+    error: null,
+    needsAttention: false,
+  };
   const run: WorkflowRunInfo = {
     id: 3,
     name: "feature",

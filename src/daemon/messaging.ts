@@ -38,9 +38,15 @@ export class Messaging {
   private readonly mailboxes = new Map<string, MailboxWaiter>();
   private readonly questionWaiters = new Map<number, Set<QuestionWaiter>>();
   private readonly schedule: (callback: () => void, ms: number) => void;
+  private readonly closedListeners: Array<(question: QuestionRow) => void> = [];
 
   constructor(private readonly deps: MessagingDeps) {
     this.schedule = deps.schedule ?? ((callback, ms) => void setTimeout(callback, ms));
+  }
+
+  /** Calls the listener whenever a question is answered or cancelled. Listeners must not throw or wait. */
+  onQuestionClosed(listener: (question: QuestionRow) => void): void {
+    this.closedListeners.push(listener);
   }
 
   /** Resolves "user", an agent name or an agent id to an id. Agents must be running. */
@@ -266,6 +272,7 @@ export class Messaging {
       });
       this.flush(question.fromId);
     }
+    for (const listener of this.closedListeners) listener(closed);
     return closed;
   }
 
