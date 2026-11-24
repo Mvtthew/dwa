@@ -3,10 +3,16 @@ import type { TmuxRunner } from "./driver.ts";
 
 export const SESSION = APP_NAME;
 export const WORKSPACE_WINDOW = "workspace";
-export const LEFT_WIDTH = 30;
-export const RIGHT_WIDTH = 34;
-/** Share of the centre column given to the agent pane opened under main. */
-export const AGENT_HEIGHT = "40%";
+export interface LayoutSizes {
+  /** Columns of the status pane on the left. */
+  statusWidth: number;
+  /** Columns of the agents pane on the right. */
+  agentsWidth: number;
+  /** Percent of the centre column given to the agent pane opened under main. */
+  agentHeight: number;
+}
+
+export const DEFAULT_LAYOUT: LayoutSizes = { statusWidth: 30, agentsWidth: 34, agentHeight: 40 };
 
 const PRINT_PANE = ["-P", "-F", "#{pane_id}"];
 
@@ -42,9 +48,16 @@ export interface WorkspacePanes {
  */
 export async function createWorkspace(
   run: TmuxRunner,
-  options: { cwd: string; left: PaneCommand; main: PaneCommand; right: PaneCommand },
+  options: {
+    cwd: string;
+    left: PaneCommand;
+    main: PaneCommand;
+    right: PaneCommand;
+    sizes?: LayoutSizes;
+  },
 ): Promise<WorkspacePanes> {
   const { cwd } = options;
+  const sizes = options.sizes ?? DEFAULT_LAYOUT;
   const left = await run([
     "new-session",
     "-d",
@@ -91,12 +104,12 @@ export async function createWorkspace(
   await setTitle(run, left, options.left.title);
   await setTitle(run, main, options.main.title);
   await setTitle(run, right, options.right.title);
-  await fixSideColumns(run, { left, right });
+  await fixSideColumns(run, { left, right }, sizes);
   await run([
     "set-hook",
     "-g",
     "window-resized",
-    `resize-pane -t ${left} -x ${LEFT_WIDTH} ; resize-pane -t ${right} -x ${RIGHT_WIDTH}`,
+    `resize-pane -t ${left} -x ${sizes.statusWidth} ; resize-pane -t ${right} -x ${sizes.agentsWidth}`,
   ]);
   return { left, main, right };
 }
@@ -104,9 +117,10 @@ export async function createWorkspace(
 export async function fixSideColumns(
   run: TmuxRunner,
   panes: { left: string; right: string },
+  sizes: LayoutSizes = DEFAULT_LAYOUT,
 ): Promise<void> {
-  await run(["resize-pane", "-t", panes.left, "-x", String(LEFT_WIDTH)]);
-  await run(["resize-pane", "-t", panes.right, "-x", String(RIGHT_WIDTH)]);
+  await run(["resize-pane", "-t", panes.left, "-x", String(sizes.statusWidth)]);
+  await run(["resize-pane", "-t", panes.right, "-x", String(sizes.agentsWidth)]);
 }
 
 export async function setTitle(run: TmuxRunner, pane: string, title: string): Promise<void> {
@@ -139,9 +153,10 @@ export async function spawnPoolWindow(
 /** Moves an agent's pane from the pool to the slot under the main session and focuses it. */
 export async function openUnderMain(
   run: TmuxRunner,
-  options: { main: string; agent: string },
+  options: { main: string; agent: string; heightPercent?: number },
 ): Promise<void> {
-  await run(["join-pane", "-v", "-l", AGENT_HEIGHT, "-s", options.agent, "-t", options.main]);
+  const height = `${options.heightPercent ?? DEFAULT_LAYOUT.agentHeight}%`;
+  await run(["join-pane", "-v", "-l", height, "-s", options.agent, "-t", options.main]);
 }
 
 /** Sends an open agent's pane back to its own background window. The session keeps running. */

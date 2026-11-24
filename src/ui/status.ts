@@ -94,8 +94,8 @@ export function createStatusView(renderer: CliRenderer): StatusView {
 
       lines.push([], [bold("KEYS"), dim(`  ${formatKey(state.keyPrefix)}, then`)]);
       lines.push([dim("1-9 open agent  x close")]);
-      lines.push([dim("0 main  q answer  z zoom")]);
-      lines.push([dim("d detach")]);
+      lines.push([dim("0 main  q answer  p menu")]);
+      lines.push([dim("z zoom  d detach")]);
 
       text.content = styled(lines);
     },

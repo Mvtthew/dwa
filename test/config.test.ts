@@ -35,7 +35,7 @@ describe("parseConfig", () => {
   });
 
   test("an empty file is a valid config", () => {
-    expect(parseConfig("", "test")).toEqual({ profiles: {}, keys: {} });
+    expect(parseConfig("", "test")).toEqual({ profiles: {}, keys: {}, agents: [], layout: {} });
   });
 
   test("reports the file and field for a bad value", () => {
@@ -44,6 +44,37 @@ describe("parseConfig", () => {
     );
     expect(() => parseConfig("[profiles.me]\ncomand = 'x'", "cfg.toml")).toThrow(ConfigError);
     expect(() => parseConfig("not toml ===", "cfg.toml")).toThrow(/cfg\.toml: invalid TOML/);
+  });
+});
+
+describe("agents and layout", () => {
+  test("are read from the config and validated", () => {
+    const config = parseConfig(
+      `
+[[agents]]
+name = "rev"
+role = "reviewer"
+task = "review HEAD"
+
+[layout]
+agents_width = 40
+`,
+      "test",
+    );
+    expect(config.agents).toEqual([{ name: "rev", role: "reviewer", task: "review HEAD" }]);
+    expect(config.layout).toEqual({ agents_width: 40 });
+    expect(() => parseConfig("[layout]\nagents_width = 4", "cfg")).toThrow(/layout\.agents_width/);
+    expect(() => parseConfig("[[agents]]\nrole = 'x'", "cfg")).toThrow(/agents\.0\.name/);
+  });
+
+  test("the project's agent list replaces the personal one; layout merges", () => {
+    const user = parseConfig("[[agents]]\nname = 'mine'\n[layout]\nstatus_width = 20", "user");
+    const project = parseConfig("[[agents]]\nname = 'theirs'\n[layout]\nagents_width = 40", "p");
+    expect(mergeConfig(user, project).agents.map((agent) => agent.name)).toEqual(["theirs"]);
+    expect(mergeConfig(user, project).layout).toEqual({ status_width: 20, agents_width: 40 });
+    expect(mergeConfig(user, parseConfig("", "p")).agents.map((agent) => agent.name)).toEqual([
+      "mine",
+    ]);
   });
 });
 

@@ -15,8 +15,10 @@ const USAGE = `${APP_NAME} ${pkg.version}
 Usage: ${APP_NAME} <command> [options]
 
 Workspace
+  init [--roles]                        Create .dwa/config.toml (and example agent roles)
   up [--profile <name>] [--no-attach]   Start the workspace for this project and attach to it
   attach                                Attach to the running workspace
+  palette                               Menu of workspace actions (prefix key, then p)
   down                                  Stop every session and the workspace
 
 Agents
@@ -189,6 +191,10 @@ async function main(argv: string[]): Promise<number> {
     case "answer":
     case "inbox":
       return (await import("./talk.ts")).talkCommand(projectRoot, command, rest);
+    case "palette":
+      return (await import("./palette.ts")).paletteCommand(projectRoot);
+    case "init":
+      return (await import("./init.ts")).initCommand(projectRoot, rest);
     case "status":
       console.log(JSON.stringify(await call(projectRoot, "GET", "/state"), null, 2));
       return 0;

@@ -6,8 +6,11 @@ import type { Config } from "../src/shared/config.ts";
 import { WORKSPACE_WINDOW } from "../src/tmux/layout.ts";
 import { FakeTmux } from "./fake-tmux.ts";
 
-const config: Config = {
+let config: Config;
+const baseConfig: Config = {
   keys: {},
+  agents: [],
+  layout: {},
   default_profile: "me",
   profiles: {
     me: { command: "/bin/claude_me", args: [], env: {} },
@@ -23,6 +26,7 @@ let files: Map<string, string>;
 let scheduled: (() => void)[];
 
 beforeEach(() => {
+  config = structuredClone(baseConfig);
   tmux = new FakeTmux();
   files = new Map();
   scheduled = [];
@@ -105,6 +109,42 @@ describe("up", () => {
     const second = await workspace.up();
     expect(tmux.commands("kill-server")).toHaveLength(1);
     expect(second.main?.sessionId).not.toBe(first.main?.sessionId);
+  });
+});
+
+describe("config", () => {
+  test("agents listed in the config start with the workspace", async () => {
+    config.agents = [
+      { name: "explore", role: "explore" },
+      { name: "rev", role: "reviewer", profile: "work", task: "review HEAD" },
+    ];
+    const state = await workspace.up();
+    expect(
+      state.agents.map((agent) => [agent.name, agent.role, agent.profile, agent.task]),
+    ).toEqual([
+      ["explore", "explore", "me", null],
+      ["rev", "reviewer", "work", "review HEAD"],
+    ]);
+    // A second `up` does not start them again.
+    expect((await workspace.up()).agents).toHaveLength(2);
+  });
+
+  test("an agent that cannot be started is reported and the rest still start", async () => {
+    config.agents = [{ name: "bad name" }, { name: "x", profile: "nope" }, { name: "ok" }];
+    const state = await workspace.up();
+    expect(state.agents.map((agent) => agent.name)).toEqual(["ok"]);
+    const shown = tmux.commands("display-message").map((command) => command.at(-1));
+    expect(shown[0]).toContain('Could not start agent "bad name"');
+    expect(shown[1]).toContain('Unknown profile "nope"');
+  });
+
+  test("layout sizes from the config are applied", async () => {
+    config.layout = { status_width: 24, agents_width: 40, agent_height: 55 };
+    await workspace.up();
+    expect(tmux.commands("resize-pane").map((command) => command.at(-1))).toEqual(["24", "40"]);
+    await workspace.spawn({ name: "a" });
+    await workspace.open("a");
+    expect(tmux.commands("join-pane").at(-1)).toContain("55%");
   });
 });
 

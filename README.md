@@ -43,6 +43,7 @@ bun run dwa doctor
 ## Usage
 
 ```sh
+bun run dwa init --roles            # once per project: config template and example agent roles
 bun run dwa up                      # start the workspace for this project and attach
 bun run dwa agent spawn explore     # start an agent (optionally --role, --profile, --task)
 bun run dwa agent open explore      # show it under the main session
@@ -79,6 +80,7 @@ Press `Ctrl+Q`, release, then:
 | `x`      | Close the agent pane (the agent keeps running)         |
 | `0`      | Focus the main session                                 |
 | `q`      | Answer open questions in a popup                       |
+| `p`      | Command menu: open, message, start or stop agents      |
 | `z`      | Zoom the focused pane, and again to restore            |
 | `d`      | Detach (everything keeps running)                      |
 | `Ctrl+Q` | Send a real Ctrl+Q to the program in the pane          |
@@ -91,6 +93,25 @@ prefix = "C-a"   # tmux key notation
 ```
 
 The same actions are also on `Alt+1`…`9`, `Alt+x`, `Alt+0` and `Alt+z`, but only where the terminal sends Option as Meta. On macOS layouts where Option types characters (Polish, German and others) use the prefix.
+
+## Project configuration
+
+`dwa init` writes a commented `.dwa/config.toml`. Besides profiles and the key prefix it can list agents that start with the workspace and set pane sizes:
+
+```toml
+[[agents]]
+name = "reviewer"
+role = "reviewer"        # .claude/agents/reviewer.md
+profile = "work"         # optional
+task = "Wait for review requests."
+
+[layout]
+status_width = 30        # columns
+agents_width = 34        # columns
+agent_height = 40        # percent of the centre column
+```
+
+Agent roles are ordinary Claude Code agent definitions in `.claude/agents/`. `dwa init --roles` adds three to start from: `explore`, `developer` and `reviewer`. `dwa init` never overwrites a file; in a git repository it also adds `.dwa/run/` to `.gitignore`.
 
 ## Using a different Claude command
 

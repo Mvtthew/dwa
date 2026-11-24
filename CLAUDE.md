@@ -33,7 +33,8 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - `src/ui/` OpenTUI panes: `model.ts` is pure view logic, `agents.ts` and `status.ts` draw it; test with `createTestRenderer` from `@opentui/core/testing`
 - `src/daemon/messaging.ts` messages and questions: delivery through the mailbox hook with a paste fallback, questions that never expire
 - `src/mcp/server.ts` the MCP server each session runs for the dwa tools; stateless, every tool is a daemon request
-- `src/cli/talk.ts` the user's `ask`, `answer` and `inbox` commands
+- `src/cli/talk.ts` the user's `ask`, `answer` and `inbox` commands; `palette.ts` the command menu; `init.ts` project setup
+- `examples/agents/` the roles `dwa init --roles` copies into a project
 - Never test against the real project's workspace while the user may be using it; use a scratch project via `DWA_PROJECT`
 - Tests use `test/fake-tmux.ts` instead of a real tmux server
 - `spikes/` throwaway experiments; results are written up in `docs/spikes.md`

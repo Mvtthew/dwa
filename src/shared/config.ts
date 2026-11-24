@@ -25,14 +25,37 @@ const KeysSchema = z.strictObject({
     .optional(),
 });
 
+/** An agent started together with the workspace. */
+const AgentSchema = z.strictObject({
+  name: z.string().min(1),
+  /** Agent definition to run as (a `.claude/agents/<role>.md` file). */
+  role: z.string().optional(),
+  profile: z.string().optional(),
+  /** First prompt for the session. */
+  task: z.string().optional(),
+});
+
+const LayoutSchema = z.strictObject({
+  /** Width of the status pane in columns. */
+  status_width: z.number().int().min(16).max(80).optional(),
+  /** Width of the agents pane in columns. */
+  agents_width: z.number().int().min(16).max(80).optional(),
+  /** Height of the agent pane opened under main, in percent of the centre column. */
+  agent_height: z.number().int().min(10).max(90).optional(),
+});
+
 const ConfigSchema = z.strictObject({
   default_profile: z.string().optional(),
   profiles: z.record(z.string(), ProfileSchema).default({}),
   keys: KeysSchema.default({}),
+  agents: z.array(AgentSchema).default([]),
+  layout: LayoutSchema.default({}),
 });
 
 export type Profile = z.infer<typeof ProfileSchema>;
 export type Config = z.infer<typeof ConfigSchema>;
+export type AgentConfig = z.infer<typeof AgentSchema>;
+export type LayoutConfig = z.infer<typeof LayoutSchema>;
 
 export interface ResolvedProfile {
   /** Profile name, or "env" / "default" when no named profile was used. */
@@ -45,7 +68,7 @@ export interface ResolvedProfile {
 
 export class ConfigError extends Error {}
 
-export const EMPTY_CONFIG: Config = { profiles: {}, keys: {} };
+export const EMPTY_CONFIG: Config = { profiles: {}, keys: {}, agents: [], layout: {} };
 
 export function parseConfig(text: string, source: string): Config {
   let raw: unknown;
@@ -64,12 +87,17 @@ export function parseConfig(text: string, source: string): Config {
   return result.data;
 }
 
-/** Project settings override personal ones; profiles are merged by name. */
+/**
+ * Project settings override personal ones. Profiles, keys and layout are merged field by field;
+ * the list of agents to start is the project's when it has one, otherwise the personal one.
+ */
 export function mergeConfig(user: Config, project: Config): Config {
   return {
     default_profile: project.default_profile ?? user.default_profile,
     profiles: { ...user.profiles, ...project.profiles },
     keys: { ...user.keys, ...project.keys },
+    agents: project.agents.length > 0 ? project.agents : user.agents,
+    layout: { ...user.layout, ...project.layout },
   };
 }
 

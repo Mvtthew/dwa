@@ -17,6 +17,7 @@ import { tmuxQuote } from "../tmux/conf.ts";
 import type { TmuxRunner } from "../tmux/driver.ts";
 import {
   createWorkspace,
+  DEFAULT_LAYOUT,
   focusPane,
   hasSession,
   killPane,
@@ -36,6 +37,7 @@ export { WorkspaceError };
 
 const NAME_PATTERN = /^[A-Za-z0-9][\w.-]{0,39}$/;
 const META_PROFILE = "workspace_profile";
+const META_AGENT_HEIGHT = "agent_height";
 
 export interface WorkspaceDeps {
   store: Store;
@@ -122,14 +124,39 @@ export class Workspace {
           title: "main",
         },
         right: this.uiPane("agents", "agents"),
+        sizes: {
+          statusWidth: config.layout.status_width ?? DEFAULT_LAYOUT.statusWidth,
+          agentsWidth: config.layout.agents_width ?? DEFAULT_LAYOUT.agentsWidth,
+          agentHeight: config.layout.agent_height ?? DEFAULT_LAYOUT.agentHeight,
+        },
       });
       this.insert({ id, kind: "main", name: "main", profile: profile.name, sessionId }, panes.main);
+      this.deps.store.setMeta(
+        META_AGENT_HEIGHT,
+        config.layout.agent_height ? String(config.layout.agent_height) : null,
+      );
+
+      // Agents listed in the config start with the workspace. One that cannot be started
+      // (bad name, unknown profile) is reported and does not stop the others.
+      for (const agent of config.agents) {
+        try {
+          await this.spawnNow(agent);
+        } catch (error) {
+          const message = `Could not start agent "${agent.name}": ${(error as Error).message}`;
+          console.error(message);
+          await this.deps.run(["display-message", "-d", "5000", message]).catch(() => undefined);
+        }
+      }
       return this.snapshot();
     });
   }
 
   spawn(request: SpawnRequest = {}): Promise<AgentInfo> {
-    return this.serial(async () => {
+    return this.serial(() => this.spawnNow(request));
+  }
+
+  private async spawnNow(request: SpawnRequest): Promise<AgentInfo> {
+    {
       const state = await this.requireUp();
       const name = this.uniqueName(request.name ?? request.role ?? "agent", state);
       const config = await this.deps.loadConfig();
@@ -170,7 +197,7 @@ export class Workspace {
         paneId,
       );
       return { ...row, telemetry: null, waitingOn: null, open: false };
-    });
+    }
   }
 
   /** Shows an agent's session under main. `target` is a name, an id or a 1-based list position. */
@@ -183,7 +210,12 @@ export class Workspace {
         if (current) {
           await returnToPool(this.deps.run, { agent: current.paneId, name: current.name });
         }
-        await openUnderMain(this.deps.run, { main: state.main.paneId, agent: agent.paneId });
+        const height = Number(this.deps.store.getMeta(META_AGENT_HEIGHT)) || undefined;
+        await openUnderMain(this.deps.run, {
+          main: state.main.paneId,
+          agent: agent.paneId,
+          heightPercent: height,
+        });
       }
       await focusPane(this.deps.run, agent.paneId);
       return { ...agent, open: true };

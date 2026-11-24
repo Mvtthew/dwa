@@ -97,6 +97,10 @@ test/
 
 Tooling: `bun test`, Biome (lint + format), `tsc --noEmit`, GitHub Actions (typecheck, lint, test on macOS + Linux), `bun build --compile` for a single binary later. Dependencies: `@opentui/core` (exact pin), `@modelcontextprotocol/sdk`, `zod`. Root files: `README.md`, `LICENSE` (MIT), `CLAUDE.md`, `.gitignore`, `package.json`, `tsconfig.json`, `biome.json`.
 
+## Status
+
+M0 to M4 are implemented, except the demo recording. Results of the experiments are in [spikes.md](spikes.md). What remains is listed under "After the MVP", plus two checks that need a person or more time: a message arriving while an agent is in the middle of a long tool call, and blocking waits of many hours.
+
 ## Milestones
 
 **M0. Scaffold and spikes** (decides the uncertain parts before real code)

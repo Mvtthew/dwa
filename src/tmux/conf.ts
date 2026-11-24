@@ -1,4 +1,4 @@
-import { DEFAULT_KEY_PREFIX } from "../shared/constants.ts";
+import { APP_NAME, DEFAULT_KEY_PREFIX } from "../shared/constants.ts";
 
 /** Quotes a value for a tmux config file or command string. */
 export function tmuxQuote(value: string): string {
@@ -31,6 +31,7 @@ export function buildTmuxConf(options: ConfOptions): string {
     ["x", run("key close")],
     ["0", run("key focus")],
     ["z", "resize-pane -Z"],
+    ["p", `display-popup -E -w 60% -h 70% -T ' ${APP_NAME} ' ${tmuxQuote(`${dwa} palette`)}`],
     ["q", `display-popup -E -w 80% -h 60% -T ' Questions ' ${tmuxQuote(`${dwa} answer`)}`],
   ];
   const lines = [
@@ -50,7 +51,7 @@ export function buildTmuxConf(options: ConfOptions): string {
     "set -g pane-border-format ' #{pane_title} '",
     "",
     "# Shortcuts: <prefix> then 1..9 opens that agent under main, x closes it, 0 focuses main,",
-    "# q answers open questions, z zooms the focused pane, d detaches. Pressing the prefix twice sends it to the program.",
+    "# p opens the command menu, q answers open questions, z zooms the focused pane, d detaches. Pressing the prefix twice sends it to the program.",
     "unbind -a -T prefix",
     "unbind -a -T root",
     `set -g prefix ${prefix}`,
