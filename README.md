@@ -2,7 +2,7 @@
 
 A terminal workspace for running several Claude Code sessions side by side and letting them work together.
 
-> Status: early development. The workspace, agent panes, profiles and live agent state work; messaging between agents is next. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
+> Status: early development. The workspace, live agent state, and messaging between agents and you all work. Workflows and shared memory are planned. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
 
 ## What it does and will do
 
@@ -53,6 +53,22 @@ bun run dwa down                    # stop everything
 
 Closing the terminal leaves everything running; `dwa attach` brings it back.
 
+### Talking to agents
+
+Every session gets a set of dwa tools: `list_agents`, `send_message`, `ask`, `answer`, `report_progress`, `wait_for`, `spawn_agent` and `stop_agent`. So you can tell the main session "start a reviewer and ask it to check my last commit" and it will. An agent that needs a decision calls `ask`, which blocks until it is answered, with no time limit. Questions for you show up in the status pane.
+
+From a shell, without any model call:
+
+```sh
+bun run dwa agent send dev "the API changed, re-read docs/api.md"
+bun run dwa ask reviewer "is the migration safe to run?"   # waits and prints the answer
+bun run dwa answer                  # walk through open questions (also Ctrl+Q then q)
+bun run dwa answer 3 "use postgres" # answer question 3 directly
+bun run dwa inbox                   # messages agents sent to you
+```
+
+A message reaches an agent even when it is idle: it wakes up and reads it. You can also answer on behalf of an agent that was asked something.
+
 ### Keys
 
 Press `Ctrl+Q`, release, then:
@@ -62,6 +78,7 @@ Press `Ctrl+Q`, release, then:
 | `1`–`9`  | Open the agent at that position under the main session |
 | `x`      | Close the agent pane (the agent keeps running)         |
 | `0`      | Focus the main session                                 |
+| `q`      | Answer open questions in a popup                       |
 | `z`      | Zoom the focused pane, and again to restore            |
 | `d`      | Detach (everything keeps running)                      |
 | `Ctrl+Q` | Send a real Ctrl+Q to the program in the pane          |

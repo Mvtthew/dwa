@@ -58,7 +58,9 @@ Problems found:
 
 How the mailbox works (`spikes/wait-mail.ts`): a `command` hook with `asyncRewake: true` and a long `timeout` is registered on `SessionStart` and `Stop`. It waits for a message, prints it to stderr and exits with code 2, which wakes the session. The `Stop` after that turn starts the next waiter. A pid file keeps it to one waiter per agent. Two messages in a row were delivered this way.
 
-Open points for the real implementation: the waiter should block on the daemon socket instead of polling files; the text is framed as a "Stop hook blocking error", so each message needs a clear header saying who sent it; delivery to a busy session waits for the end of the turn, which is acceptable but should be shown as "queued" in the dashboard.
+Later checks with the real implementation (M3): a message woke an idle agent, which replied to the user; `dwa ask` got an answer back from an agent; an agent's blocking `ask` to the user was answered from the CLI and the agent then messaged a second agent, which woke and read it. Not yet tested: a message arriving while the agent is in the middle of a long tool call.
+
+Open points noted at spike time: the waiter should block on the daemon socket instead of polling files; the text is framed as a "Stop hook blocking error", so each message needs a clear header saying who sent it; delivery to a busy session waits for the end of the turn, which is acceptable but should be shown as "queued" in the dashboard.
 
 ## S4. Blocking `ask` with no timeout
 
