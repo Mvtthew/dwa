@@ -120,7 +120,8 @@ export async function mailboxCommand(env: Env = process.env): Promise<number> {
       if (!response.ok) return 0;
       const { messages } = (await response.json()) as { messages?: string[] };
       if (!messages || messages.length === 0) return 0;
-      process.stderr.write(`${messages.join("\n\n")}\n`);
+      // No trailing newline: Claude Code wraps this text in its own reminder block.
+      process.stderr.write(messages.join("\n\n"));
       return 2;
     } catch {
       // The daemon is restarting or gone. Messages are kept there, so try again for a while.

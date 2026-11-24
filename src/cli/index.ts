@@ -30,7 +30,7 @@ Agents
 Talking to agents
   ask <name> <question>                 Ask an agent and wait for its answer
   answer [id] [text]                    Answer an open question (asks which one when run bare)
-  inbox                                 Show messages agents sent to you
+  inbox                                 Show open questions and messages agents sent to you
 
 Other
   status     Print the workspace state as JSON

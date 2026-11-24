@@ -192,3 +192,59 @@ describe("pickAnswer", () => {
     expect(pickAnswer("", ["yes"])).toBe("");
   });
 });
+
+describe("inboxText", () => {
+  test("lists open questions before messages, the user's own first", async () => {
+    const { inboxText } = await import("../src/cli/talk.ts");
+    const now = 10 * 60000;
+    const question = {
+      fromId: "a",
+      toId: "user",
+      question: "which color?",
+      options: ["red", "blue"],
+      createdAt: now - 5 * 60000,
+    };
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: strips the colour codes
+    const plain = (lines: string[]) => lines.join("\n").replace(/\x1b\[\d+m/g, "");
+    const text = plain(
+      inboxText(
+        {
+          projectRoot: "/p",
+          keyPrefix: "C-q",
+          up: true,
+          main: null,
+          agents: [],
+          questions: [
+            { ...question, id: 1, from: "bob", to: "alice", toId: "b" },
+            { ...question, id: 2, from: "alice", to: "user" },
+          ],
+          inbox: [{ id: 1, from: "alice", body: "done", createdAt: now }],
+        },
+        now,
+      ),
+    );
+    expect(text.indexOf("#2  alice asks you")).toBeGreaterThan(-1);
+    expect(text.indexOf("#2  alice asks you")).toBeLessThan(text.indexOf("#1  bob asks alice"));
+    expect(text).toContain("5 min ago");
+    expect(text).toContain("Suggested: red | blue");
+    expect(text.indexOf("MESSAGES")).toBeGreaterThan(text.indexOf("#1  bob asks alice"));
+    expect(text).toContain("alice  just now\ndone");
+
+    const empty = plain(
+      inboxText(
+        {
+          projectRoot: "/p",
+          keyPrefix: "C-q",
+          up: true,
+          main: null,
+          agents: [],
+          questions: [],
+          inbox: [],
+        },
+        now,
+      ),
+    );
+    expect(empty).not.toContain("OPEN QUESTIONS");
+    expect(empty).toContain("No messages.");
+  });
+});

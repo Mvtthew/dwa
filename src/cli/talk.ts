@@ -68,6 +68,45 @@ async function answerInteractively(projectRoot: string): Promise<number> {
   return 0;
 }
 
+/**
+ * What `dwa inbox` prints: open questions first (those for the user before the rest), since they
+ * block someone, then the latest messages, oldest first.
+ */
+export function inboxText(state: WorkspaceState, now = Date.now()): string[] {
+  const lines: string[] = [];
+  const questions = [...state.questions].sort(
+    (a, b) => Number(b.to === "user") - Number(a.to === "user") || a.id - b.id,
+  );
+  if (questions.length > 0) {
+    lines.push(`${BOLD}OPEN QUESTIONS${RESET}`, "");
+    for (const question of questions) {
+      const to = question.to === "user" ? "you" : question.to;
+      lines.push(
+        `${BOLD}#${question.id}  ${question.from} asks ${to}${RESET}  ${DIM}${when(question.createdAt, now)}${RESET}`,
+        question.question,
+      );
+      if (question.options.length > 0) {
+        lines.push(`${DIM}Suggested: ${question.options.join(" | ")}${RESET}`);
+      }
+      lines.push("");
+    }
+    lines.push(
+      `${DIM}Answer with: dwa answer <id> <text>, or dwa answer to go through them.${RESET}`,
+      "",
+    );
+  }
+  lines.push(`${BOLD}MESSAGES${RESET}`, "");
+  if (state.inbox.length === 0) lines.push("No messages.");
+  for (const message of [...state.inbox].reverse()) {
+    lines.push(
+      `${BOLD}${message.from}${RESET}  ${DIM}${when(message.createdAt, now)}${RESET}`,
+      message.body,
+      "",
+    );
+  }
+  return lines;
+}
+
 export async function talkCommand(
   projectRoot: string,
   command: "ask" | "answer" | "inbox",
@@ -111,11 +150,7 @@ export async function talkCommand(
     }
     case "inbox": {
       const state = await call<WorkspaceState>(projectRoot, "GET", "/state");
-      if (state.inbox.length === 0) console.log("No messages.");
-      for (const message of [...state.inbox].reverse()) {
-        console.log(`${BOLD}${message.from}${RESET}  ${DIM}${when(message.createdAt)}${RESET}`);
-        console.log(`${message.body}\n`);
-      }
+      console.log(inboxText(state).join("\n"));
       return 0;
     }
   }

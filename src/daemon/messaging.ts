@@ -92,7 +92,7 @@ export class Messaging {
       const lines = [`Question #${id}: ${question}`];
       if (options?.length) lines.push(`Suggested answers: ${options.join(" | ")}`);
       lines.push(
-        `${from} is waiting for your answer. Give it with the dwa "answer" tool (question_id: ${id}).`,
+        `${fromId === USER ? "The user" : from} is waiting for your answer. Give it with the dwa "answer" tool (question_id: ${id}).`,
       );
       store.addMessage({ fromId, toId, body: lines.join("\n"), createdAt: this.deps.now() });
       this.flush(toId);
