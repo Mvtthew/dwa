@@ -240,6 +240,8 @@ export class Workflows {
             name: stepId,
             role: step.role,
             profile: step.profile,
+            model: step.model,
+            effort: step.effort,
             task: this.task(run, stepId, renderPrompt(step.prompt, run.input, results)),
           });
           store.setStepAgent(runId, stepId, agent.id);

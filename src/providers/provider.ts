@@ -8,6 +8,8 @@ export interface LaunchRequest {
   name: string;
   /** Agent definition to run as (for Claude Code: a `.claude/agents/<role>.md` file). */
   role?: string;
+  model?: string;
+  effort?: string;
   /** First prompt, given when the agent is spawned with a task. */
   task?: string;
   /** Path of the per-session settings file written from `buildSettings`. */

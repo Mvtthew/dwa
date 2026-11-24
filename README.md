@@ -110,7 +110,7 @@ bun run dwa workflow cancel 1
 ```
 
 - Steps without a dependency between them run at the same time.
-- `{{input}}` is the text given to the run, and `{{steps.<name>.result}}` is what an earlier step handed over. A step may also set `profile`, and `keep_agent = true` to leave its session open afterwards.
+- `{{input}}` is the text given to the run, and `{{steps.<name>.result}}` is what an earlier step handed over. A step may also set `profile`, `model` and `effort`, and `keep_agent = true` to leave its session open afterwards.
 - A step ends only when its agent calls `complete_step` or `fail_step`. If the agent just stops, it is reminded twice, then the status pane marks the step as needing you. Nothing times out; open the agent and sort it out.
 - If a step fails, steps already running finish, the rest are skipped and the run fails.
 - The run's outcome arrives as a message to whoever started it. Agents can start runs too, with `run_workflow`.
@@ -156,6 +156,16 @@ status_width = 30        # columns
 agents_width = 34        # columns
 agent_height = 40        # percent of the centre column
 ```
+
+Model and effort can be set per agent: `model` and `effort` on an `[[agents]]` entry, on a workflow step, or with `dwa agent spawn --model <model> --effort <level>`. An agent that sets neither uses `model:` / `effort:` from its role file, and after that the `[defaults]` section:
+
+```toml
+[defaults]
+model = "sonnet"
+effort = "medium"       # low, medium, high, xhigh or max
+```
+
+`[defaults]` never overrides a role file and does not apply to the main session; set the main session's model through its profile's `args`.
 
 Agent roles are ordinary Claude Code agent definitions in `.claude/agents/`. `dwa init --roles` adds three to start from, `explore`, `developer` and `reviewer`, and an example workflow that uses them. `dwa init` never overwrites a file; in a git repository it also adds `.dwa/run/` to `.gitignore`.
 

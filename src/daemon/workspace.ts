@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Provider } from "../providers/provider.ts";
-import { type Config, resolveProfile } from "../shared/config.ts";
+import { type Config, EffortSchema, resolveProfile } from "../shared/config.ts";
 import { DEFAULT_KEY_PREFIX } from "../shared/constants.ts";
 import type {
   AgentInfo,
@@ -13,6 +13,7 @@ import type {
   UpRequest,
   WorkspaceState,
 } from "../shared/protocol.ts";
+import { resolveTuning, roleTuning, type SessionTuning } from "../shared/roles.ts";
 import { tmuxQuote } from "../tmux/conf.ts";
 import type { TmuxRunner } from "../tmux/driver.ts";
 import {
@@ -55,6 +56,8 @@ export interface WorkspaceDeps {
   /** Writes a generated file; replaced in tests. */
   writeFile?: (path: string, content: string) => void;
   loadConfig: () => Promise<Config>;
+  /** Reads model and effort from a role's definition file; replaced in tests. */
+  readRole?: (role: string) => SessionTuning;
   /** Shortcut prefix in tmux notation, shown in the status pane. */
   keyPrefix?: string;
   env?: Record<string, string | undefined>;
@@ -209,6 +212,19 @@ export class Workspace {
         this.env,
       );
 
+      if (request.effort !== undefined && !EffortSchema.safeParse(request.effort).success) {
+        throw new WorkspaceError(
+          `Invalid effort "${request.effort}": use ${EffortSchema.options.join(", ")}.`,
+        );
+      }
+      const readRole =
+        this.deps.readRole ?? ((role: string) => roleTuning(this.deps.projectRoot, role));
+      const tuning = resolveTuning(
+        { model: request.model || undefined, effort: request.effort },
+        request.role ? readRole(request.role) : {},
+        config.defaults,
+      );
+
       const id = this.newId();
       const sessionId = this.newId();
       const launch = this.deps.provider.buildLaunch({
@@ -216,6 +232,7 @@ export class Workspace {
         sessionId,
         name,
         role: request.role,
+        ...tuning,
         task: request.task,
         ...this.sessionFiles(id, name),
       });

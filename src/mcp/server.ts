@@ -6,6 +6,7 @@ import { z } from "zod";
 import { APP_NAME } from "../shared/constants.ts";
 import { daemonSocketPath } from "../shared/paths.ts";
 import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../shared/protocol.ts";
+import { EFFORT_LEVELS } from "../shared/roles.ts";
 import { describeRun, type WorkflowSummary } from "../shared/workflow.ts";
 
 type Env = Record<string, string | undefined>;
@@ -211,6 +212,11 @@ export async function runMcp(env: Env = process.env): Promise<void> {
         role: z.string().optional().describe("An agent definition from .claude/agents."),
         task: z.string().optional().describe("The first prompt for the new session."),
         profile: z.string().optional(),
+        model: z
+          .string()
+          .optional()
+          .describe("Only to override; by default the role or the workspace decides."),
+        effort: z.enum(EFFORT_LEVELS).optional(),
       },
     },
     (request) =>

@@ -11,6 +11,7 @@ import {
   resolveProfile,
 } from "../src/shared/config.ts";
 import { cleanEnv } from "../src/shared/env.ts";
+import { parseRoleTuning, resolveTuning } from "../src/shared/roles.ts";
 import { buildTmuxConf, tmuxQuote } from "../src/tmux/conf.ts";
 import { parsePaneList } from "../src/tmux/layout.ts";
 
@@ -35,7 +36,7 @@ describe("parseConfig", () => {
   });
 
   test("an empty file is a valid config", () => {
-    expect(parseConfig("", "test")).toEqual({ profiles: {}, keys: {}, agents: [], layout: {} });
+    expect(parseConfig("", "test")).toEqual(EMPTY_CONFIG);
   });
 
   test("reports the file and field for a bad value", () => {
@@ -154,6 +155,28 @@ describe("buildClaudeLaunch", () => {
       "dev",
       "--agent",
       "developer",
+      "fix it",
+    ]);
+  });
+
+  test("puts model and effort after the profile's arguments", () => {
+    const launch = buildClaudeLaunch({
+      profile: { ...profile, args: ["--model", "sonnet"] },
+      sessionId: "sid",
+      name: "dev",
+      model: "opus",
+      effort: "high",
+      task: "fix it",
+    });
+    expect(launch.argv.slice(3)).toEqual([
+      "--session-id",
+      "sid",
+      "--name",
+      "dev",
+      "--model",
+      "opus",
+      "--effort",
+      "high",
       "fix it",
     ]);
   });
@@ -279,5 +302,34 @@ describe("inboxText", () => {
     );
     expect(empty).not.toContain("OPEN QUESTIONS");
     expect(empty).toContain("No messages.");
+  });
+});
+
+describe("model and effort settings", () => {
+  test("defaults and agents accept them, and the project overrides field by field", () => {
+    const user = parseConfig('[defaults]\nmodel = "sonnet"\neffort = "low"', "user");
+    const project = parseConfig(
+      '[defaults]\neffort = "high"\n[[agents]]\nname = "rev"\nmodel = "opus"\neffort = "max"',
+      "project",
+    );
+    expect(mergeConfig(user, project).defaults).toEqual({ model: "sonnet", effort: "high" });
+    expect(project.agents).toEqual([{ name: "rev", model: "opus", effort: "max" }]);
+    expect(() => parseConfig('[defaults]\neffort = "extreme"', "cfg")).toThrow(/defaults\.effort/);
+  });
+
+  test("a role file's frontmatter is read for model and effort", () => {
+    expect(
+      parseRoleTuning('---\n\nname: rev\nmodel: "opus"\neffort: high\n---\nmodel: ignored\n'),
+    ).toEqual({ model: "opus", effort: "high" });
+    expect(parseRoleTuning("---\nname: rev\nmodel: inherit\n---\n")).toEqual({});
+    expect(parseRoleTuning("no frontmatter\nmodel: x\n")).toEqual({});
+    expect(parseRoleTuning("---\nmodel: x\nnever closed")).toEqual({});
+  });
+
+  test("explicit beats role beats defaults, per field", () => {
+    expect(
+      resolveTuning({ effort: "low" }, { model: "opus" }, { model: "sonnet", effort: "max" }),
+    ).toEqual({ model: "opus", effort: "low" });
+    expect(resolveTuning({}, {}, {})).toEqual({ model: undefined, effort: undefined });
   });
 });

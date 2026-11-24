@@ -23,6 +23,7 @@ describe("init", () => {
       keys: {},
       agents: [],
       layout: {},
+      defaults: {},
     });
   });
 

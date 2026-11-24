@@ -58,6 +58,9 @@ export function buildClaudeLaunch(request: LaunchRequest): Launch {
   if (request.mcpConfigPath) argv.push("--mcp-config", request.mcpConfigPath);
   if (request.systemPrompt) argv.push("--append-system-prompt", request.systemPrompt);
   if (request.role) argv.push("--agent", request.role);
+  // After the profile's own arguments, so these win over a model set there.
+  if (request.model) argv.push("--model", request.model);
+  if (request.effort) argv.push("--effort", request.effort);
   if (request.task) argv.push(request.task);
   return { argv, env: { ...NO_TOOL_TIMEOUT_ENV, ...request.profile.env } };
 }

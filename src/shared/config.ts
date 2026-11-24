@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CLAUDE_COMMAND_ENV, DEFAULT_CLAUDE_COMMAND } from "./constants.ts";
 import { expandPath, projectConfigPath, userConfigPath } from "./paths.ts";
+import { EFFORT_LEVELS } from "./roles.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -25,12 +26,29 @@ const KeysSchema = z.strictObject({
     .optional(),
 });
 
+/** Model for a session, as the Claude command's `--model` takes it (an alias or a full name). */
+export const ModelSchema = z.string().min(1);
+/** Effort for a session, passed with `--effort`. */
+export const EffortSchema = z.enum(EFFORT_LEVELS);
+
+/**
+ * Model and effort for agents that say nothing themselves. An agent's own setting wins, then
+ * its role file (`model:` / `effort:` in `.claude/agents/<role>.md`), then these. The main
+ * session is not affected; set its model through the profile's `args`.
+ */
+const DefaultsSchema = z.strictObject({
+  model: ModelSchema.optional(),
+  effort: EffortSchema.optional(),
+});
+
 /** An agent started together with the workspace. */
 const AgentSchema = z.strictObject({
   name: z.string().min(1),
   /** Agent definition to run as (a `.claude/agents/<role>.md` file). */
   role: z.string().optional(),
   profile: z.string().optional(),
+  model: ModelSchema.optional(),
+  effort: EffortSchema.optional(),
   /** First prompt for the session. */
   task: z.string().optional(),
 });
@@ -50,6 +68,7 @@ const ConfigSchema = z.strictObject({
   keys: KeysSchema.default({}),
   agents: z.array(AgentSchema).default([]),
   layout: LayoutSchema.default({}),
+  defaults: DefaultsSchema.default({}),
 });
 
 export type Profile = z.infer<typeof ProfileSchema>;
@@ -68,7 +87,13 @@ export interface ResolvedProfile {
 
 export class ConfigError extends Error {}
 
-export const EMPTY_CONFIG: Config = { profiles: {}, keys: {}, agents: [], layout: {} };
+export const EMPTY_CONFIG: Config = {
+  profiles: {},
+  keys: {},
+  agents: [],
+  layout: {},
+  defaults: {},
+};
 
 export function parseConfig(text: string, source: string): Config {
   let raw: unknown;
@@ -98,6 +123,7 @@ export function mergeConfig(user: Config, project: Config): Config {
     keys: { ...user.keys, ...project.keys },
     agents: project.agents.length > 0 ? project.agents : user.agents,
     layout: { ...user.layout, ...project.layout },
+    defaults: { ...user.defaults, ...project.defaults },
   };
 }
 

@@ -128,6 +128,10 @@ export interface SpawnRequest {
   name?: string;
   role?: string;
   profile?: string;
+  /** Passed as `--model`. Without it the role file decides, then the configured default. */
+  model?: string;
+  /** Passed as `--effort`: low, medium, high, xhigh or max. */
+  effort?: string;
   task?: string;
 }
 

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { ConfigError } from "./config.ts";
+import { ConfigError, EffortSchema, ModelSchema } from "./config.ts";
 import { workflowsDir } from "./paths.ts";
 import type { WorkflowRunInfo, WorkflowStepState } from "./protocol.ts";
 
@@ -14,6 +14,9 @@ const StepSchema = z.strictObject({
   /** Agent definition to run as (a `.claude/agents/<role>.md` file). */
   role: z.string().optional(),
   profile: z.string().optional(),
+  /** Model and effort for the step's session; without them the role file or the defaults apply. */
+  model: ModelSchema.optional(),
+  effort: EffortSchema.optional(),
   /** Steps that must be done before this one starts. */
   depends_on: z.array(z.string()).default([]),
   /** Leave the step's session running after it completes. */

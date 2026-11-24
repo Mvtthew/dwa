@@ -23,6 +23,7 @@ Workspace
 
 Agents
   agent spawn [name] [--role <role>] [--profile <name>] [--task <text>]
+              [--model <model>] [--effort <low|medium|high|xhigh|max>]
   agent list [--json]
   agent open <name|number>              Show an agent's session under the main session
   agent close                           Hide the open agent (it keeps running)
@@ -87,6 +88,8 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
       role: { type: "string" },
       profile: { type: "string" },
       task: { type: "string" },
+      model: { type: "string" },
+      effort: { type: "string" },
       json: { type: "boolean" },
     },
   });
@@ -97,6 +100,8 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
         name: target,
         role: values.role,
         profile: values.profile,
+        model: values.model,
+        effort: values.effort,
         task: values.task,
       });
       console.log(`Started agent ${agent.name} (profile ${agent.profile}).`);

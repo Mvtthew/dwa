@@ -28,7 +28,15 @@ export const CONFIG_TEMPLATE = `# ${APP_NAME} project configuration. Personal se
 # name = "reviewer"
 # role = "reviewer"
 # profile = "work"
+# model = "opus"        # optional, see [defaults]
+# effort = "high"
 # task = "Wait for review requests."
+
+# Model and effort for agents that set neither. An agent's or workflow step's own setting
+# wins, then "model:" / "effort:" in its role file, then these. Not applied to the main session.
+# [defaults]
+# model = "sonnet"
+# effort = "medium"     # low, medium, high, xhigh or max
 
 # [keys]
 # prefix = "C-q"        # tmux key notation

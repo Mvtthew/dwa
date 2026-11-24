@@ -11,6 +11,7 @@ const baseConfig: Config = {
   keys: {},
   agents: [],
   layout: {},
+  defaults: {},
   default_profile: "me",
   profiles: {
     me: { command: "/bin/claude_me", args: [], env: {} },
@@ -24,12 +25,15 @@ let workspace: Workspace;
 let files: Map<string, string>;
 /** Paste-fallback timers the workspace asked for; a test runs them by hand. */
 let scheduled: (() => void)[];
+/** What the role files say about model and effort. */
+let roles: Record<string, { model?: string; effort?: string }>;
 
 beforeEach(() => {
   config = structuredClone(baseConfig);
   tmux = new FakeTmux();
   files = new Map();
   scheduled = [];
+  roles = {};
   store = new Store(":memory:");
   let id = 0;
   workspace = new Workspace({
@@ -42,6 +46,7 @@ beforeEach(() => {
     runDir: "/project/.dwa/run",
     writeFile: (path, content) => files.set(path, content),
     loadConfig: async () => config,
+    readRole: (role) => roles[role] ?? {},
     schedule: (callback) => scheduled.push(callback),
     env: {},
     newId: () => `id-${++id}`,
@@ -257,6 +262,53 @@ describe("agents", () => {
     await workspace.up();
     await workspace.spawn({ name: "a" });
     expect(workspace.open("zzz")).rejects.toThrow('No agent "zzz" (running: a)');
+  });
+});
+
+describe("model and effort", () => {
+  /** The `--model` and `--effort` arguments of the agent started last. */
+  function tuning(): string[] {
+    const argv = [...tmux.panes.values()].at(-1)?.argv ?? [];
+    const flag = (arg: string | undefined) => arg === "--model" || arg === "--effort";
+    return argv.filter((arg, index) => flag(arg) || flag(argv[index - 1]));
+  }
+
+  test("nothing is passed when nothing is set", async () => {
+    await workspace.up();
+    await workspace.spawn({ name: "dev", role: "developer" });
+    expect(tuning()).toEqual([]);
+  });
+
+  test("the agent's own setting wins, then the role file, then the defaults", async () => {
+    config.defaults = { model: "sonnet", effort: "medium" };
+    roles.reviewer = { model: "opus" };
+    await workspace.up();
+
+    await workspace.spawn({ name: "plain" });
+    expect(tuning()).toEqual(["--model", "sonnet", "--effort", "medium"]);
+
+    // The role file sets a model, so the default model does not apply; effort still does.
+    await workspace.spawn({ name: "rev", role: "reviewer" });
+    expect(tuning()).toEqual(["--model", "opus", "--effort", "medium"]);
+
+    await workspace.spawn({ name: "rev2", role: "reviewer", model: "haiku", effort: "low" });
+    expect(tuning()).toEqual(["--model", "haiku", "--effort", "low"]);
+  });
+
+  test("agents from the config carry their settings, and main is left alone", async () => {
+    config.defaults = { model: "sonnet" };
+    config.agents = [{ name: "rev", effort: "high" }];
+    await workspace.up();
+    expect(tuning()).toEqual(["--model", "sonnet", "--effort", "high"]);
+    const main = [...tmux.panes.values()].find((pane) => pane.argv.includes("main"));
+    expect(main?.argv).not.toContain("--model");
+  });
+
+  test("an unknown effort level is refused", async () => {
+    await workspace.up();
+    await expect(workspace.spawn({ name: "dev", effort: "extreme" })).rejects.toThrow(
+      /Invalid effort "extreme": use low, medium, high, xhigh, max/,
+    );
   });
 });
 
@@ -528,6 +580,7 @@ describe("notify", () => {
       selfArgv: ["bun"],
       runDir: "/project/.dwa/run",
       loadConfig: async () => config,
+      readRole: () => ({}),
     });
     await failing.notify("x");
   });

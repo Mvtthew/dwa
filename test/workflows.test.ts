@@ -12,6 +12,7 @@ const config: Config = {
   keys: {},
   agents: [],
   layout: {},
+  defaults: {},
   default_profile: "me",
   profiles: { me: { command: "/bin/claude_me", args: [], env: {} } },
 };
@@ -41,6 +42,8 @@ prompt = "d gets {{steps.b.result}} and {{steps.c.result}}"
   keeper: `
 [steps.only]
 keep_agent = true
+model = "haiku"
+effort = "low"
 prompt = "stay"
 `,
   badprofile: `
@@ -70,6 +73,7 @@ function build(): void {
     runDir: "/project/.dwa/run",
     writeFile: () => undefined,
     loadConfig: async () => config,
+    readRole: () => ({}),
     schedule: () => undefined,
     env: {},
     newId: () => `id-${++counter}`,
@@ -170,6 +174,13 @@ describe("running a workflow", () => {
       'Workflow "keeper" (run #1) done.\n\nResult of "only":\nkept',
     ]);
     expect(userMessages()).toEqual([]);
+    const argv = [...tmux.panes.values()].at(-1)?.argv ?? [];
+    expect(argv.slice(argv.indexOf("--model"), argv.indexOf("--model") + 4)).toEqual([
+      "--model",
+      "haiku",
+      "--effort",
+      "low",
+    ]);
     // keep_agent leaves the session running.
     expect((await agents()).map((entry) => entry.name)).toEqual(["only"]);
     expect(workflows.status(1).startedBy).toBe("main");
