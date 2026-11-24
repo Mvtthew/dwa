@@ -42,6 +42,13 @@ export function renderStatus(state: WorkspaceState): string[] {
 /** Redraws a pane once a second from the daemon's state. Runs until the pane is closed. */
 export async function runUi(view: UiView, projectRoot: string): Promise<never> {
   process.stdout.write("\x1b[?25l");
+  // Take the keyboard in raw mode and drop what is typed, so keys pressed while the pane has
+  // focus are not echoed over the display (and Ctrl+C does not end the pane).
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.on("data", () => {});
+  }
   let previous = "";
   while (true) {
     let lines: string[];
