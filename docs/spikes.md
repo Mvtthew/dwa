@@ -4,12 +4,12 @@ Experiments run on 2026-11-24 with Claude Code 2.1.331, tmux 3.8, Bun 1.4.3 on m
 
 ## Summary
 
-| Spike | Question                                                                                          | Result                                                                                          |
-| ----- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| S1    | Does Claude Code run well in the private tmux server, and can an agent pane be opened under main? | Yes for everything that can be checked from a script. Real-keyboard checks still to do by hand. |
-| S2    | Can agent state come from hooks and the statusline alone?                                         | Yes.                                                                                            |
-| S3    | Can a message be delivered to a running session, including an idle one?                           | Yes, three ways. The raw inbox socket is not usable.                                            |
-| S4    | Can an `ask` tool call block with no timeout?                                                     | Open for 35 minutes without progress notifications: see S4 below.                               |
+| Spike | Question                                                                                          | Result                                                                                                  |
+| ----- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| S1    | Does Claude Code run well in the private tmux server, and can an agent pane be opened under main? | Yes for everything that can be checked from a script. Real-keyboard checks still to do by hand.         |
+| S2    | Can agent state come from hooks and the statusline alone?                                         | Yes.                                                                                                    |
+| S3    | Can a message be delivered to a running session, including an idle one?                           | Yes, three ways. The raw inbox socket is not usable.                                                    |
+| S4    | Can an `ask` tool call block with no timeout?                                                     | Yes for the 35 minutes tested, past both default limits. The longest possible wait is still unmeasured. |
 
 ## S1. tmux composition
 
@@ -70,6 +70,8 @@ Documented limits ([mcp](https://code.claude.com/docs/en/mcp.md), [env vars](htt
 
 Test (`spikes/ask-mcp.ts`): session started with `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0`, `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0`, `MCP_TOOL_TIMEOUT=2000000000`, and an `ask` tool that sends no progress notifications. The answer is supplied after 35 minutes, past both default limits.
 
-Result: _pending, filled in when the run finishes._
+Result: the call stayed open for 2,114 seconds (35 minutes) with no abort and no move to the background. `PreToolUse mcp__dwa__ask` fired at 18:08:09, `PostToolUse` at 18:43:23, and the session then answered "blue" and stopped normally. During the wait the session showed as working ("Calling dwa"), and the `PreToolUse` event is enough for the daemon to mark the agent as waiting on a question.
+
+Not measured: waits of many hours, and whether `MCP_TOOL_TIMEOUT=2000000000` is honoured or silently capped.
 
 Design consequence either way: there is still a wall-clock limit somewhere (28 hours by default, about 23 days with the value above if it is honoured). So the question lives in the daemon, not in the tool call. If a call ever ends before the answer, the tool returns "still waiting", the agent calls `wait_for(question_id)` again, and the answer is also sent through the mailbox.
