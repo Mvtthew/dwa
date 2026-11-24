@@ -5,7 +5,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { APP_NAME } from "../shared/constants.ts";
 import { daemonSocketPath } from "../shared/paths.ts";
-import type { AgentInfo, WorkspaceState } from "../shared/protocol.ts";
+import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../shared/protocol.ts";
+import { describeRun, type WorkflowSummary } from "../shared/workflow.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -229,6 +230,90 @@ export async function runMcp(env: Env = process.env): Promise<void> {
       tool(async () => {
         const agent = await api<AgentInfo>("POST", "/agents/stop", { target: name });
         return `Stopped agent "${agent.name}".`;
+      }),
+  );
+
+  server.registerTool(
+    "list_workflows",
+    {
+      description:
+        "List the workflows defined for this project and the runs in progress. A workflow is a fixed sequence of steps, each done by its own agent.",
+    },
+    () =>
+      tool(async () => {
+        const { workflows, runs } = await api<{
+          workflows: WorkflowSummary[];
+          runs: WorkflowRunInfo[];
+        }>("GET", "/workflows");
+        const lines = workflows.map((workflow) =>
+          workflow.error
+            ? `${workflow.name}: invalid (${workflow.error})`
+            : `${workflow.name}: ${workflow.description ?? workflow.steps.join(" -> ")}`,
+        );
+        if (lines.length === 0) lines.push("No workflows are defined (.dwa/workflows/*.toml).");
+        for (const run of runs) lines.push("", describeRun(run));
+        return lines.join("\n");
+      }),
+  );
+
+  server.registerTool(
+    "run_workflow",
+    {
+      description:
+        "Start a run of a workflow. Returns at once; when the run ends you get a message with its outcome. Do not wait or poll for it.",
+      inputSchema: {
+        name: z.string(),
+        input: z.string().optional().describe("What the run is about; steps receive it."),
+      },
+    },
+    ({ name, input }) =>
+      tool(async () => {
+        const run = await api<WorkflowRunInfo>("POST", "/workflows/run", {
+          from: agentId,
+          name,
+          input,
+        });
+        return `Started. You will get a message when it ends.\n${describeRun(run)}`;
+      }),
+  );
+
+  server.registerTool(
+    "workflow_status",
+    {
+      description: "Show a workflow run: the state of each step and the results so far.",
+      inputSchema: { run_id: z.number().int() },
+    },
+    ({ run_id }) =>
+      tool(async () =>
+        describeRun(await api<WorkflowRunInfo>("POST", "/workflows/status", { id: run_id }), true),
+      ),
+  );
+
+  server.registerTool(
+    "complete_step",
+    {
+      description:
+        "Finish the workflow step you were started for. The result is handed to the steps that follow, so make it complete and self-contained. Your session ends after this unless the workflow keeps it.",
+      inputSchema: { result: z.string() },
+    },
+    ({ result }) =>
+      tool(async () => {
+        await api("POST", "/workflows/step/complete", { agentId, result });
+        return "Step completed.";
+      }),
+  );
+
+  server.registerTool(
+    "fail_step",
+    {
+      description:
+        "Give up on the workflow step you were started for, with the reason. The workflow run fails. Use ask first if a decision from someone could unblock you.",
+      inputSchema: { reason: z.string() },
+    },
+    ({ reason }) =>
+      tool(async () => {
+        await api("POST", "/workflows/step/fail", { agentId, reason });
+        return "Step marked as failed.";
       }),
   );
 

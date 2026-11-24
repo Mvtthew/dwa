@@ -5,13 +5,16 @@ import type {
   StatuslineRequest,
   UpRequest,
 } from "../shared/protocol.ts";
+import { listWorkflows } from "../shared/workflow.ts";
 import { TmuxError } from "../tmux/driver.ts";
 import { USER } from "./messaging.ts";
+import type { Workflows } from "./workflows.ts";
 import { type Workspace, WorkspaceError } from "./workspace.ts";
 
 export interface ServerOptions {
   socketPath: string;
   workspace: Workspace;
+  workflows: Workflows;
   /** Called after `/down` has answered, to stop the daemon process. */
   onShutdown: () => void;
 }
@@ -44,7 +47,7 @@ function sender(value: unknown): string {
 
 /** The daemon's local API on a Unix socket. The CLI and the UI panes are its clients. */
 export function startServer(options: ServerOptions) {
-  const { workspace } = options;
+  const { workspace, workflows } = options;
   const { messaging } = workspace;
 
   const route = async (request: Request): Promise<Response> => {
@@ -116,6 +119,35 @@ export function startServer(options: ServerOptions) {
         const input = await body<{ agentId?: string; summary?: string; percent?: number }>(request);
         workspace.progress(text(input.agentId, "agentId"), input.summary ?? "", input.percent);
         return json({ ok: true });
+      }
+      case "GET /workflows":
+        return json({
+          workflows: listWorkflows(workspace.projectRoot),
+          runs: workflows.runs(),
+        });
+      case "POST /workflows/run": {
+        const input = await body<{ from?: string; name?: string; input?: string }>(request);
+        return json(
+          await workflows.start(text(input.name, "name"), input.input ?? "", sender(input.from)),
+        );
+      }
+      case "POST /workflows/status": {
+        const input = await body<{ id?: unknown }>(request);
+        return json(workflows.status(Number(input.id)));
+      }
+      case "POST /workflows/cancel": {
+        const input = await body<{ id?: unknown }>(request);
+        return json(await workflows.cancel(Number(input.id)));
+      }
+      case "POST /workflows/step/complete": {
+        const input = await body<{ agentId?: string; result?: string }>(request);
+        return json(
+          await workflows.completeStep(text(input.agentId, "agentId"), input.result ?? ""),
+        );
+      }
+      case "POST /workflows/step/fail": {
+        const input = await body<{ agentId?: string; reason?: string }>(request);
+        return json(await workflows.failStep(text(input.agentId, "agentId"), input.reason ?? ""));
       }
       case "POST /notify": {
         const { message } = await body<{ message?: unknown }>(request);

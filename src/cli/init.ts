@@ -3,9 +3,10 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { APP_NAME } from "../shared/constants.ts";
-import { projectConfigPath } from "../shared/paths.ts";
+import { projectConfigPath, workflowsDir } from "../shared/paths.ts";
 
 const EXAMPLE_ROLES_DIR = join(import.meta.dir, "..", "..", "examples", "agents");
+const EXAMPLE_WORKFLOWS_DIR = join(import.meta.dir, "..", "..", "examples", "workflows");
 const IGNORE_LINE = `.${APP_NAME}/run/`;
 
 export const CONFIG_TEMPLATE = `# ${APP_NAME} project configuration. Personal settings go in ~/.config/${APP_NAME}/config.toml;
@@ -64,6 +65,15 @@ export function initProject(projectRoot: string, options: { roles: boolean }): I
         readFileSync(join(EXAMPLE_ROLES_DIR, file), "utf8"),
       );
     }
+    // The example workflow uses exactly these roles, so it comes with them.
+    for (const file of readdirSync(EXAMPLE_WORKFLOWS_DIR).filter((name) =>
+      name.endsWith(".toml"),
+    )) {
+      write(
+        join(workflowsDir(projectRoot), file),
+        readFileSync(join(EXAMPLE_WORKFLOWS_DIR, file), "utf8"),
+      );
+    }
   }
 
   // Runtime state (database, logs, generated settings) should not be committed.
@@ -87,7 +97,7 @@ export function initCommand(projectRoot: string, args: string[]): number {
   for (const path of result.skipped) console.log(`kept     ${path}`);
   if (!args.includes("--roles")) {
     console.log(
-      `\nAdd example agent roles (explore, developer, reviewer) with: ${APP_NAME} init --roles`,
+      `\nAdd example agent roles (explore, developer, reviewer) and a workflow that uses them with: ${APP_NAME} init --roles`,
     );
   }
   return 0;

@@ -2,7 +2,7 @@
 
 A terminal workspace for running several Claude Code sessions side by side and letting them work together.
 
-> Status: early development. The workspace, live agent state, and messaging between agents and you all work. Workflows and shared memory are planned. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
+> Status: early development. The workspace, live agent state, messaging between agents and you, and workflows all work. Review loops and live editing of workflows, and shared memory, are planned. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
 
 ## What it does and will do
 
@@ -10,6 +10,7 @@ A terminal workspace for running several Claude Code sessions side by side and l
 - Show the active agents in a side pane with their state: working, idle, waiting for you, waiting for another agent.
 - Open any agent's real session under the main one, so you can type to it directly.
 - Let agents message each other and you, report progress, and ask questions that block until someone answers. A question never times out.
+- Run workflows: a fixed graph of steps, each done by its own agent, with results handed from step to step.
 - Keep everything running when you close the terminal, and restore it when you attach again.
 
 dwa starts the unmodified `claude` program with your own login. It does not use the Agent SDK or headless mode to drive agents, and it does not write to your `~/.claude` settings or your own tmux configuration.
@@ -51,7 +52,7 @@ The examples below use `bun run dwa`; with the link in place, plain `dwa` does t
 ## Usage
 
 ```sh
-bun run dwa init --roles            # once per project: config template and example agent roles
+bun run dwa init --roles            # once per project: config template, example roles and a workflow
 bun run dwa up                      # start the workspace for this project and attach
 bun run dwa agent spawn explore     # start an agent (optionally --role, --profile, --task)
 bun run dwa agent open explore      # show it under the main session
@@ -77,6 +78,43 @@ bun run dwa inbox                   # messages agents sent to you
 ```
 
 A message reaches an agent even when it is idle: it wakes up and reads it. You can also answer on behalf of an agent that was asked something.
+
+### Workflows
+
+A workflow is a TOML file in `.dwa/workflows/`. Each step is a prompt for its own agent and starts when the steps it depends on are done:
+
+```toml
+# .dwa/workflows/feature.toml
+description = "Explore the code, implement the change, review it"
+
+[steps.explore]
+role = "explore"
+prompt = "Find out what is needed for: {{input}}"
+
+[steps.build]
+role = "developer"
+depends_on = ["explore"]
+prompt = "Implement: {{input}}\nFindings:\n{{steps.explore.result}}"
+
+[steps.review]
+role = "reviewer"
+depends_on = ["build"]
+prompt = "Review the change. The developer reports:\n{{steps.build.result}}"
+```
+
+```sh
+bun run dwa workflow list
+bun run dwa workflow run feature "add a --json flag to agent list"
+bun run dwa workflow status         # steps and results of the latest run
+bun run dwa workflow cancel 1
+```
+
+- Steps without a dependency between them run at the same time.
+- `{{input}}` is the text given to the run, and `{{steps.<name>.result}}` is what an earlier step handed over. A step may also set `profile`, and `keep_agent = true` to leave its session open afterwards.
+- A step ends only when its agent calls `complete_step` or `fail_step`. If the agent just stops, it is reminded twice, then the status pane marks the step as needing you. Nothing times out; open the agent and sort it out.
+- If a step fails, steps already running finish, the rest are skipped and the run fails.
+- The run's outcome arrives as a message to whoever started it. Agents can start runs too, with `run_workflow`.
+- Runs are stored, so they continue after a daemon restart. A run uses the file as it was when it started.
 
 ### Keys
 
@@ -119,7 +157,7 @@ agents_width = 34        # columns
 agent_height = 40        # percent of the centre column
 ```
 
-Agent roles are ordinary Claude Code agent definitions in `.claude/agents/`. `dwa init --roles` adds three to start from: `explore`, `developer` and `reviewer`. `dwa init` never overwrites a file; in a git repository it also adds `.dwa/run/` to `.gitignore`.
+Agent roles are ordinary Claude Code agent definitions in `.claude/agents/`. `dwa init --roles` adds three to start from, `explore`, `developer` and `reviewer`, and an example workflow that uses them. `dwa init` never overwrites a file; in a git repository it also adds `.dwa/run/` to `.gitignore`.
 
 ## Using a different Claude command
 

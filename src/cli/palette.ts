@@ -3,6 +3,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentInfo, WorkspaceState } from "../shared/protocol.ts";
+import { listWorkflows } from "../shared/workflow.ts";
 import { call } from "./client.ts";
 
 export type PaletteAction =
@@ -12,6 +13,7 @@ export type PaletteAction =
   | { kind: "send"; target: string }
   | { kind: "stop"; target: string }
   | { kind: "spawn"; role?: string }
+  | { kind: "workflow"; name: string }
   | { kind: "answer" }
   | { kind: "down" };
 
@@ -30,7 +32,18 @@ export function projectRoles(projectRoot: string): string[] {
     .sort();
 }
 
-export function paletteItems(state: WorkspaceState, roles: string[]): PaletteItem[] {
+/** Workflows of the project that can be started, by name. */
+export function projectWorkflows(projectRoot: string): string[] {
+  return listWorkflows(projectRoot)
+    .filter((workflow) => workflow.error === null)
+    .map((workflow) => workflow.name);
+}
+
+export function paletteItems(
+  state: WorkspaceState,
+  roles: string[],
+  workflows: string[] = [],
+): PaletteItem[] {
   const items: PaletteItem[] = [];
   const open = state.agents.find((agent) => agent.open);
   if (state.questions.length > 0) {
@@ -52,6 +65,9 @@ export function paletteItems(state: WorkspaceState, roles: string[]): PaletteIte
   items.push({ label: "Start agent", action: { kind: "spawn" } });
   for (const role of roles) {
     items.push({ label: `Start agent as ${role}`, action: { kind: "spawn", role } });
+  }
+  for (const name of workflows) {
+    items.push({ label: `Run workflow ${name}`, action: { kind: "workflow", name } });
   }
   for (const agent of state.agents) {
     items.push({ label: `Stop ${agent.name}`, action: { kind: "stop", target: agent.id } });
@@ -105,6 +121,11 @@ async function run(projectRoot: string, action: PaletteAction): Promise<void> {
       });
       return;
     }
+    case "workflow": {
+      const input = (prompt("What is this run about (optional):") ?? "").trim();
+      await call(projectRoot, "POST", "/workflows/run", { name: action.name, input });
+      return;
+    }
     case "answer":
       await (await import("./talk.ts")).talkCommand(projectRoot, "answer", []);
       return;
@@ -118,7 +139,7 @@ async function run(projectRoot: string, action: PaletteAction): Promise<void> {
 
 export async function paletteCommand(projectRoot: string): Promise<number> {
   const state = await call<WorkspaceState>(projectRoot, "GET", "/state");
-  const all = paletteItems(state, projectRoles(projectRoot));
+  const all = paletteItems(state, projectRoles(projectRoot), projectWorkflows(projectRoot));
   let shown = all;
   while (true) {
     console.log("\x1b[2J\x1b[H");

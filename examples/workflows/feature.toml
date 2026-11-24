@@ -1,0 +1,34 @@
+# Explore, build, review. Start it with: dwa workflow run feature "what to build"
+#
+# Each step runs as its own agent and starts when the steps it depends on are done.
+# {{input}} is the text given to the run; {{steps.<name>.result}} is what an earlier step
+# handed over with complete_step. "role" is an agent definition in .claude/agents/.
+description = "Explore the code, implement the change, review it"
+
+[steps.explore]
+role = "explore"
+prompt = """
+Find out what is needed for this change and where it belongs in the code. Do not edit anything.
+
+The change: {{input}}
+"""
+
+[steps.build]
+role = "developer"
+depends_on = ["explore"]
+prompt = """
+Implement this change: {{input}}
+
+Findings from the exploration:
+{{steps.explore.result}}
+"""
+
+[steps.review]
+role = "reviewer"
+depends_on = ["build"]
+prompt = """
+Review the change that was just made for: {{input}}
+
+What the developer reports:
+{{steps.build.result}}
+"""

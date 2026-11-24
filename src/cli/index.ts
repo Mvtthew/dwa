@@ -15,7 +15,7 @@ const USAGE = `${APP_NAME} ${pkg.version}
 Usage: ${APP_NAME} <command> [options]
 
 Workspace
-  init [--roles]                        Create .dwa/config.toml (and example agent roles)
+  init [--roles]                        Create .dwa/config.toml (--roles: example roles, workflow)
   up [--profile <name>] [--no-attach]   Start the workspace for this project and attach to it
   attach                                Attach to the running workspace
   palette                               Menu of workspace actions (prefix key, then p)
@@ -33,6 +33,12 @@ Talking to agents
   ask <name> <question>                 Ask an agent and wait for its answer
   answer [id] [text]                    Answer an open question (asks which one when run bare)
   inbox                                 Show open questions and messages agents sent to you
+
+Workflows
+  workflow list                         Workflows in .dwa/workflows and their runs
+  workflow run <name> [input]           Start a run; each step gets its own agent
+  workflow status [run]                 Steps and results of a run (the latest when run bare)
+  workflow cancel <run>                 Stop a run and its agents
 
 Other
   status     Print the workspace state as JSON
@@ -191,6 +197,8 @@ async function main(argv: string[]): Promise<number> {
     case "answer":
     case "inbox":
       return (await import("./talk.ts")).talkCommand(projectRoot, command, rest);
+    case "workflow":
+      return (await import("./workflow.ts")).workflowCommand(projectRoot, rest);
     case "palette":
       return (await import("./palette.ts")).paletteCommand(projectRoot);
     case "init":

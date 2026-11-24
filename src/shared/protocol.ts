@@ -75,6 +75,39 @@ export interface MessageInfo {
   createdAt: number;
 }
 
+export type WorkflowRunState = "running" | "done" | "failed" | "cancelled";
+
+/**
+ * pending (waiting for its dependencies), running (an agent is working on it), done, failed,
+ * skipped (never started because the run failed or was cancelled).
+ */
+export type WorkflowStepState = "pending" | "running" | "done" | "failed" | "skipped";
+
+export interface WorkflowStepInfo {
+  id: string;
+  state: WorkflowStepState;
+  dependsOn: string[];
+  /** Name of the agent that runs or ran the step. */
+  agent: string | null;
+  result: string | null;
+  error: string | null;
+  /** True when the agent keeps ending its turn without completing the step. */
+  needsAttention: boolean;
+}
+
+export interface WorkflowRunInfo {
+  id: number;
+  name: string;
+  input: string;
+  state: WorkflowRunState;
+  /** "user" or an agent name. */
+  startedBy: string;
+  createdAt: number;
+  finishedAt: number | null;
+  /** In the order of the definition. */
+  steps: WorkflowStepInfo[];
+}
+
 export interface WorkspaceState {
   projectRoot: string;
   /** The key pressed before a dwa shortcut, in tmux notation (e.g. "C-q"). */
@@ -87,6 +120,8 @@ export interface WorkspaceState {
   questions: QuestionInfo[];
   /** Latest messages sent to the user, newest first. */
   inbox: MessageInfo[];
+  /** Workflow runs in progress and the latest finished ones, newest first. */
+  workflows: WorkflowRunInfo[];
 }
 
 export interface SpawnRequest {

@@ -32,6 +32,7 @@ import { parseStatusline, reduceHook, snippet } from "./activity.ts";
 import type { AgentRow, Store } from "./db.ts";
 import { WorkspaceError } from "./errors.ts";
 import { Messaging } from "./messaging.ts";
+import { workflowRuns } from "./workflows.ts";
 
 export { WorkspaceError };
 
@@ -63,6 +64,12 @@ export interface WorkspaceDeps {
   now?: () => number;
 }
 
+/** What other parts of the daemon can react to: a finished turn, or a session that is gone. */
+export interface AgentEvent {
+  type: "turn_ended" | "stopped";
+  agentId: string;
+}
+
 /** The application service behind the CLI, the UI panes and (later) the MCP tools. */
 export class Workspace {
   private queue: Promise<unknown> = Promise.resolve();
@@ -72,6 +79,7 @@ export class Workspace {
   private readonly env: Record<string, string | undefined>;
   private readonly newId: () => string;
   private readonly now: () => number;
+  private readonly listeners: Array<(event: AgentEvent) => void> = [];
 
   constructor(private readonly deps: WorkspaceDeps) {
     this.env = deps.env ?? process.env;
@@ -84,6 +92,36 @@ export class Workspace {
       keyPrefix: deps.keyPrefix ?? DEFAULT_KEY_PREFIX,
       schedule: deps.schedule,
     });
+  }
+
+  /**
+   * Registers a listener for agent events. It is called while a tmux operation may be in
+   * progress, so it must return at once and never wait for another call on this workspace.
+   */
+  onAgentEvent(listener: (event: AgentEvent) => void): void {
+    this.listeners.push(listener);
+  }
+
+  private emit(event: AgentEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error(error);
+      }
+    }
+  }
+
+  /** Records that a session is gone and lets everything that depended on it know. */
+  private markStopped(agentId: string): void {
+    this.deps.store.markStopped(agentId, this.now());
+    this.telemetry.delete(agentId);
+    this.messaging.agentStopped(agentId);
+    this.emit({ type: "stopped", agentId });
+  }
+
+  get projectRoot(): string {
+    return this.deps.projectRoot;
   }
 
   /** tmux changes must not interleave, so every operation runs after the previous one ends. */
@@ -246,8 +284,7 @@ export class Workspace {
       const state = await this.requireUp();
       const agent = this.find(state, target);
       await killPane(this.deps.run, agent.paneId);
-      this.deps.store.markStopped(agent.id, this.now());
-      this.messaging.agentStopped(agent.id);
+      this.markStopped(agent.id);
       return { ...agent, state: "stopped", open: false };
     });
   }
@@ -273,6 +310,7 @@ export class Workspace {
       const since = change.activity === row.activity ? row.activitySince : now;
       store.setActivity(row.id, change.activity, change.detail, since);
     }
+    if (request.event === "Stop") this.emit({ type: "turn_ended", agentId: row.id });
   }
 
   /** A progress note an agent reports about its own work. */
@@ -314,10 +352,7 @@ export class Workspace {
     } catch {
       // no server running
     }
-    for (const row of this.deps.store.running()) {
-      this.deps.store.markStopped(row.id, this.now());
-      this.messaging.agentStopped(row.id);
-    }
+    for (const row of this.deps.store.running()) this.markStopped(row.id);
   }
 
   /** Brings the stored state in line with the panes that actually exist, then returns it. */
@@ -334,9 +369,7 @@ export class Workspace {
         // The session ended on its own (or the server is gone). Dead panes are kept by
         // remain-on-exit, so remove an agent's leftover pane.
         if (pane && row.kind === "agent") await killPane(run, row.paneId).catch(() => undefined);
-        store.markStopped(row.id, this.now());
-        this.telemetry.delete(row.id);
-        this.messaging.agentStopped(row.id);
+        this.markStopped(row.id);
         continue;
       }
       live.push({
@@ -361,6 +394,7 @@ export class Workspace {
       questions,
       // Only messages from this run of the workspace; older ones belong to sessions that are gone.
       inbox: this.messaging.inbox(5, Number(this.deps.store.getMeta(META_STARTED_AT)) || 0),
+      workflows: workflowRuns(store),
     };
   }
 

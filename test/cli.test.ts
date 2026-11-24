@@ -6,6 +6,7 @@ import { CONFIG_TEMPLATE, initProject } from "../src/cli/init.ts";
 import { filterItems, paletteItems, projectRoles } from "../src/cli/palette.ts";
 import { parseConfig } from "../src/shared/config.ts";
 import type { AgentInfo, WorkspaceState } from "../src/shared/protocol.ts";
+import { listWorkflows } from "../src/shared/workflow.ts";
 
 let dir: string;
 beforeEach(() => {
@@ -32,10 +33,21 @@ describe("init", () => {
     expect(existsSync(join(dir, ".dwa", "config.toml"))).toBe(true);
     expect(projectRoles(dir)).toEqual(["developer", "explore", "reviewer"]);
     expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("node_modules/\n.dwa/run/\n");
-    expect(result.created).toHaveLength(5);
+    expect(result.created).toHaveLength(6);
+    expect(listWorkflows(dir).map((workflow) => [workflow.name, workflow.error])).toEqual([
+      ["feature", null],
+    ]);
     expect(readFileSync(join(dir, ".claude", "agents", "reviewer.md"), "utf8")).toContain(
       "name: reviewer",
     );
+  });
+
+  test("example roles do not list allowed tools, which would hide the dwa tools", () => {
+    initProject(dir, { roles: true });
+    for (const role of projectRoles(dir)) {
+      const text = readFileSync(join(dir, ".claude", "agents", `${role}.md`), "utf8");
+      expect(text).not.toMatch(/^tools:/m);
+    }
   });
 
   test("never overwrites existing files and leaves non-git folders without .gitignore", () => {
@@ -66,6 +78,7 @@ describe("palette", () => {
     agents,
     questions: Array.from({ length: questions }, () => ({})) as WorkspaceState["questions"],
     inbox: [],
+    workflows: [],
   });
 
   test("offers what is possible in the current state", () => {
@@ -89,6 +102,9 @@ describe("palette", () => {
   });
 
   test("an empty workspace offers only the general actions", () => {
+    expect(paletteItems(state([]), [], ["feature"]).map((item) => item.label)).toContain(
+      "Run workflow feature",
+    );
     expect(paletteItems(state([]), []).map((item) => item.label)).toEqual([
       "Focus main",
       "Message main",

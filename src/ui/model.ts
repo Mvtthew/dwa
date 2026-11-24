@@ -1,7 +1,15 @@
 // Pure functions that turn workspace state into what the panes show. No terminal code here,
 // so everything is unit-tested without a renderer.
 import { MAX_VISIBLE_AGENTS } from "../shared/constants.ts";
-import type { AgentActivity, AgentInfo, UsageLimit, WorkspaceState } from "../shared/protocol.ts";
+import type {
+  AgentActivity,
+  AgentInfo,
+  UsageLimit,
+  WorkflowRunInfo,
+  WorkflowRunState,
+  WorkflowStepInfo,
+  WorkspaceState,
+} from "../shared/protocol.ts";
 
 export type Tone = "good" | "muted" | "attention" | "bad";
 
@@ -133,6 +141,47 @@ export function formatKey(tmuxKey: string): string {
   return `${modifier}+${key.length === 1 ? key.toUpperCase() : key}`;
 }
 
+const STEP: Record<WorkflowStepInfo["state"], ActivityStyle> = {
+  pending: { glyph: "○", label: "pending", tone: "muted" },
+  running: { glyph: "●", label: "running", tone: "good" },
+  done: { glyph: "✓", label: "done", tone: "good" },
+  failed: { glyph: "✖", label: "failed", tone: "bad" },
+  skipped: { glyph: "–", label: "skipped", tone: "muted" },
+};
+
+const RUN_TONE: Record<WorkflowRunState, Tone> = {
+  running: "good",
+  done: "muted",
+  failed: "bad",
+  cancelled: "muted",
+};
+
+export interface WorkflowLine {
+  /** "#3 feature". */
+  heading: string;
+  state: WorkflowRunState;
+  tone: Tone;
+  /** The steps of a run in progress; a finished run is shown as its heading only. */
+  steps: { name: string; style: ActivityStyle }[];
+}
+
+export function workflowLine(run: WorkflowRunInfo): WorkflowLine {
+  return {
+    heading: `#${run.id} ${run.name}`,
+    state: run.state,
+    tone: RUN_TONE[run.state],
+    steps:
+      run.state === "running"
+        ? run.steps.map((step) => ({
+            name: step.id,
+            style: step.needsAttention
+              ? { glyph: "◆", label: "needs you", tone: "attention" }
+              : STEP[step.state],
+          }))
+        : [],
+  };
+}
+
 export interface Meter {
   label: string;
   /** Null when the value is not reported; shown as N/A, never guessed. */
@@ -155,6 +204,8 @@ export interface StatusModel {
   questions: { id: number; forUser: boolean; heading: string; text: string }[];
   /** Latest messages to the user, newest first. */
   inbox: { from: string; age: string; text: string }[];
+  /** Workflow runs, newest first. */
+  workflows: WorkflowLine[];
 }
 
 function limitMeter(label: string, limit: UsageLimit | null | undefined, nowMs: number): Meter {
@@ -205,5 +256,6 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
       age: ago(message.createdAt, nowMs),
       text: message.body,
     })),
+    workflows: state.workflows.map(workflowLine),
   };
 }

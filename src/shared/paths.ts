@@ -33,6 +33,11 @@ export function projectConfigPath(projectRoot: string): string {
   return join(projectDir(projectRoot), "config.toml");
 }
 
+/** Workflow definitions, one TOML file each: `<project>/.dwa/workflows`. */
+export function workflowsDir(projectRoot: string): string {
+  return join(projectDir(projectRoot), "workflows");
+}
+
 /** Runtime state that is never committed (database, logs, generated settings): `<project>/.dwa/run`. */
 export function runDir(projectRoot: string): string {
   return join(projectDir(projectRoot), "run");

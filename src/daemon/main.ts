@@ -8,6 +8,7 @@ import { buildTmuxConf } from "../tmux/conf.ts";
 import { createTmux } from "../tmux/driver.ts";
 import { Store } from "./db.ts";
 import { startServer } from "./server.ts";
+import { Workflows } from "./workflows.ts";
 import { Workspace } from "./workspace.ts";
 
 /** Runs the daemon for one project until it is told to shut down. */
@@ -39,13 +40,17 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
     env,
   });
 
+  const workflows = new Workflows({ store, workspace, projectRoot });
+
   const shutdown = () => {
     server.stop(true);
     store.close();
     rmSync(socketPath, { force: true });
     process.exit(0);
   };
-  const server = startServer({ socketPath, workspace, onShutdown: shutdown });
+  const server = startServer({ socketPath, workspace, workflows, onShutdown: shutdown });
+  // Runs that were in progress when the daemon last stopped carry on.
+  workflows.resume().catch((error) => console.error("could not resume workflows:", error));
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
   console.log(`dwa daemon for ${projectRoot} listening on ${socketPath} (pid ${process.pid})`);

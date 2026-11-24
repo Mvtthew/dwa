@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
-import type { AgentInfo, WorkspaceState } from "../src/shared/protocol.ts";
+import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../src/shared/protocol.ts";
 import { createAgentsView } from "../src/ui/agents.ts";
 import {
   agentsHeader,
@@ -11,6 +11,7 @@ import {
   statusModel,
   tiles,
   untilReset,
+  workflowLine,
 } from "../src/ui/model.ts";
 import { createStatusView } from "../src/ui/status.ts";
 
@@ -46,6 +47,7 @@ function workspace(agents: AgentInfo[], main: Partial<AgentInfo> = {}): Workspac
     agents,
     questions: [],
     inbox: [],
+    workflows: [],
   };
 }
 
@@ -178,6 +180,62 @@ describe("questions and messages", () => {
     expect(frame).toContain("MESSAGES TO YOU");
     expect(frame).toContain("from dev  just now");
     expect(frame).toContain("The fix is ready for revi…");
+  });
+});
+
+describe("workflows in the status pane", () => {
+  const step = { dependsOn: [], agent: null, result: null, error: null, needsAttention: false };
+  const run: WorkflowRunInfo = {
+    id: 3,
+    name: "feature",
+    input: "",
+    state: "running",
+    startedBy: "user",
+    createdAt: NOW,
+    finishedAt: null,
+    steps: [
+      { ...step, id: "explore", state: "done" },
+      { ...step, id: "build", state: "running", needsAttention: true },
+      { ...step, id: "review", state: "pending" },
+    ],
+  };
+
+  test("a run in progress shows its steps, a finished one only its outcome", () => {
+    expect(workflowLine(run)).toEqual({
+      heading: "#3 feature",
+      state: "running",
+      tone: "good",
+      steps: [
+        { name: "explore", style: { glyph: "✓", label: "done", tone: "good" } },
+        { name: "build", style: { glyph: "◆", label: "needs you", tone: "attention" } },
+        { name: "review", style: { glyph: "○", label: "pending", tone: "muted" } },
+      ],
+    });
+    expect(workflowLine({ ...run, state: "failed" })).toEqual({
+      heading: "#3 feature",
+      state: "failed",
+      tone: "bad",
+      steps: [],
+    });
+  });
+
+  test("the pane draws them, and has no section without runs", async () => {
+    const harness = await createTestRenderer({ width: 30, height: 40 });
+    const view = createStatusView(harness.renderer);
+    view.update({ ...workspace([]), workflows: [run, { ...run, id: 2, state: "done" }] }, NOW);
+    await harness.renderOnce();
+    const frame = harness.captureCharFrame();
+    expect(frame).toContain("WORKFLOWS");
+    expect(frame).toContain("#3 feature  running");
+    expect(frame).toContain("  ✓ explore");
+    expect(frame).toContain("  ◆ build needs you");
+    expect(frame).toContain("  ○ review");
+    expect(frame).toContain("#2 feature  done");
+
+    view.update(workspace([]), NOW);
+    await harness.renderOnce();
+    expect(harness.captureCharFrame()).not.toContain("WORKFLOWS");
+    harness.renderer.destroy();
   });
 });
 

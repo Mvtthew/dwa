@@ -1,5 +1,11 @@
 import { Database } from "bun:sqlite";
-import type { AgentActivity, AgentKind, AgentState } from "../shared/protocol.ts";
+import type {
+  AgentActivity,
+  AgentKind,
+  AgentState,
+  WorkflowRunState,
+  WorkflowStepState,
+} from "../shared/protocol.ts";
 
 export interface AgentRow {
   id: string;
@@ -48,6 +54,34 @@ export interface EventRow {
   at: number;
   event: string;
   summary: string | null;
+}
+
+export interface WorkflowRunRow {
+  id: number;
+  name: string;
+  /** JSON of the definition as it was when the run started; later edits of the file do not apply. */
+  definition: string;
+  input: string;
+  state: WorkflowRunState;
+  /** An agent id, or "user". */
+  startedBy: string;
+  createdAt: number;
+  finishedAt: number | null;
+}
+
+export interface WorkflowStepRow {
+  runId: number;
+  stepId: string;
+  /** Always 1 until steps can be sent back for another pass. */
+  attempt: number;
+  state: WorkflowStepState;
+  agentId: string | null;
+  result: string | null;
+  error: string | null;
+  /** Reminders sent because the agent ended a turn without completing the step. */
+  reminders: number;
+  startedAt: number | null;
+  finishedAt: number | null;
 }
 
 /** Applied in order; `PRAGMA user_version` records how many have run. Only ever append. */
@@ -103,6 +137,31 @@ const MIGRATIONS = [
      answered_at  INTEGER
    );
    CREATE INDEX questions_state ON questions (state);`,
+  `CREATE TABLE workflow_runs (
+     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+     name         TEXT NOT NULL,
+     definition   TEXT NOT NULL,
+     input        TEXT NOT NULL,
+     state        TEXT NOT NULL,
+     started_by   TEXT NOT NULL,
+     created_at   INTEGER NOT NULL,
+     finished_at  INTEGER
+   );
+   CREATE INDEX workflow_runs_state ON workflow_runs (state);
+   CREATE TABLE workflow_steps (
+     run_id       INTEGER NOT NULL,
+     step_id      TEXT NOT NULL,
+     attempt      INTEGER NOT NULL DEFAULT 1,
+     state        TEXT NOT NULL,
+     agent_id     TEXT,
+     result       TEXT,
+     error        TEXT,
+     reminders    INTEGER NOT NULL DEFAULT 0,
+     started_at   INTEGER,
+     finished_at  INTEGER,
+     PRIMARY KEY (run_id, step_id, attempt)
+   );
+   CREATE INDEX workflow_steps_agent ON workflow_steps (agent_id);`,
 ];
 
 const COLUMNS = `id, kind, name, role, profile, session_id AS sessionId, pane_id AS paneId,
@@ -114,6 +173,12 @@ const MESSAGE_COLUMNS = `id, from_id AS fromId, to_id AS toId, body, created_at 
 
 const QUESTION_COLUMNS = `id, from_id AS fromId, to_id AS toId, question, options, state, answer,
   answered_by AS answeredBy, created_at AS createdAt, answered_at AS answeredAt`;
+
+const RUN_COLUMNS = `id, name, definition, input, state, started_by AS startedBy,
+  created_at AS createdAt, finished_at AS finishedAt`;
+
+const STEP_COLUMNS = `run_id AS runId, step_id AS stepId, attempt, state, agent_id AS agentId,
+  result, error, reminders, started_at AS startedAt, finished_at AS finishedAt`;
 
 /** Events kept in the log; older ones are dropped. */
 const MAX_EVENTS = 5000;
@@ -300,6 +365,136 @@ export class Store {
     return this.db
       .query("SELECT agent_id AS agentId, at, event, summary FROM events ORDER BY id DESC LIMIT ?")
       .all(limit) as EventRow[];
+  }
+
+  /** Stores a run with all its steps pending. `stepIds` are in the order of the definition. */
+  addWorkflowRun(
+    run: { name: string; definition: string; input: string; startedBy: string; createdAt: number },
+    stepIds: string[],
+  ): number {
+    return this.db.transaction(() => {
+      const { lastInsertRowid } = this.db
+        .query(
+          `INSERT INTO workflow_runs (name, definition, input, state, started_by, created_at)
+           VALUES (?, ?, ?, 'running', ?, ?)`,
+        )
+        .run(run.name, run.definition, run.input, run.startedBy, run.createdAt);
+      const id = Number(lastInsertRowid);
+      const add = this.db.query(
+        "INSERT INTO workflow_steps (run_id, step_id, state) VALUES (?, ?, 'pending')",
+      );
+      for (const stepId of stepIds) add.run(id, stepId);
+      return id;
+    })();
+  }
+
+  getWorkflowRun(id: number): WorkflowRunRow | null {
+    return this.db
+      .query(`SELECT ${RUN_COLUMNS} FROM workflow_runs WHERE id = ?`)
+      .get(id) as WorkflowRunRow | null;
+  }
+
+  runningWorkflowRuns(): WorkflowRunRow[] {
+    return this.db
+      .query(`SELECT ${RUN_COLUMNS} FROM workflow_runs WHERE state = 'running' ORDER BY id`)
+      .all() as WorkflowRunRow[];
+  }
+
+  /** Runs in progress plus the latest `finished` ended ones, newest first. */
+  visibleWorkflowRuns(finished: number): WorkflowRunRow[] {
+    return this.db
+      .query(
+        `SELECT ${RUN_COLUMNS} FROM workflow_runs
+         WHERE state = 'running' OR id IN (
+           SELECT id FROM workflow_runs WHERE state != 'running' ORDER BY id DESC LIMIT ?
+         )
+         ORDER BY id DESC`,
+      )
+      .all(finished) as WorkflowRunRow[];
+  }
+
+  /** A run's steps in the order of its definition. */
+  workflowSteps(runId: number): WorkflowStepRow[] {
+    return this.db
+      .query(`SELECT ${STEP_COLUMNS} FROM workflow_steps WHERE run_id = ? ORDER BY rowid`)
+      .all(runId) as WorkflowStepRow[];
+  }
+
+  /** The step an agent is working on, if any. */
+  runningStepOf(agentId: string): WorkflowStepRow | null {
+    return this.db
+      .query(`SELECT ${STEP_COLUMNS} FROM workflow_steps WHERE agent_id = ? AND state = 'running'`)
+      .get(agentId) as WorkflowStepRow | null;
+  }
+
+  /** Marks a pending step as running. Returns false when it was not pending any more. */
+  startStep(runId: number, stepId: string, now: number): boolean {
+    const { changes } = this.db
+      .query(
+        `UPDATE workflow_steps SET state = 'running', started_at = ?
+         WHERE run_id = ? AND step_id = ? AND state = 'pending'`,
+      )
+      .run(now, runId, stepId);
+    return changes > 0;
+  }
+
+  setStepAgent(runId: number, stepId: string, agentId: string): void {
+    this.db
+      .query("UPDATE workflow_steps SET agent_id = ? WHERE run_id = ? AND step_id = ?")
+      .run(agentId, runId, stepId);
+  }
+
+  /** Ends a running step. Returns false when it had already ended. */
+  finishStep(
+    runId: number,
+    stepId: string,
+    outcome: { state: "done" | "failed"; result?: string; error?: string; now: number },
+  ): boolean {
+    const { changes } = this.db
+      .query(
+        `UPDATE workflow_steps SET state = ?, result = ?, error = ?, finished_at = ?
+         WHERE run_id = ? AND step_id = ? AND state = 'running'`,
+      )
+      .run(
+        outcome.state,
+        outcome.result ?? null,
+        outcome.error ?? null,
+        outcome.now,
+        runId,
+        stepId,
+      );
+    return changes > 0;
+  }
+
+  /** Steps that never started will not start any more. */
+  skipPendingSteps(runId: number, now: number): void {
+    this.db
+      .query(
+        `UPDATE workflow_steps SET state = 'skipped', finished_at = ?
+         WHERE run_id = ? AND state = 'pending'`,
+      )
+      .run(now, runId);
+  }
+
+  /** Counts one more reminder for a step and returns the new total. */
+  addStepReminder(runId: number, stepId: string): number {
+    const row = this.db
+      .query(
+        `UPDATE workflow_steps SET reminders = reminders + 1
+         WHERE run_id = ? AND step_id = ? RETURNING reminders`,
+      )
+      .get(runId, stepId) as { reminders: number } | null;
+    return row?.reminders ?? 0;
+  }
+
+  /** Ends a run. Returns false when it had already ended. */
+  finishWorkflowRun(id: number, state: WorkflowRunState, now: number): boolean {
+    const { changes } = this.db
+      .query(
+        "UPDATE workflow_runs SET state = ?, finished_at = ? WHERE id = ? AND state = 'running'",
+      )
+      .run(state, now, id);
+    return changes > 0;
   }
 
   getMeta(key: string): string | null {

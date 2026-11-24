@@ -99,7 +99,7 @@ Tooling: `bun test`, Biome (lint + format), `tsc --noEmit`, GitHub Actions (type
 
 ## Status
 
-M0 to M4 are implemented, except the demo recording. Results of the experiments are in [spikes.md](spikes.md). What remains is listed under "After the MVP", plus two checks that need a person or more time: a message arriving while an agent is in the middle of a long tool call, and blocking waits of many hours.
+M0 to M4 are implemented, except the demo recording. The first part of the workflow engine (the DAG runner) is implemented too; see "Workflow engine". Results of the experiments are in [spikes.md](spikes.md). What remains is listed under "After the MVP", plus two checks that need a person or more time: a message arriving while an agent is in the middle of a long tool call, and blocking waits of many hours.
 
 ## Milestones
 
@@ -120,7 +120,25 @@ M0 to M4 are implemented, except the demo recording. Results of the experiments 
 
 **M4. Polish for a first release.** Command palette, configurable keys, `.dwa/config.toml`, two or three example roles in `.claude/agents/`, reattach after closing the terminal, README with a demo recording, CI green.
 
-**After the MVP:** workflow engine (DAG, revisions, live editing), shared memory with provenance, Codex provider, Claude Code configuration manager (settings, hooks, MCP, plugins, usage), worktree merge flow, packaging as a Claude Code plugin for one-command install.
+**After the MVP:** workflow engine (DAG: done; revisions and live editing: to do), shared memory with provenance, Codex provider, Claude Code configuration manager (settings, hooks, MCP, plugins, usage), worktree merge flow, packaging as a Claude Code plugin for one-command install.
+
+## Workflow engine
+
+Deterministic workflows on top of interactive sessions. Part 1, the DAG runner, is implemented. The control flow is the daemon's; the work inside a step is an ordinary agent session the user can open and type into.
+
+- **Definition.** One TOML file per workflow in `.dwa/workflows/<name>.toml`: `[steps.<id>]` with `prompt`, and optionally `role`, `profile`, `depends_on`, `keep_agent`. Prompts may use `{{input}}` and `{{steps.<id>.result}}` for steps they depend on. Validated with zod; unknown keys, unknown dependencies, cycles and placeholders for non-ancestors are errors.
+- **Run.** `Workflows` in `src/daemon/workflows.ts` starts a step by spawning an agent (`Workspace.spawn`) with the rendered prompt as its task, as soon as all its dependencies are done. Independent steps run in parallel. Changes to runs go through the engine's own serial queue.
+- **Completion is explicit.** A step ends when its agent calls the `complete_step(result)` or `fail_step(reason)` tool, or when its session is gone (failed). The end of a turn is not completion: the agent gets a reminder through the mailbox, at most twice, then the user is told and the step is marked as needing attention. There is no timeout.
+- **Failure.** After a failed step nothing new starts, running steps finish, pending ones are skipped, and the run ends as failed. No retries yet.
+- **State.** `workflow_runs` and `workflow_steps` in SQLite. A run stores a snapshot of its definition, so editing the file does not affect it. On daemon start `resume()` fails steps whose session did not survive and starts steps that became ready.
+- **Reporting.** When a run ends, whoever started it (the user or an agent) gets a message with the outcome. Runs are part of the workspace state the panes poll, and the status pane lists them.
+- **Events.** `Workspace.onAgentEvent` reports `turn_ended` and `stopped`. Listeners run inside the tmux queue, so they must only enqueue work and never wait on the workspace.
+
+Still to do, each as its own piece of work:
+
+- **Revisions (review loops):** a step sent back for another pass, for example when a reviewer rejects it. `workflow_steps.attempt` is reserved for this and is always 1 today.
+- **Live editing** of a run in progress. The per-run definition snapshot is where an edit would apply.
+- Conditions, retries, a worktree per step.
 
 ## Verification
 

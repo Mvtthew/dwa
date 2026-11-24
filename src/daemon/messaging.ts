@@ -7,6 +7,9 @@ import { WorkspaceError } from "./errors.ts";
 /** The id used for the person at the keyboard, as sender or recipient. */
 export const USER = "user";
 
+/** The sender id of messages the workflow engine writes itself (reminders, run reports). */
+export const WORKFLOW = "workflow";
+
 /** How long a message waits for the mailbox hook before it is pasted into an idle session. */
 const PASTE_FALLBACK_MS = 3000;
 
@@ -57,7 +60,8 @@ export class Messaging {
   }
 
   nameOf(id: string): string {
-    return id === USER ? USER : (this.deps.store.getAgentName(id) ?? "unknown");
+    if (id === USER || id === WORKFLOW) return id;
+    return this.deps.store.getAgentName(id) ?? "unknown";
   }
 
   /** Sends a message. Returns once it is stored; delivery follows on its own. */
@@ -207,7 +211,12 @@ export class Messaging {
   }
 
   private format(fromId: string, body: string): string {
-    const from = fromId === USER ? "the user" : `agent "${this.nameOf(fromId)}"`;
+    const from =
+      fromId === USER
+        ? "the user"
+        : fromId === WORKFLOW
+          ? "the workflow engine"
+          : `agent "${this.nameOf(fromId)}"`;
     return `[dwa] Message from ${from}:\n${body}`;
   }
 

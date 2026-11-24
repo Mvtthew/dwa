@@ -65,6 +65,24 @@ export function createStatusView(renderer: CliRenderer): StatusView {
         lines.push([dim(`${counts.working} working · ${counts.idle} idle`)]);
       }
 
+      if (model.workflows.length > 0) {
+        lines.push([], [bold("WORKFLOWS")]);
+        for (const run of model.workflows) {
+          lines.push([
+            fit(run.heading, width - run.state.length - 2),
+            dim("  "),
+            tone(run.tone, run.state),
+          ]);
+          for (const step of run.steps) {
+            lines.push([
+              tone(step.style.tone, `  ${step.style.glyph} `),
+              fit(step.name, width - 4),
+              ...(step.style.label === "needs you" ? [tone("attention", " needs you")] : []),
+            ]);
+          }
+        }
+      }
+
       if (model.waiting.length > 0) {
         lines.push([], [tone("attention", bold("NEEDS YOU"))]);
         for (const entry of model.waiting) {
