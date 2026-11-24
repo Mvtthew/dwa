@@ -5,13 +5,16 @@ import { join } from "node:path";
 import { ConfigError } from "../src/shared/config.ts";
 import type { WorkflowRunInfo } from "../src/shared/protocol.ts";
 import {
+  dependents,
   describeRun,
+  formatWorkflow,
   listWorkflows,
   loadWorkflow,
   parseWorkflow,
   readySteps,
   renderPrompt,
   reworkSteps,
+  sameWork,
 } from "../src/shared/workflow.ts";
 
 const FEATURE = `
@@ -113,6 +116,70 @@ ${extra}`;
     expect(bad(reviewed('[steps.docs]\ndepends_on = ["build"]\nprompt = "d"'))).toThrow(
       'step "docs" depends on "build", which "review" reviews; make "docs" depend on "review", or "review" on "docs"',
     );
+  });
+});
+
+describe("a definition as TOML", () => {
+  const awkward = [
+    "one line",
+    'quotes "inside" and a \\ backslash',
+    'two lines\nwith "quotes" and a \\ backslash',
+    'ends with a quote"',
+    'line\nends with quotes""',
+    'has """ three quotes\ninside',
+    "\nstarts with a newline\n",
+    "tab\tand a control \u0001 character\nand \r return",
+    "{{input}} and {{steps.a.result}}",
+  ];
+
+  test("parses back to the same definition", () => {
+    for (const prompt of awkward) {
+      const definition = parseWorkflow('[steps.a]\nprompt = "a"', "w");
+      definition.description = "What it does";
+      definition.steps.b = {
+        prompt,
+        role: "developer",
+        profile: "me",
+        model: "opus",
+        effort: "high",
+        depends_on: ["a"],
+        keep_agent: true,
+        reviews: "a",
+        max_rounds: 2,
+      };
+      const text = formatWorkflow(definition, ["a comment", "", "another"]);
+      expect(text).toStartWith("# a comment\n#\n# another\n\n");
+      expect(parseWorkflow(text, "w")).toEqual(definition);
+    }
+  });
+
+  test("leaves out what is not set", () => {
+    expect(formatWorkflow(parseWorkflow('[steps.a]\nprompt = "a"', "w"))).toBe(
+      '[steps.a]\nprompt = "a"\n',
+    );
+  });
+
+  test("sameWork ignores settings that do not change the work, and the order of dependencies", () => {
+    const { steps } = parseWorkflow(
+      '[steps.a]\nprompt = "a"\n[steps.b]\nprompt = "b"\n[steps.c]\nprompt = "c"\ndepends_on = ["a", "b"]',
+      "w",
+    );
+    const c = steps.c;
+    if (!c) throw new Error("no step c");
+    expect(sameWork(c, { ...c, keep_agent: true, max_rounds: 5 })).toBe(true);
+    expect(sameWork(c, { ...c, depends_on: ["b", "a"] })).toBe(true);
+    expect(sameWork(c, { ...c, prompt: "other" })).toBe(false);
+    expect(sameWork(c, { ...c, depends_on: ["a"] })).toBe(false);
+    expect(sameWork(c, { ...c, model: "opus" })).toBe(false);
+  });
+
+  test("dependents are the steps that come after", () => {
+    const workflow = parseWorkflow(
+      '[steps.a]\nprompt = "a"\n[steps.b]\nprompt = "b"\ndepends_on = ["a"]\n[steps.c]\nprompt = "c"\ndepends_on = ["b"]\n[steps.d]\nprompt = "d"',
+      "w",
+    );
+    expect(dependents(workflow, ["a"])).toEqual(["b", "c"]);
+    expect(dependents(workflow, ["c", "d"])).toEqual([]);
   });
 });
 

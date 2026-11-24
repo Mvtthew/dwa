@@ -5,7 +5,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { APP_NAME } from "../shared/constants.ts";
 import { daemonSocketPath } from "../shared/paths.ts";
-import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../shared/protocol.ts";
+import type {
+  AgentInfo,
+  WorkflowEdit,
+  WorkflowRunInfo,
+  WorkspaceState,
+} from "../shared/protocol.ts";
 import { EFFORT_LEVELS } from "../shared/roles.ts";
 import { describeRun, type WorkflowSummary } from "../shared/workflow.ts";
 
@@ -18,7 +23,7 @@ interface Question {
 }
 
 /** The daemon answered with an error (as opposed to not answering at all). */
-class ApiError extends Error {}
+export class ApiError extends Error {}
 
 const RETRY_MS = 2000;
 
@@ -35,21 +40,11 @@ export function describeAgent(agent: AgentInfo): string {
   return `${agent.name}${role}: ${parts.join(" · ")}`;
 }
 
-export async function runMcp(env: Env = process.env): Promise<void> {
-  const agentId = env.DWA_AGENT_ID ?? "";
-  const socket = env.DWA_SOCKET || daemonSocketPath(env.DWA_PROJECT ?? process.cwd());
+/** One request to the daemon. Throws `ApiError` when the daemon answers with an error. */
+export type Api = <T>(method: "GET" | "POST", path: string, body?: unknown) => Promise<T>;
 
-  const api = async <T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> => {
-    const response = await fetch(`http://localhost${path}`, {
-      unix: socket,
-      method,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const data = (await response.json()) as T & { error?: string };
-    if (!response.ok) throw new ApiError(data.error ?? `HTTP ${response.status}`);
-    return data;
-  };
-
+/** The dwa tools as an MCP server, for the agent with this id. Not yet connected to a transport. */
+export function createMcpServer(agentId: string, api: Api): McpServer {
   /** Runs a tool body and turns a daemon error into a tool error the model can read. */
   const tool = async (run: () => Promise<string>) => {
     try {
@@ -296,6 +291,41 @@ export async function runMcp(env: Env = process.env): Promise<void> {
   );
 
   server.registerTool(
+    "workflow_definition",
+    {
+      description:
+        "Get the definition a workflow run is working from, as TOML. It is the run's own copy; read it before edit_workflow.",
+      inputSchema: { run_id: z.number().int() },
+    },
+    ({ run_id }) =>
+      tool(async () => {
+        const { definition } = await api<{ definition: string }>("POST", "/workflows/definition", {
+          id: run_id,
+        });
+        return definition;
+      }),
+  );
+
+  server.registerTool(
+    "edit_workflow",
+    {
+      description:
+        "Change a workflow run in progress by replacing its definition (the full TOML, as workflow_definition gives it, with your changes). Steps that have not started follow the new text. A changed step that has started runs again, with every started step after it, and agents working on those are stopped, so change only what you mean to. The user is told what you changed.",
+      inputSchema: { run_id: z.number().int(), definition: z.string() },
+    },
+    ({ run_id, definition }) =>
+      tool(async () => {
+        const edit = await api<WorkflowEdit>("POST", "/workflows/edit", {
+          id: run_id,
+          definition,
+          from: agentId,
+        });
+        if (edit.changes.length === 0) return "Nothing changed: the definition is the same.";
+        return `${edit.changes.join("\n")}\n\n${describeRun(edit.run)}`;
+      }),
+  );
+
+  server.registerTool(
     "complete_step",
     {
       description:
@@ -337,5 +367,23 @@ export async function runMcp(env: Env = process.env): Promise<void> {
       }),
   );
 
-  await server.connect(new StdioServerTransport());
+  return server;
+}
+
+export async function runMcp(env: Env = process.env): Promise<void> {
+  const agentId = env.DWA_AGENT_ID ?? "";
+  const socket = env.DWA_SOCKET || daemonSocketPath(env.DWA_PROJECT ?? process.cwd());
+
+  const api: Api = async <T>(method: "GET" | "POST", path: string, body?: unknown) => {
+    const response = await fetch(`http://localhost${path}`, {
+      unix: socket,
+      method,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = (await response.json()) as T & { error?: string };
+    if (!response.ok) throw new ApiError(data.error ?? `HTTP ${response.status}`);
+    return data;
+  };
+
+  await createMcpServer(agentId, api).connect(new StdioServerTransport());
 }

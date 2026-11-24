@@ -499,6 +499,144 @@ describe("review loops", () => {
   });
 });
 
+describe("editing a run in progress", () => {
+  const names = async () => (await agents()).map((entry) => entry.name);
+  /** The run's definition with one piece of text replaced. */
+  const edited = (runId: number, from: string, to: string) => {
+    const text = workflows.definition(runId);
+    if (!text.includes(from)) throw new Error(`"${from}" is not in the definition`);
+    return text.replace(from, to);
+  };
+
+  test("the run's copy is TOML with a note on the state of the steps", async () => {
+    await workspace.up();
+    await workflows.start("chain", "x", "user");
+    const text = workflows.definition(1);
+    expect(text).toContain('# Workflow "chain", run #1');
+    expect(text).toContain("# Now: explore running, build pending");
+    expect(parseWorkflow(text, "chain")).toEqual(parseWorkflow(DEFINITIONS.chain ?? "", "chain"));
+    expect(await workflows.edit(1, text, "user")).toMatchObject({ changes: [], applied: false });
+  });
+
+  test("steps that have not started are changed, added and removed without a restart", async () => {
+    await workspace.up();
+    await workflows.start("chain", "x", "user");
+    const text = `${edited(1, "Build {{input}} using", "Construct {{input}} from")}
+[steps.docs]
+depends_on = ["build"]
+prompt = "Document it"
+`;
+    const preview = await workflows.edit(1, text, "user", true);
+    expect(preview).toMatchObject({
+      changes: ['added "docs"', 'changed "build"'],
+      restarts: false,
+      applied: false,
+    });
+    expect(workflows.status(1).steps.map((step) => step.id)).toEqual(["explore", "build"]);
+
+    const applied = await workflows.edit(1, text, "user");
+    expect(applied.applied).toBe(true);
+    expect(states(applied.run)).toEqual({ explore: "running", build: "pending", docs: "pending" });
+    await workflows.completeStep((await agent("explore")).id, "findings");
+    expect((await agent("build")).task).toContain("Construct x from findings");
+
+    const without = workflows.definition(1).replace(/\[steps\.docs\][\s\S]*$/, "");
+    expect((await workflows.edit(1, without, "user")).changes).toEqual(['removed "docs"']);
+    const done = await workflows.completeStep((await agent("build")).id, "built");
+    expect(done.state).toBe("done");
+    expect(userMessages()[0]).toContain('Result of "build":\nbuilt');
+  });
+
+  test("a changed step that has started runs again, with the started steps after it", async () => {
+    await workspace.up();
+    await workflows.start("reviewed", "x", "user");
+    const firstBuilder = await agent("build");
+    await workflows.completeStep(firstBuilder.id, "v1");
+    const tester = await agent("test");
+
+    const text = edited(1, "Build {{input}}", "Build {{input}} carefully");
+    const preview = await workflows.edit(1, text, "user", true);
+    expect(preview.changes).toEqual([
+      '"build" runs again (it changed)',
+      '"test" runs again (it comes after a changed step); its agent is stopped',
+    ]);
+    expect(preview.restarts).toBe(true);
+    expect(states(workflows.status(1))).toMatchObject({ build: "done", test: "running" });
+
+    const applied = await workflows.edit(1, text, "user");
+    expect(states(applied.run)).toEqual({
+      build: "running",
+      test: "pending",
+      review: "pending",
+      ship: "pending",
+    });
+    expect(applied.run.steps.map((step) => step.attempt)).toEqual([2, 2, 1, 1]);
+    const [builder, ...others] = await agents();
+    expect(others).toEqual([]);
+    expect(builder?.task).toContain("Build x carefully");
+    expect([firstBuilder.id, tester.id]).not.toContain(builder?.id);
+
+    await workflows.completeStep(builder?.id ?? "", "v2");
+    expect((await agent("test")).task).toContain("Test v2");
+  });
+
+  test("settings that do not change the work never restart a step", async () => {
+    await workspace.up();
+    await workflows.start("reviewed", "x", "user");
+    await workflows.completeStep((await agent("build")).id, "v1");
+    const text = edited(
+      1,
+      'prompt = "Build {{input}}"',
+      'keep_agent = true\nprompt = "Build {{input}}"',
+    );
+    const applied = await workflows.edit(1, text, "user");
+    expect(applied).toMatchObject({
+      changes: ['updated the settings of "build"'],
+      restarts: false,
+      applied: true,
+    });
+    expect(states(applied.run)).toMatchObject({ build: "done", test: "running" });
+  });
+
+  test("removing a running step stops its agent, and the run can end that way", async () => {
+    await workspace.up();
+    await workflows.start("chain", "x", "user");
+    await workflows.completeStep((await agent("explore")).id, "findings");
+    const text = workflows.definition(1).replace(/\[steps\.build\][\s\S]*$/, "");
+    const applied = await workflows.edit(1, text, "user");
+    expect(applied.changes).toEqual(['removed "build"; its agent is stopped']);
+    expect(applied.restarts).toBe(true);
+    expect(applied.run.state).toBe("done");
+    expect(await names()).toEqual([]);
+  });
+
+  test("the user is told when an agent edits a run", async () => {
+    await workspace.up();
+    const main = (await workspace.state()).main;
+    await workflows.start("chain", "x", "user");
+    const text = edited(1, "Build {{input}} using", "Make {{input}} using");
+    await workflows.edit(1, text, main?.id ?? "");
+    expect(userMessages()).toEqual([
+      'Agent "main" edited workflow "chain" (run #1):\n- changed "build"',
+    ]);
+  });
+
+  test("refuses what cannot be applied", async () => {
+    await workspace.up();
+    await workflows.start("chain", "x", "user");
+    const text = workflows.definition(1);
+    await expect(workflows.edit(1, "[steps.a]\nprompt = 1", "user")).rejects.toThrow(ConfigError);
+    await expect(
+      workflows.edit(1, text.replace('depends_on = ["explore"]', 'depends_on = ["nope"]'), "user"),
+    ).rejects.toThrow('run #1: step "build" depends on unknown step "nope"');
+    await expect(workflows.edit(9, text, "user")).rejects.toThrow("There is no workflow run #9.");
+    await workflows.cancel(1);
+    await expect(workflows.edit(1, text, "user")).rejects.toThrow(
+      "Workflow run #1 is cancelled; only a running run can be edited.",
+    );
+  });
+});
+
 describe("cancel", () => {
   test("stops the run's agents and starts nothing more", async () => {
     await workspace.up();

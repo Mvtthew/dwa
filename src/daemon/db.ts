@@ -584,6 +584,16 @@ export class Store {
   }
 
   /** Ends a run. Returns false when it had already ended. */
+  /** Replaces the definition a run works from (a JSON snapshot), after an edit. */
+  setWorkflowDefinition(id: number, definition: string): void {
+    this.db.query("UPDATE workflow_runs SET definition = ? WHERE id = ?").run(definition, id);
+  }
+
+  /** Removes a step from a run, with every attempt of it. */
+  deleteWorkflowStep(runId: number, stepId: string): void {
+    this.db.query("DELETE FROM workflow_steps WHERE run_id = ? AND step_id = ?").run(runId, stepId);
+  }
+
   finishWorkflowRun(id: number, state: WorkflowRunState, now: number): boolean {
     const { changes } = this.db
       .query(

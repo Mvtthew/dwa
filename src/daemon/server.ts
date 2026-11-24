@@ -145,6 +145,26 @@ export function startServer(options: ServerOptions) {
         const input = await body<{ id?: unknown }>(request);
         return json(await workflows.cancel(Number(input.id)));
       }
+      case "POST /workflows/definition": {
+        const input = await body<{ id?: unknown }>(request);
+        return json({ definition: workflows.definition(Number(input.id)) });
+      }
+      case "POST /workflows/edit": {
+        const input = await body<{
+          id?: unknown;
+          definition?: string;
+          from?: string;
+          preview?: boolean;
+        }>(request);
+        return json(
+          await workflows.edit(
+            Number(input.id),
+            text(input.definition, "definition"),
+            sender(input.from),
+            input.preview === true,
+          ),
+        );
+      }
       case "POST /workflows/step/complete": {
         // An agent closes its own step; the user names the run and the step.
         const input = await body<StepRequest & { result?: string }>(request);

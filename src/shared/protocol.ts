@@ -111,6 +111,16 @@ export interface WorkflowRunInfo {
   steps: WorkflowStepInfo[];
 }
 
+/** What an edit of a running workflow does (or, as a preview, would do). */
+export interface WorkflowEdit {
+  run: WorkflowRunInfo;
+  /** One line per change, empty when the definition is the same. */
+  changes: string[];
+  /** True when work already started is thrown away: a step runs again or a started step is removed. */
+  restarts: boolean;
+  applied: boolean;
+}
+
 export interface WorkspaceState {
   projectRoot: string;
   /** The key pressed before a dwa shortcut, in tmux notation (e.g. "C-q"). */

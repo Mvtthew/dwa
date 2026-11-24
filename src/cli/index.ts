@@ -40,6 +40,8 @@ Workflows
   workflow run <name> [input]           Start a run; each step gets its own agent
   workflow status [run]                 Steps and results of a run (the latest when run bare)
   workflow cancel <run>                 Stop a run and its agents
+  workflow edit <run> [file] [--yes]    Change a run in progress: in $EDITOR, or from a file
+  workflow definition <run>             Print the definition a run is working from
   workflow complete <run> <step> <result>  Close a running step by hand
   workflow fail <run> <step> <reason>   Fail a running step by hand
 

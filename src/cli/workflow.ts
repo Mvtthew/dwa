@@ -1,5 +1,8 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { APP_NAME } from "../shared/constants.ts";
-import type { WorkflowRunInfo } from "../shared/protocol.ts";
+import { runDir } from "../shared/paths.ts";
+import type { WorkflowEdit, WorkflowRunInfo } from "../shared/protocol.ts";
 import { describeRun, type WorkflowSummary } from "../shared/workflow.ts";
 import { call } from "./client.ts";
 
@@ -14,7 +17,80 @@ function runId(value: string | undefined): number {
   return id;
 }
 
-/** `dwa workflow list | run | status | cancel | complete | fail`. */
+/**
+ * Shows what an edit would do, asks before work already done is thrown away, then applies it.
+ * Throws when the definition does not validate.
+ */
+async function applyEdit(
+  projectRoot: string,
+  id: number,
+  definition: string,
+  yes: boolean,
+): Promise<number> {
+  const send = (preview: boolean) =>
+    call<WorkflowEdit>(projectRoot, "POST", "/workflows/edit", { id, definition, preview });
+  const preview = await send(true);
+  if (preview.changes.length === 0) {
+    console.log("No changes.");
+    return 0;
+  }
+  for (const change of preview.changes) console.log(`  ${change}`);
+  if (preview.restarts && !yes) {
+    if (!process.stdin.isTTY) {
+      console.error("This throws away work already done. Pass --yes to apply it.");
+      return 1;
+    }
+    const reply = prompt("This throws away work already done. Apply? [y/N]");
+    if (!reply?.trim().toLowerCase().startsWith("y")) {
+      console.log("Not applied.");
+      return 1;
+    }
+  }
+  console.log(describeRun((await send(false)).run));
+  return 0;
+}
+
+/** Opens the run's own definition in the user's editor, again after a mistake, until it applies. */
+async function editInEditor(projectRoot: string, id: number, yes: boolean): Promise<number> {
+  if (!process.stdin.isTTY) {
+    console.error(`Without a terminal, give a file: ${APP_NAME} workflow edit <run> <file>`);
+    return 2;
+  }
+  const { definition } = await call<{ definition: string }>(
+    projectRoot,
+    "POST",
+    "/workflows/definition",
+    { id },
+  );
+  mkdirSync(runDir(projectRoot), { recursive: true });
+  const path = join(runDir(projectRoot), `workflow-run-${id}.toml`);
+  writeFileSync(path, definition);
+  const editor = (process.env.VISUAL || process.env.EDITOR || "vi").split(/\s+/).filter(Boolean);
+  for (;;) {
+    const proc = Bun.spawn([...editor, path], {
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    if ((await proc.exited) !== 0) {
+      console.error("The editor did not exit cleanly; nothing was applied.");
+      return 1;
+    }
+    const text = readFileSync(path, "utf8");
+    if (text === definition) {
+      console.log("No changes.");
+      return 0;
+    }
+    try {
+      return await applyEdit(projectRoot, id, text, yes);
+    } catch (error) {
+      console.error((error as Error).message);
+      if (prompt("Press Enter to edit again, or type q to give up.")?.trim() === "q") return 1;
+    }
+  }
+}
+
+/** `dwa workflow list | run | status | cancel | complete | fail | definition | edit`. */
 export async function workflowCommand(projectRoot: string, args: string[]): Promise<number> {
   const [action, target, ...words] = args;
   switch (action) {
@@ -65,6 +141,23 @@ export async function workflowCommand(projectRoot: string, args: string[]): Prom
       });
       console.log(describeRun(run));
       return 0;
+    }
+    case "definition": {
+      const { definition } = await call<{ definition: string }>(
+        projectRoot,
+        "POST",
+        "/workflows/definition",
+        { id: runId(target) },
+      );
+      console.log(definition);
+      return 0;
+    }
+    case "edit": {
+      const yes = words.includes("--yes");
+      const file = words.find((word) => !word.startsWith("--"));
+      const id = runId(target);
+      if (!file) return editInEditor(projectRoot, id, yes);
+      return applyEdit(projectRoot, id, readFileSync(file, "utf8"), yes);
     }
     case "complete":
     case "fail": {

@@ -1,10 +1,19 @@
-import type { WorkflowRunInfo, WorkflowStepInfo, WorkflowStepState } from "../shared/protocol.ts";
+import type {
+  WorkflowEdit,
+  WorkflowRunInfo,
+  WorkflowStepInfo,
+  WorkflowStepState,
+} from "../shared/protocol.ts";
 import {
   DEFAULT_MAX_ROUNDS,
+  dependents,
+  formatWorkflow,
   loadWorkflow,
+  parseWorkflow,
   readySteps,
   renderPrompt,
   reworkSteps,
+  sameWork,
   type WorkflowDefinition,
 } from "../shared/workflow.ts";
 import type { QuestionRow, Store, WorkflowRunRow, WorkflowStepRow } from "./db.ts";
@@ -97,6 +106,10 @@ export function workflowRuns(store: Store): WorkflowRunInfo[] {
  * reviewed step, the steps between it and the review, and the review get a new attempt; the
  * session that did the reviewed step is kept until the review approves, so it does the next pass
  * with its context. After `max_rounds` passes the user decides.
+ *
+ * A run works from its own copy of the definition, which `edit` replaces while the run is in
+ * progress: steps that have not started simply follow the new text, and a changed step that has
+ * started runs again, together with every started step after it.
  */
 export class Workflows {
   private queue: Promise<unknown> = Promise.resolve();
@@ -243,6 +256,118 @@ export class Workflows {
       for (const step of running) if (step.agentId) this.stopAgent(step.agentId);
       this.release(runId);
       return this.status(runId);
+    });
+  }
+
+  /** A run's own copy of its definition as TOML, with a header that explains editing. */
+  definition(runId: number): string {
+    const run = this.status(runId);
+    const steps = run.steps.map((step) => `${step.id} ${step.state}`).join(", ");
+    return formatWorkflow(definitionOf(this.requireRun(runId)), [
+      `Workflow "${run.name}", run #${run.id}: this run's own copy. The workflow file is not changed.`,
+      "",
+      "Steps that have not started can be changed, removed or added freely.",
+      "Changing a step that has started makes it run again, with every started step after it;",
+      "agents working on those steps are stopped. keep_agent and max_rounds never cause that.",
+      "",
+      `Now: ${steps}`,
+    ]);
+  }
+
+  /**
+   * Replaces a running run's definition with `text` (TOML). With `preview` nothing is changed
+   * and the result says what would happen.
+   */
+  edit(runId: number, text: string, byId: string, preview = false): Promise<WorkflowEdit> {
+    return this.serial(async () => {
+      const { store, workspace } = this.deps;
+      const run = this.requireRun(runId);
+      if (run.state !== "running") {
+        throw new WorkspaceError(
+          `Workflow run #${runId} is ${run.state}; only a running run can be edited.`,
+        );
+      }
+      const before = definitionOf(run);
+      const after = parseWorkflow(text, run.name, `run #${runId}`);
+      const rows = new Map(store.workflowSteps(runId).map((row) => [row.stepId, row]));
+      if ([...rows.values()].some((row) => row.state === "failed")) {
+        throw new WorkspaceError(
+          `Workflow run #${runId} has a failed step and is ending; it cannot be edited.`,
+        );
+      }
+      const started = (id: string) => (rows.get(id)?.state ?? "pending") !== "pending";
+      const running = (id: string) => rows.get(id)?.state === "running";
+
+      const kept = Object.keys(after.steps).filter((id) => id in before.steps);
+      const added = Object.keys(after.steps).filter((id) => !(id in before.steps));
+      const removed = Object.keys(before.steps).filter((id) => !(id in after.steps));
+      const differs = (id: string) =>
+        JSON.stringify(before.steps[id]) !== JSON.stringify(after.steps[id]);
+      const reworked = kept.filter((id) => {
+        const [old, now] = [before.steps[id], after.steps[id]];
+        return old && now && !sameWork(old, now);
+      });
+      const changedStarted = reworked.filter(started);
+      const redo = new Set([
+        ...changedStarted,
+        ...dependents(after, changedStarted).filter(started),
+      ]);
+
+      const changes: string[] = [];
+      const stops = (id: string) => (running(id) ? "; its agent is stopped" : "");
+      for (const id of added) changes.push(`added "${id}"`);
+      for (const id of removed) changes.push(`removed "${id}"${stops(id)}`);
+      for (const id of kept) {
+        if (redo.has(id)) {
+          const why = changedStarted.includes(id) ? "it changed" : "it comes after a changed step";
+          changes.push(`"${id}" runs again (${why})${stops(id)}`);
+        } else if (reworked.includes(id)) {
+          changes.push(`changed "${id}"`);
+        } else if (differs(id)) {
+          changes.push(`updated the settings of "${id}"`);
+        }
+      }
+      if (changes.length === 0 && before.description !== after.description) {
+        changes.push("changed the description");
+      }
+      const restarts = redo.size > 0 || removed.some(started);
+      if (preview || changes.length === 0) {
+        return { run: this.status(runId), changes, restarts, applied: false };
+      }
+
+      const now = this.now();
+      for (const id of removed) {
+        const row = rows.get(id);
+        if (row?.state === "rejected") this.close(row, { state: "failed", error: "removed" });
+        if (row?.agentId) this.stopAgent(row.agentId);
+        store.deleteWorkflowStep(runId, id);
+      }
+      for (const id of redo) {
+        const row = rows.get(id);
+        if (!row) continue;
+        // The attempt so far becomes history; it must not stay open.
+        if (row.state === "running" || row.state === "rejected") {
+          this.close(row, { state: "failed", error: "redone after an edit" });
+        }
+        if (row.agentId) this.stopAgent(row.agentId);
+        store.addStepAttempt(runId, id, row.attempt + 1, { now });
+      }
+      for (const id of added) store.addStepAttempt(runId, id, 1, { now });
+      store.setWorkflowDefinition(runId, JSON.stringify(after));
+
+      if (byId !== USER) {
+        try {
+          workspace.messaging.send(
+            WORKFLOW,
+            USER,
+            `Agent "${nameOf(store, byId)}" edited workflow "${run.name}" (run #${runId}):\n${changes.map((change) => `- ${change}`).join("\n")}`,
+          );
+        } catch (error) {
+          console.error(error);
+        }
+      }
+      await this.advance(runId);
+      return { run: this.status(runId), changes, restarts, applied: true };
     });
   }
 

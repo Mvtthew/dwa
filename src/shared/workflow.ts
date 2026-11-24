@@ -176,6 +176,74 @@ export function reworkSteps(definition: WorkflowDefinition, reviewer: string): s
   );
 }
 
+/** Steps that depend, directly or through other steps, on any of `ids`. In file order. */
+export function dependents(definition: WorkflowDefinition, ids: string[]): string[] {
+  const before = ancestors(definition.steps, definition.name);
+  return Object.keys(definition.steps).filter((id) =>
+    ids.some((other) => before.get(id)?.has(other)),
+  );
+}
+
+/** True when two versions of a step ask for the same work, so a finished one need not run again. */
+export function sameWork(a: WorkflowStep, b: WorkflowStep): boolean {
+  const key = (step: WorkflowStep) =>
+    JSON.stringify([
+      step.prompt,
+      step.role,
+      step.profile,
+      step.model,
+      step.effort,
+      step.reviews,
+      [...step.depends_on].sort(),
+    ]);
+  return key(a) === key(b);
+}
+
+/** Escapes the control characters TOML does not allow raw in a string. Tab and newline stay. */
+function escapeControl(text: string): string {
+  let out = "";
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    const raw = code >= 0x20 ? code !== 0x7f : code === 0x09 || code === 0x0a;
+    out += raw ? char : `\\u${code.toString(16).padStart(4, "0")}`;
+  }
+  return out;
+}
+
+function tomlString(value: string): string {
+  if (!value.includes("\n")) return escapeControl(JSON.stringify(value));
+  // A quote is escaped only where it could be read as part of the closing delimiter.
+  const body = value.replace(/\\/g, "\\\\").replace(/"(?="|$)/g, '\\"');
+  return `"""\n${escapeControl(body)}"""`;
+}
+
+/**
+ * A definition as TOML, the form a run's own copy is edited in. `header` lines become comments
+ * at the top. Parsing the text again gives the same definition.
+ */
+export function formatWorkflow(definition: WorkflowDefinition, header: string[] = []): string {
+  const lines = header.map((line) => (line ? `# ${line}` : "#"));
+  if (header.length > 0) lines.push("");
+  if (definition.description !== undefined) {
+    lines.push(`description = ${tomlString(definition.description)}`, "");
+  }
+  for (const [id, step] of Object.entries(definition.steps)) {
+    lines.push(`[steps.${id}]`);
+    if (step.role !== undefined) lines.push(`role = ${tomlString(step.role)}`);
+    if (step.profile !== undefined) lines.push(`profile = ${tomlString(step.profile)}`);
+    if (step.model !== undefined) lines.push(`model = ${tomlString(step.model)}`);
+    if (step.effort !== undefined) lines.push(`effort = ${tomlString(step.effort)}`);
+    if (step.depends_on.length > 0) {
+      lines.push(`depends_on = [${step.depends_on.map(tomlString).join(", ")}]`);
+    }
+    if (step.reviews !== undefined) lines.push(`reviews = ${tomlString(step.reviews)}`);
+    if (step.max_rounds !== undefined) lines.push(`max_rounds = ${step.max_rounds}`);
+    if (step.keep_agent) lines.push("keep_agent = true");
+    lines.push(`prompt = ${tomlString(step.prompt)}`, "");
+  }
+  return lines.join("\n");
+}
+
 function workflowPath(projectRoot: string, name: string): string {
   return join(workflowsDir(projectRoot), `${name}.toml`);
 }

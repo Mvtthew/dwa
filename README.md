@@ -2,7 +2,7 @@
 
 A terminal workspace for running several Claude Code sessions side by side and letting them work together.
 
-> Status: early development. The workspace, live agent state, messaging between agents and you, and workflows all work. Live editing of workflows and shared memory are planned. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
+> Status: early development. The workspace, live agent state, messaging between agents and you, and workflows all work. Shared memory is planned. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
 
 ## What it does and will do
 
@@ -110,6 +110,7 @@ bun run dwa workflow status         # steps and results of the latest run
 bun run dwa workflow cancel 1
 bun run dwa workflow complete 1 explore "The flag belongs in src/cli/index.ts"   # close a stuck step yourself
 bun run dwa workflow fail 1 build "wrong approach"
+bun run dwa workflow edit 1         # change the run in progress, in $EDITOR
 ```
 
 - Steps without a dependency between them run at the same time.
@@ -120,6 +121,7 @@ bun run dwa workflow fail 1 build "wrong approach"
 - If a step fails, steps already running finish, the rest are skipped and the run fails.
 - The run's outcome arrives as a message to whoever started it. Agents can start runs too, with `run_workflow`.
 - Runs are stored, so they continue after a daemon restart. A run uses the file as it was when it started.
+- `workflow edit <run>` opens the run's own copy of the definition in `$EDITOR` and applies it when you close the editor; the workflow file is not touched. Steps that have not started can be changed, added or removed freely. Changing a step that has started makes it run again, together with every started step after it, and agents working on those are stopped; you see the list and confirm first. `keep_agent` and `max_rounds` never cause a restart. `workflow edit <run> <file>` applies a file instead (add `--yes` to skip the confirmation), and agents can do the same with `edit_workflow`; you get a message saying what they changed.
 
 ### Keys
 
