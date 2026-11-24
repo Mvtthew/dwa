@@ -16,8 +16,8 @@ export interface ConfOptions {
 /**
  * The private tmux server's config. Terminal settings are the ones verified with Claude Code in
  * docs/spikes.md (S1). Shortcuts are reached through a prefix key (Ctrl+Q by default), which
- * works on every keyboard layout. The same actions are also bound to Ctrl+Option and Option for
- * terminals that pass those through. tmux's own default bindings are removed so nothing unexpected is reachable.
+ * works on every keyboard layout. The same actions are also bound to Alt for terminals that send
+ * Option as Meta. tmux's own default bindings are removed so nothing unexpected is reachable.
  */
 export function buildTmuxConf(options: ConfOptions): string {
   const dwa = `DWA_PROJECT=${tmuxQuote(options.projectRoot)} ${options.selfArgv.map(tmuxQuote).join(" ")}`;
@@ -58,9 +58,7 @@ export function buildTmuxConf(options: ConfOptions): string {
     "bind d detach-client",
     ...actions.map(([key, command]) => `bind ${key} ${command}`),
     "",
-    "# The same actions without a prefix on Ctrl+Option and on Option alone. Whether these reach",
-    "# tmux depends on the terminal and keyboard layout; the prefix always works.",
-    ...actions.map(([key, command]) => `bind -n C-M-${key} ${command}`),
+    "# The same actions on Alt, for terminals that send Option as Meta.",
     ...actions.map(([key, command]) => `bind -n M-${key} ${command}`),
     "",
     "# Mouse: click focuses a pane, drag on a border resizes, wheel scrolls.",
