@@ -28,6 +28,10 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - `src/daemon/` one process per project: `workspace.ts` is the application service (all tmux changes go through its serial queue), `server.ts` the Unix-socket API, `db.ts` the SQLite store
 - `src/tmux/` private-server driver, generated config, layout operations
 - `src/providers/` the provider interface and the Claude Code launch command
-- Planned: `src/mcp/` (messaging tools), `src/ui/` (OpenTUI panes; `src/cli/ui.ts` is the plain-text stand-in)
+- `src/daemon/activity.ts` turns hook events and statusline JSON into agent activity and telemetry
+- `src/cli/hook.ts` holds the `hook` and `statusline` commands Claude Code runs in every session; keep it fast, silent and free of heavy imports
+- `src/ui/` OpenTUI panes: `model.ts` is pure view logic, `agents.ts` and `status.ts` draw it; test with `createTestRenderer` from `@opentui/core/testing`
+- Planned: `src/mcp/` (messaging tools)
+- Never test against the real project's workspace while the user may be using it; use a scratch project via `DWA_PROJECT`
 - Tests use `test/fake-tmux.ts` instead of a real tmux server
 - `spikes/` throwaway experiments; results are written up in `docs/spikes.md`

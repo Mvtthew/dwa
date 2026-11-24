@@ -2,7 +2,7 @@
 
 A terminal workspace for running several Claude Code sessions side by side and letting them work together.
 
-> Status: early development. The workspace, agent panes and profiles work; live agent state and messaging between agents are next. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
+> Status: early development. The workspace, agent panes, profiles and live agent state work; messaging between agents is next. See [docs/architecture.md](docs/architecture.md) for the plan and [docs/research.md](docs/research.md) for the survey behind it.
 
 ## What it does and will do
 
@@ -66,7 +66,7 @@ Press `Ctrl+Q`, release, then:
 | `d`      | Detach (everything keeps running)                      |
 | `Ctrl+Q` | Send a real Ctrl+Q to the program in the pane          |
 
-Clicking a pane focuses it and dragging a border resizes it. The prefix can be changed in the config:
+Clicking a pane focuses it and dragging a border resizes it. In the agents pane, click an agent to open it, or move with `j`/`k` or the arrow keys and press `Enter`; `x` closes the open agent. The prefix can be changed in the config:
 
 ```toml
 [keys]

@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Provider } from "../providers/provider.ts";
 import { type Config, resolveProfile } from "../shared/config.ts";
+import { DEFAULT_KEY_PREFIX } from "../shared/constants.ts";
 import type {
   AgentInfo,
   AgentKind,
@@ -49,6 +50,8 @@ export interface WorkspaceDeps {
   /** Writes a generated file; replaced in tests. */
   writeFile?: (path: string, content: string) => void;
   loadConfig: () => Promise<Config>;
+  /** Shortcut prefix in tmux notation, shown in the status pane. */
+  keyPrefix?: string;
   env?: Record<string, string | undefined>;
   newId?: () => string;
   now?: () => number;
@@ -282,6 +285,7 @@ export class Workspace {
 
     return {
       projectRoot,
+      keyPrefix: this.deps.keyPrefix ?? DEFAULT_KEY_PREFIX,
       up,
       main: live.find((agent) => agent.kind === "main") ?? null,
       agents: live.filter((agent) => agent.kind === "agent"),

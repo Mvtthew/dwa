@@ -54,6 +54,8 @@ export interface AgentInfo {
 
 export interface WorkspaceState {
   projectRoot: string;
+  /** The key pressed before a dwa shortcut, in tmux notation (e.g. "C-q"). */
+  keyPrefix: string;
   up: boolean;
   main: AgentInfo | null;
   /** Running agents only, oldest first. */

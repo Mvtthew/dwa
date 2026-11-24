@@ -181,7 +181,7 @@ async function main(argv: string[]): Promise<number> {
         console.error("Usage: dwa ui <status|agents>");
         return 2;
       }
-      return (await import("./ui.ts")).runUi(view, projectRoot);
+      return (await import("../ui/main.ts")).runUi(view, projectRoot);
     }
     case "daemon":
       await (await import("../daemon/main.ts")).runDaemon(projectRoot, selfArgv);

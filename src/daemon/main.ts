@@ -34,6 +34,7 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
     socketPath,
     selfArgv,
     runDir: run,
+    keyPrefix: config.keys.prefix,
     loadConfig: () => loadConfig(projectRoot, env),
     env,
   });
