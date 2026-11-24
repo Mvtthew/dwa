@@ -45,13 +45,35 @@ bun run dwa doctor
 ```sh
 bun run dwa up                      # start the workspace for this project and attach
 bun run dwa agent spawn explore     # start an agent (optionally --role, --profile, --task)
-bun run dwa agent open explore      # show it under the main session (or Alt+1..9)
-bun run dwa agent close             # hide it again, it keeps running (Alt+x)
+bun run dwa agent open explore      # show it under the main session
+bun run dwa agent close             # hide it again, it keeps running
 bun run dwa agent stop explore      # end its session
 bun run dwa down                    # stop everything
 ```
 
-Closing the terminal leaves everything running; `dwa attach` brings it back. Inside the workspace, `Alt+0` focuses the main session and `Alt+z` zooms the focused pane.
+Closing the terminal leaves everything running; `dwa attach` brings it back.
+
+### Keys
+
+Press `Ctrl+Q`, release, then:
+
+| Key      | Action                                                 |
+| -------- | ------------------------------------------------------ |
+| `1`–`9`  | Open the agent at that position under the main session |
+| `x`      | Close the agent pane (the agent keeps running)         |
+| `0`      | Focus the main session                                 |
+| `z`      | Zoom the focused pane, and again to restore            |
+| `d`      | Detach (everything keeps running)                      |
+| `Ctrl+Q` | Send a real Ctrl+Q to the program in the pane          |
+
+Clicking a pane focuses it and dragging a border resizes it. The prefix can be changed in the config:
+
+```toml
+[keys]
+prefix = "C-a"   # tmux key notation
+```
+
+The same actions are also on `Alt+1`…`9`, `Alt+x`, `Alt+0` and `Alt+z`, but only where the terminal sends Option as Meta. On macOS layouts where Option types characters (Polish, German and others) use the prefix.
 
 ## Using a different Claude command
 

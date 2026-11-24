@@ -25,10 +25,11 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
   const socketPath = daemonSocketPath(projectRoot);
   rmSync(socketPath, { force: true });
 
-  const confPath = tmuxConfPath(projectRoot);
-  writeFileSync(confPath, buildTmuxConf({ selfArgv, projectRoot }));
-
   const env = cleanEnv(process.env);
+  const config = await loadConfig(projectRoot, env);
+  const confPath = tmuxConfPath(projectRoot);
+  writeFileSync(confPath, buildTmuxConf({ selfArgv, projectRoot, prefix: config.keys.prefix }));
+
   const store = new Store(join(run, "dwa.sqlite"));
   const workspace = new Workspace({
     store,

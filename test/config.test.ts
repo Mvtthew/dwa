@@ -5,6 +5,7 @@ import { buildClaudeLaunch } from "../src/providers/claude/launch.ts";
 import {
   allProfiles,
   ConfigError,
+  EMPTY_CONFIG,
   mergeConfig,
   parseConfig,
   resolveProfile,
@@ -34,7 +35,7 @@ describe("parseConfig", () => {
   });
 
   test("an empty file is a valid config", () => {
-    expect(parseConfig("", "test")).toEqual({ profiles: {} });
+    expect(parseConfig("", "test")).toEqual({ profiles: {}, keys: {} });
   });
 
   test("reports the file and field for a bad value", () => {
@@ -75,7 +76,7 @@ describe("resolveProfile", () => {
       command: "/x/claude",
     });
     expect(resolveProfile(config, {}, env).name).toBe("me");
-    expect(resolveProfile({ profiles: {} }, {}, env)).toMatchObject({
+    expect(resolveProfile(EMPTY_CONFIG, {}, env)).toMatchObject({
       name: "default",
       command: "claude",
     });
@@ -98,7 +99,7 @@ describe("resolveProfile", () => {
 
   test("allProfiles lists every profile, or the fallback when none are defined", () => {
     expect(allProfiles(config, env).map((profile) => profile.name)).toEqual(["me", "work"]);
-    expect(allProfiles({ profiles: {} }, {}).map((profile) => profile.command)).toEqual(["claude"]);
+    expect(allProfiles(EMPTY_CONFIG, {}).map((profile) => profile.command)).toEqual(["claude"]);
   });
 });
 
@@ -164,6 +165,11 @@ describe("tmux helpers", () => {
     const conf = buildTmuxConf({ selfArgv: ["/bin/bun", "/dwa/cli.ts"], projectRoot: "/my proj" });
     expect(conf).toContain("set -g extended-keys always");
     expect(conf).toContain("bind -n M-9 run-shell -b ");
+    expect(conf).toContain("set -g prefix C-q");
+    expect(conf).toContain("bind 9 run-shell -b ");
+    expect(buildTmuxConf({ selfArgv: ["bun"], projectRoot: "/p", prefix: "C-a" })).toContain(
+      "bind C-a send-prefix",
+    );
     expect(conf).toContain(`${tmuxQuote("/dwa/cli.ts").replaceAll("'", "'\\''")} agent open 3'`);
     expect(conf).toContain("/my proj");
   });

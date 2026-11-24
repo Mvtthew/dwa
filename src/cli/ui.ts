@@ -34,8 +34,8 @@ export function renderStatus(state: WorkspaceState): string[] {
   lines.push(`main  ${state.main ? state.main.profile : "not running"}`);
   lines.push(`agents ${state.agents.length}`);
   lines.push("", `${BOLD}KEYS${RESET}`, "");
-  lines.push("Alt+1..9  open agent", "Alt+x     close agent", "Alt+0     focus main");
-  lines.push("Alt+z     zoom pane");
+  lines.push("Ctrl+Q, then:", " 1..9  open agent", " x     close agent", " 0     focus main");
+  lines.push(" z     zoom pane", " d     detach");
   return lines;
 }
 

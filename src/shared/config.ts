@@ -13,9 +13,22 @@ const ProfileSchema = z.strictObject({
   env: z.record(z.string(), z.string()).default({}),
 });
 
+const KeysSchema = z.strictObject({
+  /**
+   * Key pressed before a dwa shortcut, in tmux notation ("C-q" is Ctrl+Q). A prefix is the
+   * default because Alt/Option shortcuts do not reach the terminal on keyboard layouts where
+   * Option types characters (macOS with Polish, German, ...).
+   */
+  prefix: z
+    .string()
+    .regex(/^[\w-]+$/, "use tmux key notation such as C-q")
+    .optional(),
+});
+
 const ConfigSchema = z.strictObject({
   default_profile: z.string().optional(),
   profiles: z.record(z.string(), ProfileSchema).default({}),
+  keys: KeysSchema.default({}),
 });
 
 export type Profile = z.infer<typeof ProfileSchema>;
@@ -31,6 +44,8 @@ export interface ResolvedProfile {
 }
 
 export class ConfigError extends Error {}
+
+export const EMPTY_CONFIG: Config = { profiles: {}, keys: {} };
 
 export function parseConfig(text: string, source: string): Config {
   let raw: unknown;
@@ -54,12 +69,13 @@ export function mergeConfig(user: Config, project: Config): Config {
   return {
     default_profile: project.default_profile ?? user.default_profile,
     profiles: { ...user.profiles, ...project.profiles },
+    keys: { ...user.keys, ...project.keys },
   };
 }
 
 async function readConfig(path: string): Promise<Config> {
   const file = Bun.file(path);
-  if (!(await file.exists())) return { profiles: {} };
+  if (!(await file.exists())) return EMPTY_CONFIG;
   return parseConfig(await file.text(), path);
 }
 

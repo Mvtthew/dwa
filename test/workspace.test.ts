@@ -7,6 +7,7 @@ import { WORKSPACE_WINDOW } from "../src/tmux/layout.ts";
 import { FakeTmux } from "./fake-tmux.ts";
 
 const config: Config = {
+  keys: {},
   default_profile: "me",
   profiles: {
     me: { command: "/bin/claude_me", args: [], env: {} },

@@ -21,3 +21,6 @@ export const CLAUDE_COMMAND_ENV = "DWA_CLAUDE_COMMAND";
 
 /** Most agent tiles shown at once in the agents pane; the list scrolls beyond this. */
 export const MAX_VISIBLE_AGENTS = 12;
+
+/** Default key pressed before a dwa shortcut (tmux notation, Ctrl+Q). Set `keys.prefix` to change it. */
+export const DEFAULT_KEY_PREFIX = "C-q";
