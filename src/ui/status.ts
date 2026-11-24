@@ -1,8 +1,51 @@
 import { BoxRenderable, bold, type CliRenderer, dim } from "@opentui/core";
+import { APP_NAME, DEFAULT_KEY_PREFIX } from "../shared/constants.ts";
 import type { WorkspaceState } from "../shared/protocol.ts";
 import { bar, fit, formatKey, type Meter, percentTone, statusModel } from "./model.ts";
 import { createText, type Part, styled } from "./text.ts";
-import { tone } from "./theme.ts";
+import { accent, tone } from "./theme.ts";
+
+/** What a button in the status pane asks for. */
+export type StatusAction =
+  | "workflows"
+  | "agent"
+  | "shell"
+  | "close"
+  | "focus"
+  | "questions"
+  | "palette"
+  | "zoom"
+  | "detach";
+
+export interface StatusOptions {
+  run(action: StatusAction): void;
+  /** Shown at the very bottom. */
+  version: string;
+}
+
+interface Button {
+  /** The key that does the same: after the prefix anywhere, or alone while this pane has the focus. */
+  key: string;
+  label: (state: WorkspaceState | null) => string;
+  action: StatusAction;
+}
+
+/** The actions: things that open or show something. */
+const ACTIONS: Button[] = [
+  { key: "w", label: () => "Workflows", action: "workflows" },
+  { key: "a", label: () => "New agent", action: "agent" },
+  { key: "s", label: (state) => (state?.shell?.open ? "Hide shell" : "Shell"), action: "shell" },
+];
+
+/** The remaining shortcuts, as buttons too. */
+const KEYS: Button[] = [
+  { key: "x", label: () => "Close pane", action: "close" },
+  { key: "0", label: () => "Focus main", action: "focus" },
+  { key: "q", label: () => "Answer", action: "questions" },
+  { key: "p", label: () => "Menu", action: "palette" },
+  { key: "z", label: () => "Zoom main", action: "zoom" },
+  { key: "d", label: () => "Detach", action: "detach" },
+];
 
 export interface StatusView {
   update(state: WorkspaceState, nowMs: number): void;
@@ -23,8 +66,11 @@ function meter(entry: Meter, width: number): Part[][] {
   ];
 }
 
-/** The status pane: the selected session, usage limits, agent counts and the shortcuts. */
-export function createStatusView(renderer: CliRenderer): StatusView {
+/**
+ * The status pane: the selected session, usage limits and agent counts, and at the bottom, where
+ * they stay however long the text above gets, the actions and shortcuts as buttons and the version.
+ */
+export function createStatusView(renderer: CliRenderer, options: StatusOptions): StatusView {
   const root = new BoxRenderable(renderer, {
     id: "status-root",
     flexDirection: "column",
@@ -32,9 +78,80 @@ export function createStatusView(renderer: CliRenderer): StatusView {
     height: "100%",
     paddingX: 1,
   });
+  const body = new BoxRenderable(renderer, {
+    id: "status-body",
+    flexGrow: 1,
+    flexShrink: 1,
+    overflow: "hidden",
+  });
   const text = createText(renderer, "status-text");
-  root.add(text);
+  body.add(text);
+  root.add(body);
+
+  const bottom = new BoxRenderable(renderer, {
+    id: "status-buttons",
+    flexDirection: "column",
+    flexShrink: 0,
+    paddingTop: 1,
+  });
+  /** The shortcuts. Left out when the pane is too short to show them and the text above. */
+  const keys = new BoxRenderable(renderer, {
+    id: "status-keys",
+    flexDirection: "column",
+    flexShrink: 0,
+    height: KEYS.length + 3,
+  });
+  const addLine = (id: string, parent: BoxRenderable = bottom) => {
+    const line = createText(renderer, id, 1);
+    parent.add(line);
+    return line;
+  };
+  const addButtons = (list: Button[], parent: BoxRenderable = bottom) =>
+    list.map((button) => {
+      const box = new BoxRenderable(renderer, {
+        id: `status-button-${button.action}`,
+        height: 1,
+        flexShrink: 0,
+        onMouseDown: () => options.run(button.action),
+      });
+      const label = createText(renderer, `status-button-text-${button.action}`, 1);
+      box.add(label);
+      parent.add(box);
+      return { button, label };
+    });
+
+  const actionButtons = addButtons(ACTIONS);
+  addLine("status-gap-keys", keys);
+  const keysTitle = addLine("status-keys-title", keys);
+  const agentKeys = addLine("status-keys-agents", keys);
+  const keyButtons = addButtons(KEYS, keys);
+  bottom.add(keys);
+  addLine("status-gap-version");
+  const version = addLine("status-version");
+  version.content = styled([[dim(`${APP_NAME} ${options.version}`)]]);
+  // Opening an agent needs a number, so it is a hint in the same shape, not a button.
+  agentKeys.content = styled([[dim("▸ Open agent  1-9")]]);
+  /** Rows of the bottom part without the shortcuts: a gap, the actions, a gap, the version. */
+  const compact = ACTIONS.length + 3;
+  const full = compact + KEYS.length + 3;
+  bottom.height = full;
+  root.add(bottom);
   renderer.root.add(root);
+
+  const paintButtons = (state: WorkspaceState | null) => {
+    for (const { button, label } of [...actionButtons, ...keyButtons]) {
+      label.content = styled([[accent("▸ "), bold(button.label(state)), dim(`  ${button.key}`)]]);
+    }
+    keysTitle.content = styled([
+      [bold("KEYS"), dim(`  ${formatKey(state?.keyPrefix ?? DEFAULT_KEY_PREFIX)}, then`)],
+    ]);
+  };
+  paintButtons(null);
+
+  renderer.keyInput.on("keypress", (key) => {
+    const button = [...ACTIONS, ...KEYS].find((entry) => entry.key === key.name);
+    if (button) options.run(button.action);
+  });
 
   return {
     update(state, nowMs) {
@@ -110,12 +227,12 @@ export function createStatusView(renderer: CliRenderer): StatusView {
         }
       }
 
-      lines.push([], [bold("KEYS"), dim(`  ${formatKey(state.keyPrefix)}, then`)]);
-      lines.push([dim("1-9 open agent  x close")]);
-      lines.push([dim("0 main  q answer  p menu")]);
-      lines.push([dim("z zoom  d detach")]);
-
       text.content = styled(lines);
+      // What needs the user must not be pushed out of sight by a list of shortcuts.
+      const roomy = lines.length + full <= renderer.height;
+      keys.visible = roomy;
+      bottom.height = roomy ? full : compact;
+      paintButtons(state);
     },
     showMessage(message) {
       text.content = styled([[bold("STATUS")], [], [dim(message)]]);

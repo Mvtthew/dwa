@@ -16,8 +16,8 @@ import { accent, tone } from "./theme.ts";
 const TILE_HEIGHT = 3;
 
 export interface AgentsActions {
-  /** Show this agent's session under main. */
-  open(agentId: string): void;
+  /** Show this agent's session under main, or hide it when it is the one shown. */
+  toggle(agentId: string): void;
   /** Hide the open agent. */
   close(): void;
 }
@@ -34,7 +34,8 @@ interface TileNodes {
 
 /**
  * The agents pane: one tile per running agent, at most twelve visible, the rest reached by
- * scrolling. Click a tile or press Enter on it to open that agent under the main session.
+ * scrolling. Click a tile or press Enter on it to show that agent under the main session, and
+ * again to hide it.
  */
 export function createAgentsView(renderer: CliRenderer, actions: AgentsActions): AgentsView {
   const root = new BoxRenderable(renderer, {
@@ -89,7 +90,7 @@ export function createAgentsView(renderer: CliRenderer, actions: AgentsActions):
     footer.content =
       current.length === 0
         ? styled([[dim("No agents running.")], [dim("dwa agent spawn <name>")]])
-        : styled([[dim("click or enter: open · x: close")]]);
+        : styled([[dim("click or enter: show / hide")]]);
   };
 
   const rebuild = () => {
@@ -105,7 +106,7 @@ export function createAgentsView(renderer: CliRenderer, actions: AgentsActions):
         onMouseDown: () => {
           cursor = index;
           paint();
-          actions.open(tile.id);
+          actions.toggle(tile.id);
         },
       });
       const text = createText(renderer, `tile-text-${tile.id}`, 2);
@@ -128,7 +129,7 @@ export function createAgentsView(renderer: CliRenderer, actions: AgentsActions):
     if (key.name === "x") return actions.close();
     if (key.name === "return" || key.name === "enter" || key.name === "linefeed") {
       const tile = current[cursor];
-      if (tile) actions.open(tile.id);
+      if (tile) actions.toggle(tile.id);
       return;
     }
     if (/^[1-9]$/.test(key.name)) {
@@ -136,7 +137,7 @@ export function createAgentsView(renderer: CliRenderer, actions: AgentsActions):
       const tile = current[index];
       if (!tile) return;
       select(index);
-      actions.open(tile.id);
+      actions.toggle(tile.id);
     }
   });
 

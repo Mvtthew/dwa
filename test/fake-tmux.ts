@@ -75,6 +75,8 @@ export class FakeTmux {
         return "";
       case "set-hook":
       case "display-message":
+      case "display-popup":
+      case "detach-client":
       case "set-buffer":
       case "paste-buffer":
       case "send-keys":

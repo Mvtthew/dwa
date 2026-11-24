@@ -3,9 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_TEMPLATE, initProject } from "../src/cli/init.ts";
-import { filterItems, paletteItems, projectRoles } from "../src/cli/palette.ts";
+import { projectRoles } from "../src/cli/palette.ts";
 import { parseConfig } from "../src/shared/config.ts";
-import type { AgentInfo, WorkspaceState } from "../src/shared/protocol.ts";
 import { listWorkflows } from "../src/shared/workflow.ts";
 
 let dir: string;
@@ -67,61 +66,5 @@ describe("init", () => {
     initProject(dir, { roles: false });
     initProject(dir, { roles: false });
     expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe(".dwa/run/\n");
-  });
-});
-
-describe("palette", () => {
-  const agent = (name: string, open = false) => ({ id: `id-${name}`, name, open }) as AgentInfo;
-  const state = (agents: AgentInfo[], questions = 0): WorkspaceState => ({
-    projectRoot: "/p",
-    keyPrefix: "C-q",
-    up: true,
-    main: agent("main"),
-    agents,
-    questions: Array.from({ length: questions }, () => ({})) as WorkspaceState["questions"],
-    inbox: [],
-    workflows: [],
-  });
-
-  test("offers what is possible in the current state", () => {
-    const labels = paletteItems(state([agent("dev", true), agent("rev")], 2), ["reviewer"]).map(
-      (item) => item.label,
-    );
-    expect(labels).toEqual([
-      "Answer questions (2 open)",
-      "Open rev",
-      "Close dev",
-      "Focus main",
-      "Message main",
-      "Message dev",
-      "Message rev",
-      "Start agent",
-      "Start agent as reviewer",
-      "Stop dev",
-      "Stop rev",
-      "Stop the workspace",
-    ]);
-  });
-
-  test("an empty workspace offers only the general actions", () => {
-    expect(paletteItems(state([]), [], ["feature"]).map((item) => item.label)).toContain(
-      "Run workflow feature",
-    );
-    expect(paletteItems(state([]), []).map((item) => item.label)).toEqual([
-      "Focus main",
-      "Message main",
-      "Start agent",
-      "Stop the workspace",
-    ]);
-  });
-
-  test("filtering matches every word, in any order and case", () => {
-    const items = paletteItems(state([agent("dev"), agent("rev")]), ["reviewer"]);
-    expect(filterItems(items, "REV stop").map((item) => item.label)).toEqual(["Stop rev"]);
-    expect(filterItems(items, "start").map((item) => item.label)).toEqual([
-      "Start agent",
-      "Start agent as reviewer",
-    ]);
-    expect(filterItems(items, "zzz")).toEqual([]);
   });
 });

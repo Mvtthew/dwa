@@ -225,6 +225,23 @@ export class Workflows {
     });
   }
 
+  /**
+   * The user's decision about a review that used up its passes, given outside the question
+   * queue ("another pass", "accept" or "fail"). It answers the question the engine asked.
+   */
+  decide(runId: number, stepId: string, decision: string): WorkflowRunInfo {
+    const step = this.deps.store.workflowSteps(runId).find((row) => row.stepId === stepId);
+    this.requireRun(runId);
+    if (step?.state !== "rejected" || step.questionId === null) {
+      throw new WorkspaceError(`Step "${stepId}" of workflow run #${runId} waits for no decision.`);
+    }
+    if (!(DECISIONS as readonly string[]).includes(decision)) {
+      throw new WorkspaceError(`Unknown decision "${decision}": use ${DECISIONS.join(", ")}.`);
+    }
+    this.deps.workspace.messaging.answer(step.questionId, USER, decision);
+    return this.status(runId);
+  }
+
   /** The user closes an open step by hand, for an agent that will not do it itself. */
   completeStepOf(runId: number, stepId: string, result: string): Promise<WorkflowRunInfo> {
     return this.serial(() => this.complete(this.requireOpenStep(runId, stepId), result));

@@ -5,6 +5,7 @@ import type {
   StatuslineRequest,
   UpRequest,
 } from "../shared/protocol.ts";
+import { POPUP_KINDS } from "../shared/protocol.ts";
 import { listWorkflows } from "../shared/workflow.ts";
 import { TmuxError } from "../tmux/driver.ts";
 import { USER } from "./messaging.ts";
@@ -70,6 +71,23 @@ export function startServer(options: ServerOptions) {
         return json(await workspace.spawn(await body<SpawnRequest>(request)));
       case "POST /agents/open":
         return json(await workspace.open(requireTarget(await body(request))));
+      case "POST /agents/toggle":
+        return json(await workspace.toggle(requireTarget(await body(request))));
+      case "POST /shell/toggle":
+        return json(await workspace.toggleShell());
+      case "POST /popup": {
+        const { kind } = await body<{ kind?: unknown }>(request);
+        const known = POPUP_KINDS.find((entry) => entry === kind);
+        if (!known) throw new WorkspaceError(`Unknown popup: use ${POPUP_KINDS.join(", ")}.`);
+        workspace.popup(known);
+        return json({ ok: true });
+      }
+      case "POST /zoom":
+        await workspace.zoomMain();
+        return json({ ok: true });
+      case "POST /detach":
+        await workspace.detach();
+        return json({ ok: true });
       case "POST /agents/close":
         await workspace.close();
         return json({ ok: true });
@@ -183,6 +201,16 @@ export function startServer(options: ServerOptions) {
             ? await workflows.failStep(input.agentId, reason)
             : await workflows.failStepOf(Number(input.id), text(input.step, "step"), reason),
         );
+      }
+      case "POST /workflows/step/decide": {
+        const input = await body<{ id?: unknown; step?: string; decision?: string }>(request);
+        const run = workflows.decide(
+          Number(input.id),
+          text(input.step, "step"),
+          text(input.decision, "decision"),
+        );
+        await workflows.settled();
+        return json(workflows.status(run.id));
       }
       case "POST /workflows/step/changes": {
         const input = await body<{ agentId?: string; feedback?: string }>(request);

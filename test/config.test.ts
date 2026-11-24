@@ -226,6 +226,11 @@ describe("tmux helpers", () => {
     );
     expect(conf).toContain(`${tmuxQuote("/dwa/cli.ts").replaceAll("'", "'\\''")} key open 3'`);
     expect(conf).toContain("/my proj");
+    expect(conf).toContain("bind s run-shell -b ");
+    expect(conf).toContain(
+      "bind w display-popup -E -w 70% -h 80% -T ' Workflows ' 'DWA_PROJECT='\\''/my proj'\\'' '\\''/bin/bun'\\'' '\\''/dwa/cli.ts'\\'' wizard workflows'",
+    );
+    expect(conf).toContain("bind -n M-a display-popup -E -w 70% -h 80% -T ' New agent ' ");
   });
 
   test("parsePaneList reads pane id, dead flag and window", () => {
@@ -274,6 +279,7 @@ describe("inboxText", () => {
           ],
           inbox: [{ id: 1, from: "alice", body: "done", createdAt: now }],
           workflows: [],
+          shell: null,
         },
         now,
       ),
@@ -296,6 +302,7 @@ describe("inboxText", () => {
           questions: [],
           inbox: [],
           workflows: [],
+          shell: null,
         },
         now,
       ),

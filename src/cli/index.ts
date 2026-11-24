@@ -19,6 +19,8 @@ Workspace
   up [--profile <name>] [--no-attach]   Start the workspace for this project and attach to it
   attach                                Attach to the running workspace
   palette                               Menu of workspace actions (prefix key, then p)
+  shell                                 Show or hide a plain shell under the main session
+  wizard <workflows|agent|menu>         The forms behind the status pane's buttons
   down                                  Stop every session and the workspace
 
 Agents
@@ -154,6 +156,7 @@ async function keyCommand(projectRoot: string, args: string[]): Promise<number> 
     if (action === "open") await call(projectRoot, "POST", "/agents/open", { target });
     else if (action === "close") await call(projectRoot, "POST", "/agents/close");
     else if (action === "focus") await call(projectRoot, "POST", "/focus");
+    else if (action === "shell") await call(projectRoot, "POST", "/shell/toggle");
   } catch (error) {
     const message =
       action === "open" && /^No agent/.test((error as Error).message)
@@ -209,7 +212,7 @@ async function main(argv: string[]): Promise<number> {
     case "workflow":
       return (await import("./workflow.ts")).workflowCommand(projectRoot, rest);
     case "palette":
-      return (await import("./palette.ts")).paletteCommand(projectRoot);
+      return (await import("../ui/main.ts")).runWizard("menu", projectRoot, selfArgv);
     case "init":
       return (await import("./init.ts")).initCommand(projectRoot, rest);
     case "status":
@@ -222,6 +225,19 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     case "key":
       return keyCommand(projectRoot, rest);
+    case "shell": {
+      const { open } = await call<{ open: boolean }>(projectRoot, "POST", "/shell/toggle");
+      console.log(open ? "Shell shown." : "Shell hidden.");
+      return 0;
+    }
+    case "wizard": {
+      const kind = rest[0];
+      if (kind !== "workflows" && kind !== "agent" && kind !== "menu") {
+        console.error(`Usage: ${APP_NAME} wizard <workflows|agent|menu>`);
+        return 2;
+      }
+      return (await import("../ui/main.ts")).runWizard(kind, projectRoot, selfArgv);
+    }
     case "ui": {
       const view = rest[0];
       if (view !== "status" && view !== "agents") {

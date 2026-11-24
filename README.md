@@ -131,21 +131,28 @@ Press `Ctrl+Q`, release, then:
 | -------- | ------------------------------------------------------ |
 | `1`–`9`  | Open the agent at that position under the main session |
 | `x`      | Close the agent pane (the agent keeps running)         |
+| `s`      | Show or hide a plain shell under the main session      |
+| `w`      | Workflows: start a run, steer or edit a running one    |
+| `a`      | Start an agent: name, role, model, effort, first task  |
 | `0`      | Focus the main session                                 |
 | `q`      | Answer open questions in a popup                       |
-| `p`      | Command menu: open, message, start or stop agents      |
+| `p`      | Menu: sessions, agents, workflows, shell, stop         |
 | `z`      | Zoom the focused pane, and again to restore            |
 | `d`      | Detach (everything keeps running)                      |
 | `Ctrl+Q` | Send a real Ctrl+Q to the program in the pane          |
 
-Clicking a pane focuses it and dragging a border resizes it. In the agents pane, click an agent to open it, or move with `j`/`k` or the arrow keys and press `Enter`; `x` closes the open agent. The prefix can be changed in the config:
+Clicking a pane focuses it and dragging a border resizes it. In the agents pane, click an agent to show it under the main session and click it again to hide it; `j`/`k` or the arrow keys and `Enter` do the same.
+
+The status pane on the left ends with buttons: **Workflows**, **New agent** and **Shell**, then the shortcuts from the table above (close pane, focus main, answer, menu, zoom main, detach), and the dwa version on the last line. Click one, or press its key alone while that pane has the focus. In a short terminal the shortcut buttons are left out so that questions and agents that need you stay visible. The first two, and the menu, open a form in a popup where every row can be clicked: start a workflow, complete or fail a step by hand, decide a review that is waiting for you, edit a run in `$EDITOR`, cancel it; or start an agent with a role, model and effort. The shell is your own `$SHELL` in the project directory. It takes the same place as an open agent, so showing one hides the other, and it keeps running while hidden until you exit it.
+
+The prefix can be changed in the config:
 
 ```toml
 [keys]
 prefix = "C-a"   # tmux key notation
 ```
 
-The same actions are also on `Alt+1`…`9`, `Alt+x`, `Alt+0` and `Alt+z`, but only where the terminal sends Option as Meta. On macOS layouts where Option types characters (Polish, German and others) use the prefix.
+The same actions are also on `Alt+1`…`9`, `Alt+x`, `Alt+0`, `Alt+z` and the other keys, but only where the terminal sends Option as Meta. On macOS layouts where Option types characters (Polish, German and others) use the prefix.
 
 ## Project configuration
 

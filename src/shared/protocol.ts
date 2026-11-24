@@ -135,7 +135,17 @@ export interface WorkspaceState {
   inbox: MessageInfo[];
   /** Workflow runs in progress and the latest finished ones, newest first. */
   workflows: WorkflowRunInfo[];
+  /** The plain shell pane: null until it is first shown, then whether it is under main now. */
+  shell: { open: boolean } | null;
 }
+
+/** The wizards that open in a popup over the workspace. */
+export type WizardKind = "workflows" | "agent";
+
+/** Everything the daemon can show in a popup: the wizards, the question queue, the command menu. */
+export type PopupKind = WizardKind | "questions" | "palette";
+
+export const POPUP_KINDS: readonly PopupKind[] = ["workflows", "agent", "questions", "palette"];
 
 export interface SpawnRequest {
   name?: string;

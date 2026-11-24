@@ -7,6 +7,7 @@ import type {
   AgentInfo,
   AgentKind,
   HookRequest,
+  PopupKind,
   SpawnRequest,
   StatuslineRequest,
   Telemetry,
@@ -14,7 +15,7 @@ import type {
   WorkspaceState,
 } from "../shared/protocol.ts";
 import { resolveTuning, roleTuning, type SessionTuning } from "../shared/roles.ts";
-import { tmuxQuote } from "../tmux/conf.ts";
+import { popupArgs, selfCommand, tmuxQuote } from "../tmux/conf.ts";
 import type { TmuxRunner } from "../tmux/driver.ts";
 import {
   createWorkspace,
@@ -27,6 +28,7 @@ import {
   type PaneCommand,
   type PaneStatus,
   returnToPool,
+  SESSION,
   spawnPoolWindow,
 } from "../tmux/layout.ts";
 import { parseStatusline, reduceHook, snippet } from "./activity.ts";
@@ -41,6 +43,8 @@ const NAME_PATTERN = /^[A-Za-z0-9][\w.-]{0,39}$/;
 const META_PROFILE = "workspace_profile";
 const META_AGENT_HEIGHT = "agent_height";
 const META_STARTED_AT = "started_at";
+const META_SHELL_PANE = "shell_pane";
+const SHELL_NAME = "shell";
 
 export interface WorkspaceDeps {
   store: Store;
@@ -149,6 +153,7 @@ export class Workspace {
       const profile = resolveProfile(config, { workspaceProfile: request.profile }, this.env);
       this.deps.store.setMeta(META_PROFILE, request.profile ?? null);
       this.deps.store.setMeta(META_STARTED_AT, String(this.now()));
+      this.deps.store.setMeta(META_SHELL_PANE, null);
 
       const id = this.newId();
       const sessionId = this.newId();
@@ -265,29 +270,106 @@ export class Workspace {
       const state = await this.requireUp();
       const agent = this.find(state, target);
       if (!agent.open) {
-        const current = state.agents.find((other) => other.open);
-        if (current) {
-          await returnToPool(this.deps.run, { agent: current.paneId, name: current.name });
-        }
-        const height = Number(this.deps.store.getMeta(META_AGENT_HEIGHT)) || undefined;
-        await openUnderMain(this.deps.run, {
-          main: state.main.paneId,
-          agent: agent.paneId,
-          heightPercent: height,
-        });
+        await this.clearSlot(state);
+        await this.showUnderMain(state, agent.paneId);
       }
       await focusPane(this.deps.run, agent.paneId);
       return { ...agent, open: true };
     });
   }
 
-  /** Sends the open agent back to the pool; main gets the full height again. */
+  /** Shows an agent's session under main, or hides it when it is the one shown. */
+  toggle(target: string): Promise<AgentInfo> {
+    return this.serial(async () => {
+      const state = await this.requireUp();
+      const agent = this.find(state, target);
+      await this.clearSlot(state);
+      if (agent.open) {
+        await focusPane(this.deps.run, state.main.paneId);
+        return { ...agent, open: false };
+      }
+      await this.showUnderMain(state, agent.paneId);
+      await focusPane(this.deps.run, agent.paneId);
+      return { ...agent, open: true };
+    });
+  }
+
+  /** Sends whatever is shown under main back to the pool; main gets the full height again. */
   close(): Promise<void> {
     return this.serial(async () => {
       const state = await this.requireUp();
-      const current = state.agents.find((agent) => agent.open);
-      if (current) await returnToPool(this.deps.run, { agent: current.paneId, name: current.name });
+      await this.clearSlot(state);
       await focusPane(this.deps.run, state.main.paneId);
+    });
+  }
+
+  /**
+   * Shows a plain shell under main, in the slot agents open in, or hides it. The shell is started
+   * the first time and keeps running in the background while hidden, like an agent's session.
+   */
+  toggleShell(): Promise<{ open: boolean }> {
+    return this.serial(async () => {
+      const { run, store } = this.deps;
+      const state = await this.requireUp();
+      const wasOpen = state.shell?.open === true;
+      await this.clearSlot(state);
+      if (wasOpen) {
+        await focusPane(run, state.main.paneId);
+        return { open: false };
+      }
+      let pane = state.shell ? store.getMeta(META_SHELL_PANE) : null;
+      if (!pane) {
+        pane = await spawnPoolWindow(run, {
+          cwd: this.deps.projectRoot,
+          name: SHELL_NAME,
+          command: { argv: [this.env.SHELL || "/bin/sh"], title: SHELL_NAME },
+        });
+        store.setMeta(META_SHELL_PANE, pane);
+      }
+      await this.showUnderMain(state, pane);
+      await focusPane(run, pane);
+      return { open: true };
+    });
+  }
+
+  /** Opens a wizard, the questions or the menu in a popup over the attached terminal. Returns at once. */
+  popup(kind: PopupKind): void {
+    const self = selfCommand(this.deps.selfArgv, this.deps.projectRoot);
+    // Not queued and not awaited: the command only returns when the popup is closed.
+    this.deps.run(popupArgs(self, kind)).catch(() => undefined);
+  }
+
+  /** Gives the main session the whole window, or the layout back when it already has it. */
+  zoomMain(): Promise<void> {
+    return this.serial(async () => {
+      const state = await this.requireUp();
+      await focusPane(this.deps.run, state.main.paneId);
+      await this.deps.run(["resize-pane", "-Z", "-t", state.main.paneId]);
+    });
+  }
+
+  /** Detaches the attached terminal. Everything keeps running. */
+  detach(): Promise<void> {
+    return this.serial(async () => {
+      await this.requireUp();
+      await this.deps.run(["detach-client", "-s", SESSION]).catch(() => undefined);
+    });
+  }
+
+  /** Empties the slot under main: the open agent, or the shell, goes back to the pool. */
+  private async clearSlot(state: WorkspaceState): Promise<void> {
+    const current = state.agents.find((agent) => agent.open);
+    if (current) await returnToPool(this.deps.run, { agent: current.paneId, name: current.name });
+    const shell = state.shell?.open ? this.deps.store.getMeta(META_SHELL_PANE) : null;
+    if (shell) await returnToPool(this.deps.run, { agent: shell, name: SHELL_NAME });
+  }
+
+  private async showUnderMain(state: { main: AgentInfo }, pane: string): Promise<void> {
+    const height = Number(this.deps.store.getMeta(META_AGENT_HEIGHT)) || undefined;
+    await openUnderMain(this.deps.run, {
+      main: state.main.paneId,
+      agent: pane,
+      heightPercent: height,
     });
   }
 
@@ -372,6 +454,7 @@ export class Workspace {
       // no server running
     }
     for (const row of this.deps.store.running()) this.markStopped(row.id);
+    this.deps.store.setMeta(META_SHELL_PANE, null);
   }
 
   /** Brings the stored state in line with the panes that actually exist, then returns it. */
@@ -399,6 +482,19 @@ export class Workspace {
       });
     }
 
+    // The shell is gone once the user exits it; its dead pane is removed like an agent's.
+    const shellPane = up ? store.getMeta(META_SHELL_PANE) : null;
+    let shell: WorkspaceState["shell"] = null;
+    if (shellPane) {
+      const pane = panes.get(shellPane);
+      if (pane && !pane.dead) {
+        shell = { open: pane.inWorkspace };
+      } else {
+        if (pane) await killPane(run, shellPane).catch(() => undefined);
+        store.setMeta(META_SHELL_PANE, null);
+      }
+    }
+
     const questions = this.messaging.openQuestions();
     for (const agent of live) {
       agent.waitingOn = questions.find((question) => question.fromId === agent.id)?.to ?? null;
@@ -414,6 +510,7 @@ export class Workspace {
       // Only messages from this run of the workspace; older ones belong to sessions that are gone.
       inbox: this.messaging.inbox(5, Number(this.deps.store.getMeta(META_STARTED_AT)) || 0),
       workflows: workflowRuns(store),
+      shell,
     };
   }
 

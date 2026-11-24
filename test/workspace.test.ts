@@ -241,6 +241,23 @@ describe("agents", () => {
     expect((await workspace.state()).agents).toHaveLength(1);
   });
 
+  test("toggle shows an agent, hides it again, and swaps with another", async () => {
+    const { main } = await workspace.up();
+    const a = await workspace.spawn({ name: "a" });
+    const b = await workspace.spawn({ name: "b" });
+
+    expect((await workspace.toggle("a")).open).toBe(true);
+    expect(tmux.windowOf(a.paneId)).toBe(WORKSPACE_WINDOW);
+    expect((await workspace.toggle("b")).open).toBe(true);
+    expect(tmux.windowOf(a.paneId)).toBe("a");
+    expect(tmux.windowOf(b.paneId)).toBe(WORKSPACE_WINDOW);
+
+    expect((await workspace.toggle("b")).open).toBe(false);
+    expect(tmux.windowOf(b.paneId)).toBe("b");
+    expect(tmux.commands("select-pane").at(-1)).toEqual(["select-pane", "-t", main?.paneId ?? ""]);
+    expect((await workspace.state()).agents.every((agent) => !agent.open)).toBe(true);
+  });
+
   test("stop ends the session and removes it from the list", async () => {
     await workspace.up();
     const a = await workspace.spawn({ name: "a" });
@@ -263,6 +280,120 @@ describe("agents", () => {
     await workspace.up();
     await workspace.spawn({ name: "a" });
     expect(workspace.open("zzz")).rejects.toThrow('No agent "zzz" (running: a)');
+  });
+});
+
+describe("the shell pane", () => {
+  const shellPane = () => store.getMeta("shell_pane") ?? "";
+
+  test("is started on first use under main, then hidden and shown again without restarting", async () => {
+    const { main } = await workspace.up();
+    expect((await workspace.state()).shell).toBeNull();
+
+    expect(await workspace.toggleShell()).toEqual({ open: true });
+    const pane = shellPane();
+    expect(tmux.panes.get(pane)?.argv).toEqual(["/bin/sh"]);
+    expect(tmux.windowOf(pane)).toBe(WORKSPACE_WINDOW);
+    expect(tmux.commands("join-pane").at(-1)).toEqual([
+      "join-pane",
+      "-v",
+      "-l",
+      "40%",
+      "-s",
+      pane,
+      "-t",
+      main?.paneId ?? "",
+    ]);
+    expect((await workspace.state()).shell).toEqual({ open: true });
+
+    expect(await workspace.toggleShell()).toEqual({ open: false });
+    expect(tmux.windowOf(pane)).toBe("shell");
+    expect((await workspace.state()).shell).toEqual({ open: false });
+
+    await workspace.toggleShell();
+    expect(shellPane()).toBe(pane);
+    expect(tmux.commands("new-window")).toHaveLength(1);
+    // It is not an agent.
+    expect((await workspace.state()).agents).toEqual([]);
+  });
+
+  test("shares the slot under main with the agents", async () => {
+    await workspace.up();
+    const a = await workspace.spawn({ name: "a" });
+    await workspace.open("a");
+    await workspace.toggleShell();
+    expect(tmux.windowOf(a.paneId)).toBe("a");
+    expect(tmux.windowOf(shellPane())).toBe(WORKSPACE_WINDOW);
+
+    await workspace.open("a");
+    expect(tmux.windowOf(shellPane())).toBe("shell");
+    expect(tmux.windowOf(a.paneId)).toBe(WORKSPACE_WINDOW);
+
+    await workspace.toggleShell();
+    await workspace.close();
+    expect(tmux.windowOf(shellPane())).toBe("shell");
+    expect((await workspace.state()).shell).toEqual({ open: false });
+  });
+
+  test("is forgotten when the user exits it, and when the workspace stops", async () => {
+    await workspace.up();
+    await workspace.toggleShell();
+    const first = shellPane();
+    const pane = tmux.panes.get(first);
+    if (pane) pane.dead = true;
+    expect((await workspace.state()).shell).toBeNull();
+    expect(tmux.panes.has(first)).toBe(false);
+
+    await workspace.toggleShell();
+    expect(shellPane()).not.toBe(first);
+    await workspace.down();
+    expect(shellPane()).toBe("");
+  });
+});
+
+describe("wizard popups", () => {
+  test("open over the workspace without holding up other requests", async () => {
+    await workspace.up();
+    workspace.popup("workflows");
+    await workspace.state();
+    expect(tmux.commands("display-popup")).toEqual([
+      [
+        "display-popup",
+        "-E",
+        "-w",
+        "70%",
+        "-h",
+        "80%",
+        "-T",
+        " Workflows ",
+        "DWA_PROJECT='/project' 'bun' '/dwa/cli.ts' wizard workflows",
+      ],
+    ]);
+  });
+});
+
+describe("zoom and detach", () => {
+  test("zoom gives main the window and detach lets the terminal go", async () => {
+    const { main } = await workspace.up();
+    await workspace.zoomMain();
+    expect(tmux.commands("resize-pane").at(-1)).toEqual([
+      "resize-pane",
+      "-Z",
+      "-t",
+      main?.paneId ?? "",
+    ]);
+    await workspace.detach();
+    expect(tmux.commands("detach-client")).toEqual([["detach-client", "-s", "dwa"]]);
+    workspace.popup("questions");
+    expect(tmux.commands("display-popup").at(-1)?.slice(1, 8)).toEqual([
+      "-E",
+      "-w",
+      "80%",
+      "-h",
+      "60%",
+      "-T",
+      " Questions ",
+    ]);
   });
 });
 

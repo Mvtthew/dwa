@@ -20,6 +20,8 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - A workflow step ends only through `complete_step` or `fail_step` (from its agent, or from the user with `dwa workflow complete` / `fail`) or its session ending, never because a turn ended or time passed.
 - The workflow engine reads a step at its latest attempt only (`Store.workflowSteps`); a review that sends work back adds attempt rows, it never rewrites old ones.
 - `Workspace.onAgentEvent` listeners run inside the tmux queue: only enqueue work there, never await a `Workspace` call.
+- Colours in the panes come from `src/ui/theme.ts` only, as entries of the terminal's 16-colour palette (`RGBA.fromIndex`). OpenTUI's named helpers (`green`, `blue`, ...) are fixed RGB values that ignore the user's theme; do not use them. Selection is shown in inverse video, never by colour alone.
+- `display-popup` only returns when the popup closes: never run it through the workspace's tmux queue or await it (`Workspace.popup`).
 - A blocking `ask` or `wait_for` has no timeout. Questions are stored and stay open until answered or cancelled.
 - The name "dwa" lives in `src/shared/constants.ts`; import it instead of repeating the string. "Claude Code" must not become part of the product name.
 - `@opentui/core` is pre-1.0 and pinned to an exact version. Upgrade it on purpose, not as part of other work.
@@ -33,10 +35,10 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - `src/providers/` the provider interface and the Claude Code launch command
 - `src/daemon/activity.ts` turns hook events and statusline JSON into agent activity and telemetry
 - `src/cli/hook.ts` holds the `hook` and `statusline` commands Claude Code runs in every session; keep it fast, silent and free of heavy imports
-- `src/ui/` OpenTUI panes: `model.ts` is pure view logic, `agents.ts` and `status.ts` draw it; test with `createTestRenderer` from `@opentui/core/testing`
+- `src/ui/` OpenTUI panes: `model.ts` is pure view logic, `agents.ts` and `status.ts` draw it; `wizard.ts` is the form engine for the popups and `wizards.ts` their screens, the menu included (no terminal code); `theme.ts` holds the colours; test with `createTestRenderer` from `@opentui/core/testing`
 - `src/daemon/messaging.ts` messages and questions: delivery through the mailbox hook with a paste fallback, questions that never expire
 - `src/mcp/server.ts` the MCP server each session runs for the dwa tools; stateless, every tool is a daemon request
-- `src/cli/talk.ts` the user's `ask`, `answer` and `inbox` commands; `palette.ts` the command menu; `init.ts` project setup
+- `src/cli/talk.ts` the user's `ask`, `answer` and `inbox` commands; `palette.ts` lists the project's roles; `init.ts` project setup
 - `src/daemon/workflows.ts` the workflow engine: runs, steps, review loops, live editing, reminders, resume after a restart; `src/shared/workflow.ts` the TOML definition format, parser and writer (pure); `src/cli/workflow.ts` the `workflow` command
 - `examples/agents/` the roles and `examples/workflows/` the workflow `dwa init --roles` copies into a project
 - Never test against the real project's workspace while the user may be using it; use a scratch project via `DWA_PROJECT`
