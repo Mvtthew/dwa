@@ -14,7 +14,7 @@ function runId(value: string | undefined): number {
   return id;
 }
 
-/** `dwa workflow list | run | status | cancel`. */
+/** `dwa workflow list | run | status | cancel | complete | fail`. */
 export async function workflowCommand(projectRoot: string, args: string[]): Promise<number> {
   const [action, target, ...words] = args;
   switch (action) {
@@ -62,6 +62,24 @@ export async function workflowCommand(projectRoot: string, args: string[]): Prom
     case "cancel": {
       const run = await call<WorkflowRunInfo>(projectRoot, "POST", "/workflows/cancel", {
         id: runId(target),
+      });
+      console.log(describeRun(run));
+      return 0;
+    }
+    case "complete":
+    case "fail": {
+      const [step, ...rest] = words;
+      const text = rest.join(" ");
+      if (!target || !step || !text) {
+        console.error(
+          `Usage: ${APP_NAME} workflow ${action} <run> <step> <${action === "complete" ? "result" : "reason"}>`,
+        );
+        return 2;
+      }
+      const run = await call<WorkflowRunInfo>(projectRoot, "POST", `/workflows/step/${action}`, {
+        id: runId(target),
+        step,
+        ...(action === "complete" ? { result: text } : { reason: text }),
       });
       console.log(describeRun(run));
       return 0;

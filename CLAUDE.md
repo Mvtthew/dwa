@@ -17,7 +17,7 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - Never touch the user's own tmux server or config. All tmux calls go to the private server (`tmux -L dwa -f <generated conf>`).
 - Never write to `~/.claude` or the project's `.claude/settings.json`. Per-session settings are generated under `.dwa/run/` and passed with `--settings` and `--mcp-config`.
 - Agent state comes from hooks and the statusline JSON, not from reading the screen.
-- A workflow step ends only through `complete_step` or `fail_step` (or its session ending), never because a turn ended or time passed.
+- A workflow step ends only through `complete_step` or `fail_step` (from its agent, or from the user with `dwa workflow complete` / `fail`) or its session ending, never because a turn ended or time passed.
 - `Workspace.onAgentEvent` listeners run inside the tmux queue: only enqueue work there, never await a `Workspace` call.
 - A blocking `ask` or `wait_for` has no timeout. Questions are stored and stay open until answered or cancelled.
 - The name "dwa" lives in `src/shared/constants.ts`; import it instead of repeating the string. "Claude Code" must not become part of the product name.

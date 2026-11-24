@@ -19,6 +19,12 @@ export interface ServerOptions {
   onShutdown: () => void;
 }
 
+interface StepRequest {
+  agentId?: string;
+  id?: unknown;
+  step?: string;
+}
+
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status });
 }
@@ -140,14 +146,23 @@ export function startServer(options: ServerOptions) {
         return json(await workflows.cancel(Number(input.id)));
       }
       case "POST /workflows/step/complete": {
-        const input = await body<{ agentId?: string; result?: string }>(request);
+        // An agent closes its own step; the user names the run and the step.
+        const input = await body<StepRequest & { result?: string }>(request);
+        const result = input.result ?? "";
         return json(
-          await workflows.completeStep(text(input.agentId, "agentId"), input.result ?? ""),
+          input.agentId
+            ? await workflows.completeStep(input.agentId, result)
+            : await workflows.completeStepOf(Number(input.id), text(input.step, "step"), result),
         );
       }
       case "POST /workflows/step/fail": {
-        const input = await body<{ agentId?: string; reason?: string }>(request);
-        return json(await workflows.failStep(text(input.agentId, "agentId"), input.reason ?? ""));
+        const input = await body<StepRequest & { reason?: string }>(request);
+        const reason = input.reason ?? "";
+        return json(
+          input.agentId
+            ? await workflows.failStep(input.agentId, reason)
+            : await workflows.failStepOf(Number(input.id), text(input.step, "step"), reason),
+        );
       }
       case "POST /notify": {
         const { message } = await body<{ message?: unknown }>(request);

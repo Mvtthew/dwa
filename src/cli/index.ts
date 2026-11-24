@@ -40,6 +40,8 @@ Workflows
   workflow run <name> [input]           Start a run; each step gets its own agent
   workflow status [run]                 Steps and results of a run (the latest when run bare)
   workflow cancel <run>                 Stop a run and its agents
+  workflow complete <run> <step> <result>  Close a running step by hand
+  workflow fail <run> <step> <reason>   Fail a running step by hand
 
 Other
   status     Print the workspace state as JSON

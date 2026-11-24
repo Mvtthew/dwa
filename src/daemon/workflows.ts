@@ -134,35 +134,22 @@ export class Workflows {
 
   /** The calling agent finished its step; `result` is what later steps receive. */
   completeStep(agentId: string, result: string): Promise<WorkflowRunInfo> {
-    return this.serial(async () => {
-      const step = this.requireStep(agentId);
-      if (result.trim() === "") throw new WorkspaceError("The result is empty.");
-      if (result.length > MAX_RESULT_LENGTH) {
-        throw new WorkspaceError(
-          `The result is too long (${result.length} characters, the limit is ${MAX_RESULT_LENGTH}). Give a shorter result, or write the details to a file and name its path.`,
-        );
-      }
-      this.deps.store.finishStep(step.runId, step.stepId, {
-        state: "done",
-        result,
-        now: this.now(),
-      });
-      return this.afterStep(step, agentId);
-    });
+    return this.serial(() => this.complete(this.requireStep(agentId), result));
   }
 
   /** The calling agent cannot finish its step. The run fails. */
   failStep(agentId: string, reason: string): Promise<WorkflowRunInfo> {
-    return this.serial(async () => {
-      const step = this.requireStep(agentId);
-      if (reason.trim() === "") throw new WorkspaceError("The reason is empty.");
-      this.deps.store.finishStep(step.runId, step.stepId, {
-        state: "failed",
-        error: reason,
-        now: this.now(),
-      });
-      return this.afterStep(step, agentId);
-    });
+    return this.serial(() => this.fail(this.requireStep(agentId), reason));
+  }
+
+  /** The user closes a running step by hand, for an agent that will not do it itself. */
+  completeStepOf(runId: number, stepId: string, result: string): Promise<WorkflowRunInfo> {
+    return this.serial(() => this.complete(this.requireRunningStep(runId, stepId), result));
+  }
+
+  /** The user fails a running step by hand. The run fails. */
+  failStepOf(runId: number, stepId: string, reason: string): Promise<WorkflowRunInfo> {
+    return this.serial(() => this.fail(this.requireRunningStep(runId, stepId), reason));
   }
 
   /** Stops a run: its agents are stopped and nothing further starts. */
@@ -209,10 +196,37 @@ export class Workflows {
     });
   }
 
-  private async afterStep(step: WorkflowStepRow, agentId: string): Promise<WorkflowRunInfo> {
+  private complete(step: WorkflowStepRow, result: string): Promise<WorkflowRunInfo> {
+    if (result.trim() === "") throw new WorkspaceError("The result is empty.");
+    if (result.length > MAX_RESULT_LENGTH) {
+      throw new WorkspaceError(
+        `The result is too long (${result.length} characters, the limit is ${MAX_RESULT_LENGTH}). Give a shorter result, or write the details to a file and name its path.`,
+      );
+    }
+    this.deps.store.finishStep(step.runId, step.stepId, {
+      state: "done",
+      result,
+      now: this.now(),
+    });
+    return this.afterStep(step);
+  }
+
+  private fail(step: WorkflowStepRow, reason: string): Promise<WorkflowRunInfo> {
+    if (reason.trim() === "") throw new WorkspaceError("The reason is empty.");
+    this.deps.store.finishStep(step.runId, step.stepId, {
+      state: "failed",
+      error: reason,
+      now: this.now(),
+    });
+    return this.afterStep(step);
+  }
+
+  private async afterStep(step: WorkflowStepRow): Promise<WorkflowRunInfo> {
     const run = this.requireRun(step.runId);
     await this.advance(step.runId);
-    if (!definitionOf(run).steps[step.stepId]?.keep_agent) this.stopAgent(agentId);
+    if (step.agentId && !definitionOf(run).steps[step.stepId]?.keep_agent) {
+      this.stopAgent(step.agentId);
+    }
     return this.status(step.runId);
   }
 
@@ -357,6 +371,18 @@ export class Workflows {
   private requireStep(agentId: string): WorkflowStepRow {
     const step = this.deps.store.runningStepOf(agentId);
     if (!step) throw new WorkspaceError("You are not working on a workflow step.");
+    return step;
+  }
+
+  private requireRunningStep(runId: number, stepId: string): WorkflowStepRow {
+    this.requireRun(runId);
+    const step = this.deps.store.workflowSteps(runId).find((row) => row.stepId === stepId);
+    if (!step) throw new WorkspaceError(`Workflow run #${runId} has no step "${stepId}".`);
+    if (step.state !== "running") {
+      throw new WorkspaceError(
+        `Step "${stepId}" of workflow run #${runId} is ${step.state}, not running.`,
+      );
+    }
     return step;
   }
 }

@@ -287,6 +287,44 @@ describe("when a step does not complete", () => {
   });
 });
 
+describe("closing a step by hand", () => {
+  test("the user completes a stuck step and the run carries on", async () => {
+    await workspace.up();
+    await workflows.start("chain", "", "user");
+    const run = await workflows.completeStepOf(1, "explore", "found by hand");
+    expect(states(run)).toEqual({ explore: "done", build: "running" });
+    expect(run.steps[0]?.result).toBe("found by hand");
+    expect((await agents()).map((entry) => entry.name)).toEqual(["build"]);
+  });
+
+  test("the user fails a step and the run fails", async () => {
+    await workspace.up();
+    await workflows.start("chain", "", "user");
+    const run = await workflows.failStepOf(1, "explore", "wrong approach");
+    expect(run.state).toBe("failed");
+    expect(states(run)).toEqual({ explore: "failed", build: "skipped" });
+    expect(run.steps[0]?.error).toBe("wrong approach");
+    expect(await agents()).toEqual([]);
+  });
+
+  test("only a running step of an existing run can be closed", async () => {
+    await workspace.up();
+    await workflows.start("chain", "", "user");
+    expect(workflows.completeStepOf(2, "explore", "x")).rejects.toThrow(
+      "There is no workflow run #2.",
+    );
+    expect(workflows.completeStepOf(1, "nope", "x")).rejects.toThrow(
+      'Workflow run #1 has no step "nope".',
+    );
+    expect(workflows.completeStepOf(1, "build", "x")).rejects.toThrow(
+      'Step "build" of workflow run #1 is pending, not running.',
+    );
+    expect(workflows.failStepOf(1, "explore", " ")).rejects.toThrow("The reason is empty.");
+    await workflows.settled();
+    expect(states(workflows.status(1))).toEqual({ explore: "running", build: "pending" });
+  });
+});
+
 describe("cancel", () => {
   test("stops the run's agents and starts nothing more", async () => {
     await workspace.up();

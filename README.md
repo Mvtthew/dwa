@@ -107,11 +107,13 @@ bun run dwa workflow list
 bun run dwa workflow run feature "add a --json flag to agent list"
 bun run dwa workflow status         # steps and results of the latest run
 bun run dwa workflow cancel 1
+bun run dwa workflow complete 1 explore "The flag belongs in src/cli/index.ts"   # close a stuck step yourself
+bun run dwa workflow fail 1 build "wrong approach"
 ```
 
 - Steps without a dependency between them run at the same time.
 - `{{input}}` is the text given to the run, and `{{steps.<name>.result}}` is what an earlier step handed over. A step may also set `profile`, `model` and `effort`, and `keep_agent = true` to leave its session open afterwards.
-- A step ends only when its agent calls `complete_step` or `fail_step`. If the agent just stops, it is reminded twice, then the status pane marks the step as needing you. Nothing times out; open the agent and sort it out.
+- A step ends only when its agent calls `complete_step` or `fail_step`. If the agent just stops, it is reminded twice, then the status pane marks the step as needing you. Nothing times out; open the agent and sort it out, or close the step yourself with `workflow complete` or `workflow fail`.
 - If a step fails, steps already running finish, the rest are skipped and the run fails.
 - The run's outcome arrives as a message to whoever started it. Agents can start runs too, with `run_workflow`.
 - Runs are stored, so they continue after a daemon restart. A run uses the file as it was when it started.
