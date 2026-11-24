@@ -40,6 +40,14 @@ bun install
 bun run dwa doctor
 ```
 
+To get a global `dwa` command that runs this checkout:
+
+```sh
+bun link
+```
+
+The examples below use `bun run dwa`; with the link in place, plain `dwa` does the same from any project directory.
+
 ## Usage
 
 ```sh
