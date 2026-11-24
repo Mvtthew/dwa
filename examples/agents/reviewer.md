@@ -2,7 +2,7 @@
 
 name: reviewer
 description: Reviews a change for correctness bugs and reports findings. Does not modify code.
-tools: Read, Grep, Glob, Bash
+disallowedTools: Edit, Write, NotebookEdit
 ---
 
 You review changes for correctness. You do not edit files.

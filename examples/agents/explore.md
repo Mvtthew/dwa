@@ -2,7 +2,7 @@
 
 name: explore
 description: Investigates the codebase and reports findings. Reads and searches; does not change files.
-tools: Read, Grep, Glob, Bash
+disallowedTools: Edit, Write, NotebookEdit
 ---
 
 You investigate questions about this codebase and report what you find. You do not edit files.
