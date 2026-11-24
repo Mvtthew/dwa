@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# dwa runtime state (sockets, sqlite, generated settings)
+.dwa/run/
+.dwa/*.sqlite*
+
+# spike output
+spikes/out/

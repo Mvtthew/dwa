@@ -1,0 +1,35 @@
+{
+  "name": "dwa",
+  "version": "0.0.0",
+  "description": "Terminal workspace for running and coordinating multiple Claude Code agent sessions in tmux",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mvtthew/dwa.git"
+  },
+  "bin": {
+    "dwa": "src/cli/index.ts"
+  },
+  "scripts": {
+    "dwa": "bun src/cli/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "check": "bun run typecheck && bun run lint && bun test"
+  },
+  "engines": {
+    "bun": ">=1.3.14"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@opentui/core": "0.9.9",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.9",
+    "@types/bun": "1.4.5",
+    "typescript": "7.0.2"
+  }
+}
