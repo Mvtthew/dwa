@@ -94,3 +94,38 @@ export async function statuslineCommand(env: Env = process.env): Promise<number>
   await sent;
   return 0;
 }
+
+/** How long the mailbox keeps retrying when the daemon cannot be reached. */
+const MAILBOX_RETRY_LIMIT_MS = 60 * 60 * 1000;
+
+/**
+ * `dwa mailbox`: the session's mailbox hook. It runs in the background (`asyncRewake`) and waits
+ * at the daemon until a message for this agent arrives, then prints it to stderr and exits with
+ * code 2, which wakes the session with that text. Exits quietly when a newer hook takes over.
+ */
+export async function mailboxCommand(env: Env = process.env): Promise<number> {
+  const agentId = env.DWA_AGENT_ID;
+  const projectRoot = env.DWA_PROJECT;
+  if (!agentId || !projectRoot) return 0;
+  const socket = env.DWA_SOCKET || daemonSocketPath(projectRoot);
+  const giveUpAt = Date.now() + MAILBOX_RETRY_LIMIT_MS;
+
+  while (true) {
+    try {
+      const response = await fetch("http://localhost/mailbox/wait", {
+        unix: socket,
+        method: "POST",
+        body: JSON.stringify({ agentId }),
+      });
+      if (!response.ok) return 0;
+      const { messages } = (await response.json()) as { messages?: string[] };
+      if (!messages || messages.length === 0) return 0;
+      process.stderr.write(`${messages.join("\n\n")}\n`);
+      return 2;
+    } catch {
+      // The daemon is restarting or gone. Messages are kept there, so try again for a while.
+      if (Date.now() > giveUpAt) return 0;
+      await Bun.sleep(2000);
+    }
+  }
+}

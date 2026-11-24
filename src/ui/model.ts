@@ -35,6 +35,25 @@ export interface Tile {
   detail: string | null;
 }
 
+/**
+ * How an agent is shown. An agent blocked on a question it asked is "waiting", which matters
+ * more than the tool call that carries the question; when it waits on the user it needs them.
+ */
+export function agentStyle(agent: AgentInfo): ActivityStyle {
+  if (agent.waitingOn === "user") return { glyph: "◆", label: "asks you", tone: "attention" };
+  if (agent.waitingOn) {
+    return { glyph: "◷", label: `waiting on ${agent.waitingOn}`, tone: "muted" };
+  }
+  return activityStyle(agent.activity);
+}
+
+/** The one-line note under an agent: its own progress report while it works, else the detail. */
+export function agentNote(agent: AgentInfo): string | null {
+  if (agent.waitingOn) return null;
+  if (agent.activity === "working" && agent.progress) return agent.progress;
+  return agent.detail;
+}
+
 export function tiles(state: WorkspaceState): Tile[] {
   return state.agents.map((agent, index) => ({
     id: agent.id,
@@ -42,8 +61,8 @@ export function tiles(state: WorkspaceState): Tile[] {
     name: agent.name,
     role: agent.role && agent.role !== agent.name ? agent.role : null,
     open: agent.open,
-    style: activityStyle(agent.activity),
-    detail: agent.detail,
+    style: agentStyle(agent),
+    detail: agentNote(agent),
   }));
 }
 
@@ -123,6 +142,10 @@ export interface StatusModel {
   counts: { working: number; idle: number; needsYou: number; total: number };
   /** Agents (and main) waiting for the user, by name. */
   waiting: { name: string; detail: string | null }[];
+  /** Open questions, oldest first. */
+  questions: { id: number; forUser: boolean; heading: string; text: string }[];
+  /** Latest messages to the user, newest first. */
+  inbox: { from: string; text: string }[];
 }
 
 function limitMeter(label: string, limit: UsageLimit | null | undefined, nowMs: number): Meter {
@@ -145,7 +168,7 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
 
   return {
     subject,
-    subjectStyle: subject ? activityStyle(subject.activity) : null,
+    subjectStyle: subject ? agentStyle(subject) : null,
     model: telemetry?.model ?? null,
     cost: telemetry?.costUsd == null ? null : `$${telemetry.costUsd.toFixed(2)}`,
     context: { label: "context", percent: telemetry?.contextPercent ?? null, note: null },
@@ -162,5 +185,12 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
     waiting: everyone
       .filter((agent) => agent.activity === "needs_user")
       .map((agent) => ({ name: agent.name, detail: agent.detail })),
+    questions: state.questions.map((question) => ({
+      id: question.id,
+      forUser: question.to === "user",
+      heading: `#${question.id} ${question.from} → ${question.to === "user" ? "you" : question.to}`,
+      text: question.question,
+    })),
+    inbox: state.inbox.map((message) => ({ from: message.from, text: message.body })),
   };
 }

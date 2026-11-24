@@ -29,9 +29,10 @@ import {
 } from "../tmux/layout.ts";
 import { parseStatusline, reduceHook, snippet } from "./activity.ts";
 import type { AgentRow, Store } from "./db.ts";
+import { WorkspaceError } from "./errors.ts";
+import { Messaging } from "./messaging.ts";
 
-/** An error caused by the request (unknown agent, workspace not up), reported to the caller as is. */
-export class WorkspaceError extends Error {}
+export { WorkspaceError };
 
 const NAME_PATTERN = /^[A-Za-z0-9][\w.-]{0,39}$/;
 const META_PROFILE = "workspace_profile";
@@ -54,6 +55,8 @@ export interface WorkspaceDeps {
   keyPrefix?: string;
   env?: Record<string, string | undefined>;
   newId?: () => string;
+  /** Timer used for the paste fallback of message delivery; replaced in tests. */
+  schedule?: (callback: () => void, ms: number) => void;
   now?: () => number;
 }
 
@@ -62,6 +65,7 @@ export class Workspace {
   private queue: Promise<unknown> = Promise.resolve();
   /** Latest statusline figures per agent. Refreshed every few seconds, so not persisted. */
   private readonly telemetry = new Map<string, Telemetry>();
+  readonly messaging: Messaging;
   private readonly env: Record<string, string | undefined>;
   private readonly newId: () => string;
   private readonly now: () => number;
@@ -70,6 +74,13 @@ export class Workspace {
     this.env = deps.env ?? process.env;
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.now = deps.now ?? Date.now;
+    this.messaging = new Messaging({
+      store: deps.store,
+      run: deps.run,
+      now: this.now,
+      keyPrefix: deps.keyPrefix ?? DEFAULT_KEY_PREFIX,
+      schedule: deps.schedule,
+    });
   }
 
   /** tmux changes must not interleave, so every operation runs after the previous one ends. */
@@ -100,7 +111,7 @@ export class Workspace {
         profile,
         sessionId,
         name: "main",
-        settingsPath: this.writeSettings(id),
+        ...this.sessionFiles(id, "main"),
       });
       const panes = await createWorkspace(this.deps.run, {
         cwd: this.deps.projectRoot,
@@ -139,7 +150,7 @@ export class Workspace {
         name,
         role: request.role,
         task: request.task,
-        settingsPath: this.writeSettings(id),
+        ...this.sessionFiles(id, name),
       });
       const paneId = await spawnPoolWindow(this.deps.run, {
         cwd: this.deps.projectRoot,
@@ -158,7 +169,7 @@ export class Workspace {
         },
         paneId,
       );
-      return { ...row, telemetry: null, open: false };
+      return { ...row, telemetry: null, waitingOn: null, open: false };
     });
   }
 
@@ -202,6 +213,7 @@ export class Workspace {
       const agent = this.find(state, target);
       await killPane(this.deps.run, agent.paneId);
       this.deps.store.markStopped(agent.id, this.now());
+      this.messaging.agentStopped(agent.id);
       return { ...agent, state: "stopped", open: false };
     });
   }
@@ -227,6 +239,19 @@ export class Workspace {
       const since = change.activity === row.activity ? row.activitySince : now;
       store.setActivity(row.id, change.activity, change.detail, since);
     }
+  }
+
+  /** A progress note an agent reports about its own work. */
+  progress(agentId: string, summary: string, percent?: number): void {
+    const row = this.deps.store.getRunning(agentId);
+    if (!row) throw new WorkspaceError("Unknown agent.");
+    const note = snippet(summary) ?? "";
+    const text =
+      typeof percent === "number"
+        ? `${Math.round(Math.max(0, Math.min(100, percent)))}% ${note}`
+        : note;
+    this.deps.store.setProgress(agentId, text.trim() || null);
+    this.deps.store.addEvent({ agentId, at: this.now(), event: "Progress", summary: text });
   }
 
   /** Stores the figures from a session's statusline. */
@@ -255,7 +280,10 @@ export class Workspace {
     } catch {
       // no server running
     }
-    for (const row of this.deps.store.running()) this.deps.store.markStopped(row.id, this.now());
+    for (const row of this.deps.store.running()) {
+      this.deps.store.markStopped(row.id, this.now());
+      this.messaging.agentStopped(row.id);
+    }
   }
 
   /** Brings the stored state in line with the panes that actually exist, then returns it. */
@@ -274,13 +302,20 @@ export class Workspace {
         if (pane && row.kind === "agent") await killPane(run, row.paneId).catch(() => undefined);
         store.markStopped(row.id, this.now());
         this.telemetry.delete(row.id);
+        this.messaging.agentStopped(row.id);
         continue;
       }
       live.push({
         ...row,
         telemetry: this.telemetry.get(row.id) ?? null,
+        waitingOn: null,
         open: row.kind === "agent" && pane.inWorkspace,
       });
+    }
+
+    const questions = this.messaging.openQuestions();
+    for (const agent of live) {
+      agent.waitingOn = questions.find((question) => question.fromId === agent.id)?.to ?? null;
     }
 
     return {
@@ -289,6 +324,8 @@ export class Workspace {
       up,
       main: live.find((agent) => agent.kind === "main") ?? null,
       agents: live.filter((agent) => agent.kind === "agent"),
+      questions,
+      inbox: this.messaging.inbox(5),
     };
   }
 
@@ -351,27 +388,50 @@ export class Workspace {
       activity: "starting",
       detail: null,
       activitySince: this.now(),
+      progress: null,
     };
     this.deps.store.insertAgent(row);
     return row;
   }
 
-  /** Writes the per-session settings file that points the session's hooks at this daemon. */
-  private writeSettings(agentId: string): string {
-    const self = this.deps.selfArgv.map(tmuxQuote).join(" ");
-    const settings = this.deps.provider.buildSettings({
-      hook: `${self} hook`,
-      statusline: `${self} statusline`,
-    });
-    const path = join(this.deps.runDir, "agents", agentId, "settings.json");
+  /**
+   * Writes the per-session files that connect a session to this daemon: settings (hooks,
+   * statusline, mailbox) and the MCP config for the dwa tools.
+   */
+  private sessionFiles(agentId: string, name: string) {
+    const { provider, selfArgv, runDir } = this.deps;
+    const self = selfArgv.map(tmuxQuote).join(" ");
     const write =
       this.deps.writeFile ??
       ((file, content) => {
         mkdirSync(dirname(file), { recursive: true });
         writeFileSync(file, content);
       });
-    write(path, JSON.stringify(settings, null, 2));
-    return path;
+    const dir = join(runDir, "agents", agentId);
+    const settingsPath = join(dir, "settings.json");
+    const mcpConfigPath = join(dir, "mcp.json");
+    write(
+      settingsPath,
+      JSON.stringify(
+        provider.buildSettings({
+          hook: `${self} hook`,
+          statusline: `${self} statusline`,
+          mailbox: `${self} mailbox`,
+        }),
+        null,
+        2,
+      ),
+    );
+    const [command = "", ...args] = selfArgv;
+    write(
+      mcpConfigPath,
+      JSON.stringify(
+        provider.buildMcpConfig({ command, args: [...args, "mcp"], env: this.paneEnv(agentId) }),
+        null,
+        2,
+      ),
+    );
+    return { settingsPath, mcpConfigPath, systemPrompt: provider.systemPrompt(name) };
   }
 
   private paneEnv(agentId?: string): Record<string, string> {

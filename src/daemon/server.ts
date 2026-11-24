@@ -6,6 +6,7 @@ import type {
   UpRequest,
 } from "../shared/protocol.ts";
 import { TmuxError } from "../tmux/driver.ts";
+import { USER } from "./messaging.ts";
 import { type Workspace, WorkspaceError } from "./workspace.ts";
 
 export interface ServerOptions {
@@ -31,9 +32,20 @@ function requireTarget(input: { target?: unknown }): string {
   return input.target;
 }
 
+function text(value: unknown, field: string): string {
+  if (typeof value !== "string" || value === "") throw new WorkspaceError(`Missing "${field}".`);
+  return value;
+}
+
+/** Who a request acts as: an agent id, or the user when none is given (the CLI and the panes). */
+function sender(value: unknown): string {
+  return typeof value === "string" && value !== "" ? value : USER;
+}
+
 /** The daemon's local API on a Unix socket. The CLI and the UI panes are its clients. */
 export function startServer(options: ServerOptions) {
   const { workspace } = options;
+  const { messaging } = workspace;
 
   const route = async (request: Request): Promise<Response> => {
     const { pathname } = new URL(request.url);
@@ -63,6 +75,48 @@ export function startServer(options: ServerOptions) {
       case "POST /statusline":
         workspace.statusline(await body<StatuslineRequest>(request));
         return json({ ok: true });
+      case "POST /messages": {
+        const input = await body<{ from?: string; to?: string; body?: string }>(request);
+        return json(messaging.send(sender(input.from), text(input.to, "to"), input.body ?? ""));
+      }
+      case "POST /questions": {
+        const input = await body<{
+          from?: string;
+          to?: string;
+          question?: string;
+          options?: unknown;
+        }>(request);
+        const options = Array.isArray(input.options)
+          ? input.options.filter((option): option is string => typeof option === "string")
+          : null;
+        return json(
+          messaging.ask(sender(input.from), text(input.to, "to"), input.question ?? "", options),
+        );
+      }
+      case "POST /questions/wait": {
+        // Held open until the question is answered or cancelled. There is no timeout.
+        const input = await body<{ id?: unknown }>(request);
+        return json(await messaging.waitQuestion(Number(input.id), request.signal));
+      }
+      case "POST /questions/answer": {
+        const input = await body<{ id?: unknown; by?: string; answer?: string }>(request);
+        return json(messaging.answer(Number(input.id), sender(input.by), input.answer ?? ""));
+      }
+      case "POST /questions/cancel": {
+        const input = await body<{ id?: unknown; by?: string }>(request);
+        return json(messaging.cancel(Number(input.id), sender(input.by)));
+      }
+      case "POST /mailbox/wait": {
+        const input = await body<{ agentId?: string }>(request);
+        return json({
+          messages: await messaging.waitMailbox(text(input.agentId, "agentId"), request.signal),
+        });
+      }
+      case "POST /progress": {
+        const input = await body<{ agentId?: string; summary?: string; percent?: number }>(request);
+        workspace.progress(text(input.agentId, "agentId"), input.summary ?? "", input.percent);
+        return json({ ok: true });
+      }
       case "POST /notify": {
         const { message } = await body<{ message?: unknown }>(request);
         if (typeof message === "string" && message) await workspace.notify(message);
@@ -79,7 +133,9 @@ export function startServer(options: ServerOptions) {
 
   return Bun.serve({
     unix: options.socketPath,
-    async fetch(request) {
+    async fetch(request, server) {
+      // Waiting for an answer or for mail keeps a request open for as long as it takes.
+      server.timeout(request, 0);
       try {
         return await route(request);
       } catch (error) {

@@ -30,6 +30,8 @@ function agent(name: string, overrides: Partial<AgentInfo> = {}): AgentInfo {
     detail: null,
     activitySince: 0,
     telemetry: null,
+    progress: null,
+    waitingOn: null,
     open: false,
     ...overrides,
   };
@@ -42,6 +44,8 @@ function workspace(agents: AgentInfo[], main: Partial<AgentInfo> = {}): Workspac
     up: true,
     main: agent("main", { kind: "main", ...main }),
     agents,
+    questions: [],
+    inbox: [],
   };
 }
 
@@ -120,6 +124,59 @@ describe("model", () => {
     ]);
     expect(model.counts).toEqual({ working: 1, idle: 0, needsYou: 1, total: 2 });
     expect(model.waiting).toEqual([{ name: "b", detail: null }]);
+  });
+});
+
+describe("questions and messages", () => {
+  const question = {
+    id: 3,
+    from: "dev",
+    to: "user",
+    fromId: "id-dev",
+    toId: "user",
+    question: "Which database\nshould I use?",
+    options: [],
+    createdAt: NOW,
+  };
+
+  test("an agent that asked the user is shown as asking, one waiting on an agent as waiting", () => {
+    const result = tiles(
+      workspace([
+        agent("dev", { activity: "working", detail: "mcp__dwa__ask", waitingOn: "user" }),
+        agent("rev", { activity: "working", detail: "mcp__dwa__ask", waitingOn: "dev" }),
+        agent("doc", { activity: "working", detail: "Edit", progress: "40% writing" }),
+        agent("ops", { activity: "idle", detail: "done", progress: "90% deploying" }),
+      ]),
+    );
+    expect(result.map((tile) => [tile.style.label, tile.style.tone, tile.detail])).toEqual([
+      ["asks you", "attention", null],
+      ["waiting on dev", "muted", null],
+      ["working", "good", "40% writing"],
+      ["idle", "muted", "done"],
+    ]);
+  });
+
+  test("the status pane lists open questions and recent messages", async () => {
+    const harness = await createTestRenderer({ width: 30, height: 40 });
+    const view = createStatusView(harness.renderer);
+    view.update(
+      {
+        ...workspace([agent("dev", { waitingOn: "user" })]),
+        questions: [question, { ...question, id: 4, from: "rev", to: "dev", toId: "id-dev" }],
+        inbox: [{ id: 1, from: "dev", body: "The fix is ready for review.", createdAt: NOW }],
+      },
+      NOW,
+    );
+    await harness.renderOnce();
+    const frame = harness.captureCharFrame();
+    harness.renderer.destroy();
+    expect(frame).toContain("QUESTIONS 2");
+    expect(frame).toContain("◆ #3 dev → you");
+    expect(frame).toContain("Which database should I u…");
+    expect(frame).toContain("◷ #4 rev → dev");
+    expect(frame).toContain("Ctrl+Q q to answer");
+    expect(frame).toContain("MESSAGES");
+    expect(frame).toContain("The fix is ready for revi…");
   });
 });
 
@@ -248,6 +305,7 @@ describe("panes", () => {
     expect(frame).toContain("NEEDS YOU");
     expect(frame).toContain("◆ dev");
     expect(frame).toContain("Ctrl+Q, then");
+    expect(frame).not.toContain("QUESTIONS");
 
     view.update(workspace([]), NOW);
     await harness.renderOnce();

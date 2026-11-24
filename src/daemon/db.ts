@@ -15,6 +15,32 @@ export interface AgentRow {
   activity: AgentActivity;
   detail: string | null;
   activitySince: number;
+  /** Latest progress note the agent reported itself. */
+  progress: string | null;
+}
+
+/** `fromId` / `toId` are agent ids, or "user". */
+export interface MessageRow {
+  id: number;
+  fromId: string;
+  toId: string;
+  body: string;
+  createdAt: number;
+  deliveredAt: number | null;
+}
+
+export interface QuestionRow {
+  id: number;
+  fromId: string;
+  toId: string;
+  question: string;
+  /** JSON array of suggested answers, or null. */
+  options: string | null;
+  state: "open" | "answered" | "cancelled";
+  answer: string | null;
+  answeredBy: string | null;
+  createdAt: number;
+  answeredAt: number | null;
 }
 
 export interface EventRow {
@@ -54,10 +80,40 @@ const MIGRATIONS = [
      summary   TEXT
    );
    CREATE INDEX events_agent ON events (agent_id, id);`,
+  `ALTER TABLE agents ADD COLUMN progress TEXT;
+   CREATE TABLE messages (
+     id            INTEGER PRIMARY KEY AUTOINCREMENT,
+     from_id       TEXT NOT NULL,
+     to_id         TEXT NOT NULL,
+     body          TEXT NOT NULL,
+     created_at    INTEGER NOT NULL,
+     delivered_at  INTEGER
+   );
+   CREATE INDEX messages_to ON messages (to_id, delivered_at);
+   CREATE TABLE questions (
+     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+     from_id      TEXT NOT NULL,
+     to_id        TEXT NOT NULL,
+     question     TEXT NOT NULL,
+     options      TEXT,
+     state        TEXT NOT NULL,
+     answer       TEXT,
+     answered_by  TEXT,
+     created_at   INTEGER NOT NULL,
+     answered_at  INTEGER
+   );
+   CREATE INDEX questions_state ON questions (state);`,
 ];
 
 const COLUMNS = `id, kind, name, role, profile, session_id AS sessionId, pane_id AS paneId,
-  state, task, created_at AS createdAt, activity, detail, activity_since AS activitySince`;
+  state, task, created_at AS createdAt, activity, detail, activity_since AS activitySince,
+  progress`;
+
+const MESSAGE_COLUMNS = `id, from_id AS fromId, to_id AS toId, body, created_at AS createdAt,
+  delivered_at AS deliveredAt`;
+
+const QUESTION_COLUMNS = `id, from_id AS fromId, to_id AS toId, question, options, state, answer,
+  answered_by AS answeredBy, created_at AS createdAt, answered_at AS answeredAt`;
 
 /** Events kept in the log; older ones are dropped. */
 const MAX_EVENTS = 5000;
@@ -88,8 +144,8 @@ export class Store {
     this.db
       .query(
         `INSERT INTO agents (id, kind, name, role, profile, session_id, pane_id, state, task,
-           created_at, activity, detail, activity_since)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           created_at, activity, detail, activity_since, progress)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -105,6 +161,7 @@ export class Store {
         row.activity,
         row.detail,
         row.activitySince,
+        row.progress,
       );
   }
 
@@ -132,6 +189,98 @@ export class Store {
     this.db
       .query("UPDATE agents SET activity = ?, detail = ?, activity_since = ? WHERE id = ?")
       .run(activity, detail, now, id);
+  }
+
+  setProgress(id: string, progress: string | null): void {
+    this.db.query("UPDATE agents SET progress = ? WHERE id = ?").run(progress, id);
+  }
+
+  /** Any agent by id, running or not (for naming the sender of an old message). */
+  getAgentName(id: string): string | null {
+    const row = this.db.query("SELECT name FROM agents WHERE id = ?").get(id) as {
+      name: string;
+    } | null;
+    return row?.name ?? null;
+  }
+
+  addMessage(message: { fromId: string; toId: string; body: string; createdAt: number }): number {
+    const { lastInsertRowid } = this.db
+      .query("INSERT INTO messages (from_id, to_id, body, created_at) VALUES (?, ?, ?, ?)")
+      .run(message.fromId, message.toId, message.body, message.createdAt);
+    return Number(lastInsertRowid);
+  }
+
+  /** Messages not yet handed to their recipient, oldest first. */
+  pendingMessages(toId: string): MessageRow[] {
+    return this.db
+      .query(
+        `SELECT ${MESSAGE_COLUMNS} FROM messages
+         WHERE to_id = ? AND delivered_at IS NULL ORDER BY id`,
+      )
+      .all(toId) as MessageRow[];
+  }
+
+  markDelivered(ids: number[], now: number): void {
+    const mark = this.db.query("UPDATE messages SET delivered_at = ? WHERE id = ?");
+    this.db.transaction(() => {
+      for (const id of ids) mark.run(now, id);
+    })();
+  }
+
+  /** Latest messages addressed to someone, newest first. */
+  recentMessages(toId: string, limit: number): MessageRow[] {
+    return this.db
+      .query(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE to_id = ? ORDER BY id DESC LIMIT ?`)
+      .all(toId, limit) as MessageRow[];
+  }
+
+  addQuestion(question: {
+    fromId: string;
+    toId: string;
+    question: string;
+    options: string[] | null;
+    createdAt: number;
+  }): number {
+    const { lastInsertRowid } = this.db
+      .query(
+        `INSERT INTO questions (from_id, to_id, question, options, state, created_at)
+         VALUES (?, ?, ?, ?, 'open', ?)`,
+      )
+      .run(
+        question.fromId,
+        question.toId,
+        question.question,
+        question.options ? JSON.stringify(question.options) : null,
+        question.createdAt,
+      );
+    return Number(lastInsertRowid);
+  }
+
+  getQuestion(id: number): QuestionRow | null {
+    return this.db
+      .query(`SELECT ${QUESTION_COLUMNS} FROM questions WHERE id = ?`)
+      .get(id) as QuestionRow | null;
+  }
+
+  /** Questions nobody has answered yet, oldest first. They never expire. */
+  openQuestions(): QuestionRow[] {
+    return this.db
+      .query(`SELECT ${QUESTION_COLUMNS} FROM questions WHERE state = 'open' ORDER BY id`)
+      .all() as QuestionRow[];
+  }
+
+  /** Closes an open question. Returns false when it was already closed. */
+  closeQuestion(
+    id: number,
+    result: { state: "answered" | "cancelled"; answer: string | null; by: string; now: number },
+  ): boolean {
+    const { changes } = this.db
+      .query(
+        `UPDATE questions SET state = ?, answer = ?, answered_by = ?, answered_at = ?
+         WHERE id = ? AND state = 'open'`,
+      )
+      .run(result.state, result.answer, result.by, result.now, id);
+    return changes > 0;
   }
 
   addEvent(event: EventRow): void {

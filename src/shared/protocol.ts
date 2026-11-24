@@ -48,8 +48,31 @@ export interface AgentInfo {
   /** When the activity last changed (ms). */
   activitySince: number;
   telemetry: Telemetry | null;
+  /** Latest progress note the agent reported itself. */
+  progress: string | null;
+  /** Who this agent is blocked on through a question it asked ("user" or an agent name). */
+  waitingOn: string | null;
   /** True when this agent's session is the pane shown under the main session. */
   open: boolean;
+}
+
+/** An open question. `from` and `to` are names ("user" or an agent name). */
+export interface QuestionInfo {
+  id: number;
+  from: string;
+  to: string;
+  fromId: string;
+  toId: string;
+  question: string;
+  options: string[];
+  createdAt: number;
+}
+
+export interface MessageInfo {
+  id: number;
+  from: string;
+  body: string;
+  createdAt: number;
 }
 
 export interface WorkspaceState {
@@ -60,6 +83,10 @@ export interface WorkspaceState {
   main: AgentInfo | null;
   /** Running agents only, oldest first. */
   agents: AgentInfo[];
+  /** Questions waiting for an answer, oldest first. */
+  questions: QuestionInfo[];
+  /** Latest messages sent to the user, newest first. */
+  inbox: MessageInfo[];
 }
 
 export interface SpawnRequest {

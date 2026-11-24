@@ -12,6 +12,10 @@ export interface LaunchRequest {
   task?: string;
   /** Path of the per-session settings file written from `buildSettings`. */
   settingsPath?: string;
+  /** Path of the per-session MCP config written from `buildMcpConfig`. */
+  mcpConfigPath?: string;
+  /** Text appended to the session's system prompt. */
+  systemPrompt?: string;
 }
 
 export interface Launch {
@@ -24,6 +28,14 @@ export interface SessionCommands {
   hook: string;
   /** Shell command that receives the statusline JSON and prints the status line. */
   statusline: string;
+  /** Shell command that waits for messages and wakes the session when one arrives. */
+  mailbox: string;
+}
+
+export interface McpServerCommand {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
 }
 
 /** One coding-agent CLI. Claude Code is the only implementation for now. */
@@ -35,4 +47,8 @@ export interface Provider {
    * telemetry to dwa. It is passed on the command line, so the user's own settings stay untouched.
    */
   buildSettings(commands: SessionCommands): unknown;
+  /** Contents of the per-session MCP config that gives the session the dwa tools. */
+  buildMcpConfig(server: McpServerCommand): unknown;
+  /** Text appended to the system prompt, explaining the workspace and its tools. */
+  systemPrompt(name: string): string;
 }

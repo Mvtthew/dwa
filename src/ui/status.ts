@@ -1,12 +1,16 @@
 import { BoxRenderable, bold, type CliRenderer, dim } from "@opentui/core";
 import type { WorkspaceState } from "../shared/protocol.ts";
-import { bar, formatKey, type Meter, percentTone, statusModel } from "./model.ts";
+import { bar, fit, formatKey, type Meter, percentTone, statusModel } from "./model.ts";
 import { createText, type Part, styled } from "./text.ts";
 import { tone } from "./theme.ts";
 
 export interface StatusView {
   update(state: WorkspaceState, nowMs: number): void;
   showMessage(message: string): void;
+}
+
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function meter(entry: Meter, width: number): Part[][] {
@@ -69,9 +73,29 @@ export function createStatusView(renderer: CliRenderer): StatusView {
         }
       }
 
+      if (model.questions.length > 0) {
+        const mine = model.questions.some((question) => question.forUser);
+        const title = bold(`QUESTIONS ${model.questions.length}`);
+        lines.push([], [mine ? tone("attention", title) : title]);
+        for (const question of model.questions.slice(0, 4)) {
+          lines.push([question.forUser ? tone("attention", "◆ ") : dim("◷ "), question.heading]);
+          lines.push([dim(`  ${fit(oneLine(question.text), width - 2)}`)]);
+        }
+        lines.push([dim(`  ${formatKey(state.keyPrefix)} q to answer`)]);
+      }
+
+      if (model.inbox.length > 0) {
+        lines.push([], [bold("MESSAGES")]);
+        for (const message of model.inbox.slice(0, 3)) {
+          lines.push([message.from]);
+          lines.push([dim(`  ${fit(oneLine(message.text), width - 2)}`)]);
+        }
+      }
+
       lines.push([], [bold("KEYS"), dim(`  ${formatKey(state.keyPrefix)}, then`)]);
       lines.push([dim("1-9 open agent  x close")]);
-      lines.push([dim("0 main  z zoom  d detach")]);
+      lines.push([dim("0 main  q answer  z zoom")]);
+      lines.push([dim("d detach")]);
 
       text.content = styled(lines);
     },

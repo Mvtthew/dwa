@@ -25,6 +25,12 @@ Agents
   agent open <name|number>              Show an agent's session under the main session
   agent close                           Hide the open agent (it keeps running)
   agent stop <name|number>              End an agent's session
+  agent send <name> <text>              Send a message to an agent
+
+Talking to agents
+  ask <name> <question>                 Ask an agent and wait for its answer
+  answer [id] [text]                    Answer an open question (asks which one when run bare)
+  inbox                                 Show messages agents sent to you
 
 Other
   status     Print the workspace state as JSON
@@ -101,6 +107,15 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
     case "close":
       await call(projectRoot, "POST", "/agents/close");
       return 0;
+    case "send": {
+      const [, , ...words] = positionals;
+      const sent = await call<{ to: string }>(projectRoot, "POST", "/messages", {
+        to: target,
+        body: words.join(" "),
+      });
+      console.log(`Message sent to ${sent.to}.`);
+      return 0;
+    }
     case "stop": {
       const agent = await call<AgentInfo>(projectRoot, "POST", "/agents/stop", { target });
       console.log(`Stopped agent ${agent.name}.`);
@@ -138,6 +153,11 @@ async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   if (command === "hook") return (await import("./hook.ts")).hookCommand(rest[0]);
   if (command === "statusline") return (await import("./hook.ts")).statuslineCommand();
+  if (command === "mailbox") return (await import("./hook.ts")).mailboxCommand();
+  if (command === "mcp") {
+    await (await import("../mcp/server.ts")).runMcp();
+    return new Promise<number>(() => {});
+  }
   const projectRoot = findProjectRoot();
   switch (command) {
     case "up": {
@@ -165,6 +185,10 @@ async function main(argv: string[]): Promise<number> {
       }
       console.log("Workspace stopped.");
       return 0;
+    case "ask":
+    case "answer":
+    case "inbox":
+      return (await import("./talk.ts")).talkCommand(projectRoot, command, rest);
     case "status":
       console.log(JSON.stringify(await call(projectRoot, "GET", "/state"), null, 2));
       return 0;

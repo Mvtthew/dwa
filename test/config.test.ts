@@ -181,3 +181,14 @@ describe("tmux helpers", () => {
     ]);
   });
 });
+
+describe("pickAnswer", () => {
+  test("a number picks the suggested answer, anything else is the answer itself", async () => {
+    const { pickAnswer } = await import("../src/cli/talk.ts");
+    expect(pickAnswer(" 2 ", ["yes", "no"])).toBe("no");
+    expect(pickAnswer("3", ["yes", "no"])).toBe("3");
+    expect(pickAnswer("7", [])).toBe("7");
+    expect(pickAnswer("  use postgres ", ["yes"])).toBe("use postgres");
+    expect(pickAnswer("", ["yes"])).toBe("");
+  });
+});

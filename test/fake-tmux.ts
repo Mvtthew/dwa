@@ -75,6 +75,9 @@ export class FakeTmux {
         return "";
       case "set-hook":
       case "display-message":
+      case "set-buffer":
+      case "paste-buffer":
+      case "send-keys":
         return "";
       default:
         throw new Error(`FakeTmux: unsupported command ${name}`);

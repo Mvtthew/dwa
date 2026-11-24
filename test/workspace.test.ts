@@ -19,10 +19,13 @@ let tmux: FakeTmux;
 let store: Store;
 let workspace: Workspace;
 let files: Map<string, string>;
+/** Paste-fallback timers the workspace asked for; a test runs them by hand. */
+let scheduled: (() => void)[];
 
 beforeEach(() => {
   tmux = new FakeTmux();
   files = new Map();
+  scheduled = [];
   store = new Store(":memory:");
   let id = 0;
   workspace = new Workspace({
@@ -35,6 +38,7 @@ beforeEach(() => {
     runDir: "/project/.dwa/run",
     writeFile: (path, content) => files.set(path, content),
     loadConfig: async () => config,
+    schedule: (callback) => scheduled.push(callback),
     env: {},
     newId: () => `id-${++id}`,
     now: () => 1000 + id,
@@ -52,7 +56,8 @@ describe("up", () => {
     const panes = [...tmux.panes.values()];
     expect(panes.map((pane) => pane.window)).toEqual(Array(3).fill(WORKSPACE_WINDOW));
     expect(panes[0]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "status"]);
-    expect(panes[1]?.argv).toEqual([
+    const mainArgv = panes[1]?.argv ?? [];
+    expect(mainArgv.slice(0, 9)).toEqual([
       "/bin/claude_me",
       "--session-id",
       "id-2",
@@ -60,7 +65,12 @@ describe("up", () => {
       "main",
       "--settings",
       "/project/.dwa/run/agents/id-1/settings.json",
+      "--mcp-config",
+      "/project/.dwa/run/agents/id-1/mcp.json",
     ]);
+    expect(mainArgv[9]).toBe("--append-system-prompt");
+    expect(mainArgv[10]).toContain('You are "main"');
+    expect(mainArgv).toHaveLength(11);
     expect(panes[2]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "agents"]);
     expect(panes[1]?.env).toMatchObject({
       DWA_PROJECT: "/project",
@@ -105,18 +115,18 @@ describe("agents", () => {
     expect(agent.name).toBe("explore");
     expect(agent.open).toBe(false);
     expect(tmux.windowOf(agent.paneId)).toBe("explore");
-    expect(tmux.panes.get(agent.paneId)?.argv).toEqual([
+    const argv = tmux.panes.get(agent.paneId)?.argv ?? [];
+    expect(argv.slice(0, 5)).toEqual([
       "/bin/claude_me",
       "--session-id",
       "id-4",
       "--name",
       "explore",
-      "--settings",
-      "/project/.dwa/run/agents/id-3/settings.json",
-      "--agent",
-      "explore",
-      "find the bug",
     ]);
+    expect(argv[6]).toBe("/project/.dwa/run/agents/id-3/settings.json");
+    expect(argv[10]).toContain('You are "explore"');
+    // The role and the task come last, after everything dwa adds.
+    expect(argv.slice(11)).toEqual(["--agent", "explore", "find the bug"]);
   });
 
   test("a per-agent profile wins over the workspace profile", async () => {
@@ -217,6 +227,20 @@ describe("live state", () => {
     const settings = JSON.parse(files.get("/project/.dwa/run/agents/id-1/settings.json") ?? "{}");
     expect(settings.hooks.Stop[0].hooks[0].command).toBe("'bun' '/dwa/cli.ts' hook Stop");
     expect(settings.statusLine.command).toBe("'bun' '/dwa/cli.ts' statusline");
+    expect(settings.permissions.allow).toEqual(["mcp__dwa"]);
+    // The mailbox hook is armed where a session can go idle, and only there.
+    expect(settings.hooks.Stop[0].hooks[1]).toMatchObject({
+      command: "'bun' '/dwa/cli.ts' mailbox",
+      asyncRewake: true,
+    });
+    expect(settings.hooks.SessionStart[0].hooks).toHaveLength(2);
+    expect(settings.hooks.PreToolUse[0].hooks).toHaveLength(1);
+    const mcp = JSON.parse(files.get("/project/.dwa/run/agents/id-1/mcp.json") ?? "{}");
+    expect(mcp.mcpServers.dwa).toMatchObject({
+      command: "bun",
+      args: ["/dwa/cli.ts", "mcp"],
+      env: { DWA_AGENT_ID: "id-1", DWA_PROJECT: "/project", DWA_SOCKET: "/tmp/dwa.sock" },
+    });
   });
 
   test("hook events move an agent through working, needs_user and idle", async () => {
@@ -291,6 +315,153 @@ describe("live state", () => {
       fiveHour: null,
       sevenDay: null,
     });
+  });
+});
+
+describe("messaging", () => {
+  async function team() {
+    const { main } = await workspace.up();
+    const dev = await workspace.spawn({ name: "dev" });
+    const rev = await workspace.spawn({ name: "rev" });
+    return { main: main?.id ?? "", dev: dev.id, rev: rev.id, m: workspace.messaging };
+  }
+
+  test("a message reaches the recipient's waiting mailbox hook", async () => {
+    const { dev, rev, m } = await team();
+    const mailbox = m.waitMailbox(rev);
+    expect(m.send(dev, "rev", "tests are green")).toMatchObject({ to: "rev" });
+    expect(await mailbox).toEqual(['[dwa] Message from agent "dev":\ntests are green']);
+    expect(store.pendingMessages(rev)).toEqual([]);
+  });
+
+  test("a message sent while no hook waits is handed to the next one", async () => {
+    const { dev, rev, m } = await team();
+    m.send("user", "rev", "please stop");
+    m.send(dev, "rev", "second");
+    expect(await m.waitMailbox(rev)).toEqual([
+      "[dwa] Message from the user:\nplease stop",
+      '[dwa] Message from agent "dev":\nsecond',
+    ]);
+  });
+
+  test("a newer mailbox hook replaces the older one", async () => {
+    const { rev, m } = await team();
+    const first = m.waitMailbox(rev);
+    const second = m.waitMailbox(rev);
+    expect(await first).toEqual([]);
+    m.send("user", "rev", "hi");
+    expect(await second).toHaveLength(1);
+  });
+
+  test("a hook that disconnects is forgotten, so its messages are not lost", async () => {
+    const { rev, m } = await team();
+    const abort = new AbortController();
+    void m.waitMailbox(rev, abort.signal);
+    abort.abort();
+    m.send("user", "rev", "hi");
+    expect(store.pendingMessages(rev)).toHaveLength(1);
+  });
+
+  test("without a hook, a message is pasted into an idle session and queued for a busy one", async () => {
+    const { rev, m } = await team();
+    workspace.hook({ agentId: rev, event: "UserPromptSubmit", input: {} });
+    m.send("user", "rev", "hello");
+    await scheduled.shift()?.();
+    await Bun.sleep(0);
+    expect(tmux.commands("paste-buffer")).toHaveLength(0);
+    expect(store.pendingMessages(rev)).toHaveLength(1);
+
+    workspace.hook({ agentId: rev, event: "Stop", input: {} });
+    m.flush(rev);
+    scheduled.at(-1)?.();
+    await Bun.sleep(400);
+    expect(tmux.commands("set-buffer").at(-1)?.at(-1)).toBe("[dwa] Message from the user:\nhello");
+    expect(tmux.commands("paste-buffer")).toHaveLength(1);
+    expect(tmux.commands("send-keys").at(-1)?.at(-1)).toBe("Enter");
+    expect(store.pendingMessages(rev)).toEqual([]);
+  });
+
+  test("messages to the user land in the inbox", async () => {
+    const { dev, m } = await team();
+    m.send(dev, "user", "done with the fix");
+    const state = await workspace.state();
+    expect(state.inbox.map((entry) => [entry.from, entry.body])).toEqual([
+      ["dev", "done with the fix"],
+    ]);
+  });
+
+  test("ask blocks until the addressed agent answers", async () => {
+    const { dev, rev, m } = await team();
+    const mailbox = m.waitMailbox(rev);
+    const question = m.ask(dev, "rev", "merge now?", ["yes", "no"]);
+    expect((await mailbox)[0]).toContain(`Question #${question.id}: merge now?`);
+
+    let settled = false;
+    const waiting = m.waitQuestion(question.id).then((result) => {
+      settled = true;
+      return result;
+    });
+    await Bun.sleep(5);
+    expect(settled).toBe(false);
+    const state = await workspace.state();
+    expect(state.agents.find((agent) => agent.name === "dev")?.waitingOn).toBe("rev");
+    expect(state.questions).toMatchObject([{ from: "dev", to: "rev", options: ["yes", "no"] }]);
+
+    m.answer(question.id, rev, "yes");
+    expect(await waiting).toMatchObject({ state: "answered", answer: "yes", answeredBy: rev });
+    expect((await workspace.state()).questions).toEqual([]);
+  });
+
+  test("the user can answer any question; other agents cannot", async () => {
+    const { main, dev, m } = await team();
+    const question = m.ask(dev, "rev", "merge now?", null);
+    expect(() => m.answer(question.id, main, "yes")).toThrow("not addressed to you");
+    expect(m.answer(question.id, "user", "no")).toMatchObject({ answer: "no" });
+    expect(() => m.answer(question.id, "user", "again")).toThrow("already answered");
+  });
+
+  test("a question to the user stays open across waits and is answered later", async () => {
+    const { dev, m } = await team();
+    const question = m.ask(dev, "user", "which database?", null);
+    const interrupted = new AbortController();
+    void m.waitQuestion(question.id, interrupted.signal);
+    interrupted.abort();
+    // The agent's tool call ended, but the question is still there.
+    expect((await workspace.state()).questions).toHaveLength(1);
+    m.answer(question.id, "user", "postgres");
+    // Nobody was waiting on the call any more, so the answer is sent as a message instead.
+    expect(await m.waitMailbox(dev)).toEqual([
+      '[dwa] Message from the user:\nAnswer to your question #1 ("which database?"): postgres',
+    ]);
+    expect(await m.waitQuestion(question.id)).toMatchObject({ state: "answered" });
+  });
+
+  test("stopping an agent cancels the questions it was part of", async () => {
+    const { dev, m } = await team();
+    const toRev = m.ask(dev, "rev", "ok?", null);
+    const waiting = m.waitQuestion(toRev.id);
+    await workspace.stop("rev");
+    expect(await waiting).toMatchObject({
+      state: "cancelled",
+      answer: "rev stopped before answering",
+    });
+  });
+
+  test("bad requests are refused with a clear message", async () => {
+    const { dev, m } = await team();
+    expect(() => m.send(dev, "nobody", "x")).toThrow('No running agent "nobody"');
+    expect(() => m.send(dev, "dev", "x")).toThrow("yourself");
+    expect(() => m.send(dev, "rev", "  ")).toThrow("empty");
+    expect(() => m.answer(99, "user", "x")).toThrow("no question #99");
+  });
+
+  test("progress notes are stored on the agent", async () => {
+    const { dev } = await team();
+    workspace.progress(dev, "running the test suite\nmore", 40);
+    const state = await workspace.state();
+    expect(state.agents.find((agent) => agent.name === "dev")?.progress).toBe(
+      "40% running the test suite",
+    );
   });
 });
 
