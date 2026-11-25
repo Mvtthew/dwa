@@ -1,7 +1,19 @@
+import { dirname, resolve } from "node:path";
 import { z } from "zod";
-import { CLAUDE_COMMAND_ENV, DEFAULT_CLAUDE_COMMAND } from "./constants.ts";
+import {
+  ConfigError,
+  capabilityFields,
+  EffortSchema,
+  formatIssues,
+  layerCapabilities,
+  ModelSchema,
+  NAME_PATTERN,
+  refuseBothToolLists,
+} from "./capabilities.ts";
+import { APP_NAME, CLAUDE_COMMAND_ENV, DEFAULT_CLAUDE_COMMAND } from "./constants.ts";
 import { expandPath, projectConfigPath, userConfigPath } from "./paths.ts";
-import { EFFORT_LEVELS } from "./roles.ts";
+
+export { ConfigError, EffortSchema, ModelSchema };
 
 type Env = Record<string, string | undefined>;
 
@@ -12,6 +24,12 @@ const ProfileSchema = z.strictObject({
   args: z.array(z.string()).default([]),
   /** Extra environment variables for sessions using this profile. */
   env: z.record(z.string(), z.string()).default({}),
+  /**
+   * The Claude config directory this command uses, when it is not `~/.claude` and dwa cannot
+   * tell (a wrapper that sets `CLAUDE_CONFIG_DIR` in a way it cannot read). Only used to keep
+   * the personal `CLAUDE.md` in it out of sessions; nothing is written there.
+   */
+  config_dir: z.string().min(1).optional(),
 });
 
 const KeysSchema = z.strictObject({
@@ -26,41 +44,58 @@ const KeysSchema = z.strictObject({
     .optional(),
 });
 
-/** Model for a session, as the Claude command's `--model` takes it (an alias or a full name). */
-export const ModelSchema = z.string().min(1);
-/** Effort for a session, passed with `--effort`. */
-export const EffortSchema = z.enum(EFFORT_LEVELS);
-
 /**
- * Model and effort for agents that say nothing themselves. An agent's own setting wins, then
- * its role file (`model:` / `effort:` in `.claude/agents/<role>.md`), then these. The main
- * session is not affected; it has its own `[main]` section.
+ * What every session gets unless its role says otherwise: the lowest layer under the role files
+ * in `.dwa/roles/`. The main session is a role too, so these apply to it as well.
  */
-const DefaultsSchema = z.strictObject({
-  model: ModelSchema.optional(),
-  effort: EffortSchema.optional(),
-});
+const DefaultsSchema = z.strictObject(capabilityFields).superRefine(refuseBothToolLists);
 
 /**
- * Model and effort for the main session only. They are placed after the profile's own
- * arguments, so they win over a model set there.
+ * The main session. It runs as a role (`.dwa/roles/main.toml` unless another is named here);
+ * a model or effort given here wins over the role's.
  */
 const MainSchema = z.strictObject({
+  role: z.string().regex(NAME_PATTERN).optional(),
   model: ModelSchema.optional(),
   effort: EffortSchema.optional(),
 });
 
-/** An agent started together with the workspace. */
-const AgentSchema = z.strictObject({
-  name: z.string().min(1),
-  /** Agent definition to run as (a `.claude/agents/<role>.md` file). */
-  role: z.string().optional(),
-  profile: z.string().optional(),
-  model: ModelSchema.optional(),
-  effort: EffortSchema.optional(),
-  /** First prompt for the session. */
-  task: z.string().optional(),
+/** An MCP server roles can list by name. The fields are those of Claude Code's MCP config. */
+const McpServerSchema = z.union([
+  z.strictObject({
+    type: z.literal("stdio").optional(),
+    command: z.string().min(1),
+    args: z.array(z.string()).default([]),
+    env: z.record(z.string(), z.string()).default({}),
+  }),
+  z.strictObject({
+    type: z.enum(["http", "sse"]),
+    url: z.string().min(1),
+    headers: z.record(z.string(), z.string()).default({}),
+  }),
+]);
+
+/** A plugin roles can list by name: a directory, relative to the project (or to the personal config directory). */
+const PluginSchema = z.strictObject({
+  path: z.string().min(1),
 });
+
+const catalogue = <T extends z.ZodType>(entry: T) =>
+  z.record(z.string().regex(NAME_PATTERN, "use letters, digits, '.', '_' and '-' only"), entry);
+
+/** An agent started together with the workspace. */
+const AgentSchema = z
+  .strictObject({
+    name: z.string().min(1),
+    /** Role to run as (a `.dwa/roles/<role>.toml` file). */
+    role: z.string().optional(),
+    profile: z.string().optional(),
+    /** First prompt for the session. */
+    task: z.string().optional(),
+    /** Anything set here replaces what the role says, for this agent only. */
+    ...capabilityFields,
+  })
+  .superRefine(refuseBothToolLists);
 
 const LayoutSchema = z.strictObject({
   /** Width of the status pane in columns. */
@@ -79,12 +114,18 @@ const ConfigSchema = z.strictObject({
   layout: LayoutSchema.default({}),
   defaults: DefaultsSchema.default({}),
   main: MainSchema.default({}),
+  mcp: catalogue(McpServerSchema)
+    .refine((servers) => !(APP_NAME in servers), `"${APP_NAME}" is the workspace's own server`)
+    .default({}),
+  plugins: catalogue(PluginSchema).default({}),
 });
 
 export type Profile = z.infer<typeof ProfileSchema>;
 export type Config = z.infer<typeof ConfigSchema>;
 export type AgentConfig = z.infer<typeof AgentSchema>;
 export type LayoutConfig = z.infer<typeof LayoutSchema>;
+export type McpServerConfig = z.infer<typeof McpServerSchema>;
+export type PluginConfig = z.infer<typeof PluginSchema>;
 
 export interface ResolvedProfile {
   /** Profile name, or "env" / "default" when no named profile was used. */
@@ -93,9 +134,9 @@ export interface ResolvedProfile {
   command: string;
   args: string[];
   env: Record<string, string>;
+  /** The profile's `config_dir`, expanded; absent when it is not set. */
+  configDir?: string;
 }
-
-export class ConfigError extends Error {}
 
 export const EMPTY_CONFIG: Config = {
   profiles: {},
@@ -104,9 +145,15 @@ export const EMPTY_CONFIG: Config = {
   layout: {},
   defaults: {},
   main: {},
+  mcp: {},
+  plugins: {},
 };
 
-export function parseConfig(text: string, source: string): Config {
+/**
+ * Parses one config file. With `base` (the directory relative paths in this file start from),
+ * plugin paths come back absolute, so they still mean the same after the two files are merged.
+ */
+export function parseConfig(text: string, source: string, base?: string): Config {
   let raw: unknown;
   try {
     raw = Bun.TOML.parse(text);
@@ -114,18 +161,22 @@ export function parseConfig(text: string, source: string): Config {
     throw new ConfigError(`${source}: invalid TOML: ${(error as Error).message}`);
   }
   const result = ConfigSchema.safeParse(raw);
-  if (!result.success) {
-    const issues = result.error.issues
-      .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
-      .join("; ");
-    throw new ConfigError(`${source}: ${issues}`);
-  }
-  return result.data;
+  if (!result.success) throw new ConfigError(`${source}: ${formatIssues(result.error)}`);
+  const config = result.data;
+  if (base === undefined) return config;
+  const plugins = Object.fromEntries(
+    Object.entries(config.plugins).map(([name, plugin]) => [
+      name,
+      { ...plugin, path: resolve(base, expandPath(plugin.path)) },
+    ]),
+  );
+  return { ...config, plugins };
 }
 
 /**
- * Project settings override personal ones. Profiles, keys and layout are merged field by field;
- * the list of agents to start is the project's when it has one, otherwise the personal one.
+ * Project settings override personal ones. Profiles, keys, layout and the two catalogues are
+ * merged entry by entry; the list of agents to start is the project's when it has one, otherwise
+ * the personal one.
  */
 export function mergeConfig(user: Config, project: Config): Config {
   return {
@@ -134,21 +185,25 @@ export function mergeConfig(user: Config, project: Config): Config {
     keys: { ...user.keys, ...project.keys },
     agents: project.agents.length > 0 ? project.agents : user.agents,
     layout: { ...user.layout, ...project.layout },
-    defaults: { ...user.defaults, ...project.defaults },
+    // Layered like roles are, so one file's allow list and the other's deny list of tools
+    // do not both survive.
+    defaults: layerCapabilities(user.defaults, project.defaults),
     main: { ...user.main, ...project.main },
+    mcp: { ...user.mcp, ...project.mcp },
+    plugins: { ...user.plugins, ...project.plugins },
   };
 }
 
-async function readConfig(path: string): Promise<Config> {
+async function readConfig(path: string, base: string): Promise<Config> {
   const file = Bun.file(path);
   if (!(await file.exists())) return EMPTY_CONFIG;
-  return parseConfig(await file.text(), path);
+  return parseConfig(await file.text(), path, base);
 }
 
 export async function loadConfig(projectRoot: string, env: Env = process.env): Promise<Config> {
   const [user, project] = await Promise.all([
-    readConfig(userConfigPath(env)),
-    readConfig(projectConfigPath(projectRoot)),
+    readConfig(userConfigPath(env), dirname(userConfigPath(env))),
+    readConfig(projectConfigPath(projectRoot), projectRoot),
   ]);
   return mergeConfig(user, project);
 }
@@ -180,6 +235,7 @@ export function resolveProfile(
       command: expandPath(profile.command, env),
       args: profile.args,
       env: profile.env,
+      configDir: profile.config_dir ? expandPath(profile.config_dir, env) : undefined,
     };
   };
 

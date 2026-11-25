@@ -201,10 +201,10 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
     "spawn_agent",
     {
       description:
-        "Start another session in this workspace. Give it a task to begin with, and optionally the name of an agent definition (role) to run as.",
+        "Start another session in this workspace. Give it a task to begin with, and the name of a role to run as. The role decides which tools, MCP servers, plugins and skills the session has; you can take some of them away for this session, but not add any.",
       inputSchema: {
         name: z.string().optional(),
-        role: z.string().optional().describe("An agent definition from .claude/agents."),
+        role: z.string().optional().describe("A role of this workspace (a file in .dwa/roles)."),
         task: z.string().optional().describe("The first prompt for the new session."),
         profile: z.string().optional(),
         model: z
@@ -212,11 +212,22 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
           .optional()
           .describe("Only to override; by default the role or the workspace decides."),
         effort: z.enum(EFFORT_LEVELS).optional(),
+        deny_tools: z
+          .array(z.string())
+          .optional()
+          .describe("Built-in tools to take away from the role, such as Edit or Bash."),
+        deny: z
+          .array(z.string())
+          .optional()
+          .describe("Extra permission rules to refuse, such as Bash(git push *)."),
+        mcp: z.array(z.string()).optional().describe("Keep only these of the role's MCP servers."),
+        plugins: z.array(z.string()).optional().describe("Keep only these of the role's plugins."),
+        skills: z.array(z.string()).optional().describe("Keep only these of the role's skills."),
       },
     },
     (request) =>
       tool(async () => {
-        const agent = await api<AgentInfo>("POST", "/agents", request);
+        const agent = await api<AgentInfo>("POST", "/agents", { ...request, narrowOnly: true });
         return `Started agent "${agent.name}".`;
       }),
   );

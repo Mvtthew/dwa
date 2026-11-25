@@ -284,13 +284,19 @@ describe("the menu", () => {
     });
     const menu = await menuScreen(api);
     const dev = await next(menu, "dev");
-    expect([...buttons(dev).keys()]).toEqual(["Hide it", "Send a message…", "Stop it…", "Back"]);
+    expect([...buttons(dev).keys()]).toEqual([
+      "Hide it",
+      "Tools…",
+      "Send a message…",
+      "Stop it…",
+      "Back",
+    ]);
     await press(dev, "Hide it");
     await press(await next(dev, "Send a message…"), "Send", { text: "status?" });
     await press(await next(dev, "Stop it…"), "Yes, stop it");
 
     const main = await next(menu, "main");
-    expect([...buttons(main).keys()]).toEqual(["Focus it", "Send a message…", "Back"]);
+    expect([...buttons(main).keys()]).toEqual(["Focus it", "Tools…", "Send a message…", "Back"]);
     await press(main, "Focus it");
     expect([...buttons(await next(menu, "rev")).keys()][0]).toBe("Show it under main");
 

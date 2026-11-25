@@ -168,6 +168,13 @@ const MIGRATIONS = [
    CREATE INDEX workflow_steps_agent ON workflow_steps (agent_id);`,
   `ALTER TABLE workflow_steps ADD COLUMN feedback TEXT;
    ALTER TABLE workflow_steps ADD COLUMN question_id INTEGER;`,
+  "ALTER TABLE agents ADD COLUMN launch TEXT;",
+  `ALTER TABLE agents ADD COLUMN request TEXT;
+   ALTER TABLE agents ADD COLUMN overrides TEXT;
+   ALTER TABLE agents ADD COLUMN pending_restart INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE agents ADD COLUMN blocked TEXT;`,
+  // NULL for sessions from before this column: they are taken to have a conversation.
+  "ALTER TABLE agents ADD COLUMN had_turn INTEGER;",
 ];
 
 const COLUMNS = `id, kind, name, role, profile, session_id AS sessionId, pane_id AS paneId,
@@ -235,6 +242,94 @@ export class Store {
         row.activitySince,
         row.progress,
       );
+  }
+
+  /** Records what a session was started with (the resolved session, as JSON). */
+  setLaunch(id: string, launch: string): void {
+    this.db.query("UPDATE agents SET launch = ? WHERE id = ?").run(launch, id);
+  }
+
+  getLaunch(id: string): string | null {
+    const row = this.db.query("SELECT launch FROM agents WHERE id = ?").get(id) as {
+      launch: string | null;
+    } | null;
+    return row?.launch ?? null;
+  }
+
+  /** What a session was asked to be started with, so it can be started again the same way. */
+  setRequest(id: string, request: string): void {
+    this.db.query("UPDATE agents SET request = ? WHERE id = ?").run(request, id);
+  }
+
+  getRequest(id: string): string | null {
+    const row = this.db.query("SELECT request FROM agents WHERE id = ?").get(id) as {
+      request: string | null;
+    } | null;
+    return row?.request ?? null;
+  }
+
+  /** Capability values changed for one session while it ran. */
+  setOverrides(id: string, overrides: string | null): void {
+    this.db.query("UPDATE agents SET overrides = ? WHERE id = ?").run(overrides, id);
+  }
+
+  getOverrides(id: string): string | null {
+    const row = this.db.query("SELECT overrides FROM agents WHERE id = ?").get(id) as {
+      overrides: string | null;
+    } | null;
+    return row?.overrides ?? null;
+  }
+
+  /** Tools a running session still has but is refused, as a JSON list of names. */
+  setBlocked(id: string, blocked: string | null): void {
+    this.db.query("UPDATE agents SET blocked = ? WHERE id = ?").run(blocked, id);
+  }
+
+  getBlocked(id: string): string | null {
+    const row = this.db.query("SELECT blocked FROM agents WHERE id = ?").get(id) as {
+      blocked: string | null;
+    } | null;
+    return row?.blocked ?? null;
+  }
+
+  /** Whether the session has a conversation yet: it does from its first prompt on. */
+  setHadTurn(id: string, had: boolean): void {
+    this.db.query("UPDATE agents SET had_turn = ? WHERE id = ?").run(had ? 1 : 0, id);
+  }
+
+  /** False only when the session is known to have had no prompt yet. */
+  hadTurn(id: string): boolean {
+    const row = this.db.query("SELECT had_turn AS had FROM agents WHERE id = ?").get(id) as {
+      had: number | null;
+    } | null;
+    return row?.had !== 0;
+  }
+
+  /** Marks a session to be restarted when its turn ends. */
+  setPendingRestart(id: string, pending: boolean): void {
+    this.db.query("UPDATE agents SET pending_restart = ? WHERE id = ?").run(pending ? 1 : 0, id);
+  }
+
+  pendingRestart(id: string): boolean {
+    const row = this.db
+      .query("SELECT pending_restart AS pending FROM agents WHERE id = ?")
+      .get(id) as { pending: number } | null;
+    return row?.pending === 1;
+  }
+
+  /** A restarted session lives in the same row under a new session id. */
+  setSessionId(id: string, sessionId: string): void {
+    this.db.query("UPDATE agents SET session_id = ? WHERE id = ?").run(sessionId, id);
+  }
+
+  /** Names of the tools a session has called, as far as its events go back. */
+  toolsUsed(id: string): string[] {
+    const rows = this.db
+      .query(
+        "SELECT DISTINCT summary FROM events WHERE agent_id = ? AND event = 'PreToolUse' AND summary IS NOT NULL",
+      )
+      .all(id) as { summary: string }[];
+    return rows.map((row) => row.summary);
   }
 
   /** Running sessions, main first, then agents oldest first. */

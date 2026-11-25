@@ -23,6 +23,11 @@ export function userConfigPath(env: Env = process.env): string {
   return join(base, APP_NAME, "config.toml");
 }
 
+/** Personal directory for dwa files, next to the personal config: `~/.config/dwa`. */
+export function userDir(env: Env = process.env): string {
+  return dirname(userConfigPath(env));
+}
+
 /** Project directory for dwa files: `<project>/.dwa`. */
 export function projectDir(projectRoot: string): string {
   return join(projectRoot, `.${APP_NAME}`);
@@ -36,6 +41,44 @@ export function projectConfigPath(projectRoot: string): string {
 /** Workflow definitions, one TOML file each: `<project>/.dwa/workflows`. */
 export function workflowsDir(projectRoot: string): string {
   return join(projectDir(projectRoot), "workflows");
+}
+
+/** Role files, one TOML file each: `<project>/.dwa/roles`. */
+export function rolesDir(projectRoot: string): string {
+  return join(projectDir(projectRoot), "roles");
+}
+
+/** Personal roles, used when the project has none of that name: `~/.config/dwa/roles`. */
+export function userRolesDir(env: Env = process.env): string {
+  return join(userDir(env), "roles");
+}
+
+/** Skills kept for dwa sessions, one directory each: `<project>/.dwa/skills`. */
+export function skillsDir(projectRoot: string): string {
+  return join(projectDir(projectRoot), "skills");
+}
+
+/** Personal skills for dwa sessions: `~/.config/dwa/skills`. */
+export function userSkillsDir(env: Env = process.env): string {
+  return join(userDir(env), "skills");
+}
+
+/** The project's own Claude Code skills, which every session may load: `<project>/.claude/skills`. */
+export function projectSkillsDir(projectRoot: string): string {
+  return join(projectRoot, ".claude", "skills");
+}
+
+/**
+ * Earlier versions of role files and of the config, numbered, so a change can be looked at
+ * and taken back: `<project>/.dwa/history`. Meant to be committed with the files it follows.
+ */
+export function historyDir(projectRoot: string): string {
+  return join(projectDir(projectRoot), "history");
+}
+
+/** History of the personal roles and config: `~/.config/dwa/history`. */
+export function userHistoryDir(env: Env = process.env): string {
+  return join(userDir(env), "history");
 }
 
 /** Runtime state that is never committed (database, logs, generated settings): `<project>/.dwa/run`. */

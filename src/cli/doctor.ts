@@ -1,4 +1,4 @@
-import { allProfiles, loadConfig } from "../shared/config.ts";
+import { allProfiles, EMPTY_CONFIG, loadConfig } from "../shared/config.ts";
 import {
   CLAUDE_COMMAND_ENV,
   DEFAULT_CLAUDE_COMMAND,
@@ -8,6 +8,7 @@ import {
 } from "../shared/constants.ts";
 import { expandPath, findProjectRoot } from "../shared/paths.ts";
 import { satisfiesMinimum } from "../shared/version.ts";
+import { configProblems } from "./roles.ts";
 
 export interface CheckResult {
   name: string;
@@ -80,9 +81,16 @@ export async function runChecks(options: DoctorOptions = {}): Promise<CheckResul
 
 /** Prints the checks and returns the process exit code. */
 export async function doctor(projectRoot: string = findProjectRoot()): Promise<number> {
-  const config = await loadConfig(projectRoot);
+  const problems = await configProblems(projectRoot);
+  // A config that does not parse still leaves the tools worth checking, with the plain command.
+  const config = await loadConfig(projectRoot).catch(() => EMPTY_CONFIG);
   const commands = [...new Set(allProfiles(config).map((profile) => profile.command))];
   const results = await runChecks({ claudeCommands: commands });
+  results.push(
+    problems.length === 0
+      ? { name: "configuration", ok: true, detail: "config, roles and workflows are sound" }
+      : { name: "configuration", ok: false, detail: problems.join("\n      ") },
+  );
   for (const result of results) {
     console.log(`${result.ok ? "ok  " : "FAIL"}  ${result.name}: ${result.detail}`);
   }

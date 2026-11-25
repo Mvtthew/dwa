@@ -172,7 +172,13 @@ describe("agents and messages", () => {
     routes["POST /agents/stop"] = () => agent("a9", "helper", "idle");
     const spawned = await use("spawn_agent", { role: "explore", task: "look", effort: "low" });
     expect(spawned.text).toBe('Started agent "helper".');
-    expect(calls[0]?.body).toEqual({ role: "explore", task: "look", effort: "low" });
+    // Marked as an agent's request, so the daemon lets it narrow the role and nothing more.
+    expect(calls[0]?.body).toEqual({
+      role: "explore",
+      task: "look",
+      effort: "low",
+      narrowOnly: true,
+    });
     expect((await use("stop_agent", { name: "helper" })).text).toBe('Stopped agent "helper".');
     expect(calls[1]?.body).toEqual({ target: "helper" });
     expect((await use("spawn_agent", { effort: "extreme" })).isError).toBe(true);

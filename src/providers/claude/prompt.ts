@@ -1,7 +1,18 @@
+import type { ResolvedSession } from "../../shared/roles.ts";
+
 /**
- * Appended to every session's system prompt. It explains the workspace and the dwa tools; the
- * role itself comes from the agent definition or the user's prompt.
+ * What is appended to a session's system prompt: the workspace part, then the instructions of
+ * its role. Appended and not passed as an agent definition, so Claude Code's own system prompt
+ * stays as it is for every role, the main session included.
  */
+export function sessionPrompt(name: string, session: ResolvedSession): string {
+  const workspace = workspacePrompt(name);
+  if (!session.prompt) return workspace;
+  const title = session.role ? `Your role: ${session.role}` : "Your role";
+  return `${workspace}\n\n# ${title}\n\n${session.prompt.trim()}`;
+}
+
+/** Explains the workspace and the dwa tools; the same for every session apart from the name. */
 export function workspacePrompt(name: string): string {
   return `You are "${name}", one of several Claude Code sessions working in the same project inside a dwa workspace. The user can see every session and may type into any of them directly.
 

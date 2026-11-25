@@ -142,6 +142,12 @@ describe("a definition as TOML", () => {
         profile: "me",
         model: "opus",
         effort: "high",
+        permission_mode: "plan",
+        deny_tools: ["Edit", "Write"],
+        allow: ['Bash(git commit -m "x" *)'],
+        mcp: ["github"],
+        plugins: [],
+        skills: ["review"],
         depends_on: ["a"],
         keep_agent: true,
         reviews: "a",
@@ -171,6 +177,23 @@ describe("a definition as TOML", () => {
     expect(sameWork(c, { ...c, prompt: "other" })).toBe(false);
     expect(sameWork(c, { ...c, depends_on: ["a"] })).toBe(false);
     expect(sameWork(c, { ...c, model: "opus" })).toBe(false);
+    // What the session may use is part of the work: a step redone with other tools is another step.
+    expect(sameWork(c, { ...c, deny_tools: ["Edit"] })).toBe(false);
+    expect(sameWork(c, { ...c, mcp: [] })).toBe(false);
+    expect(sameWork({ ...c, skills: ["a"] }, { ...c, skills: ["a"] })).toBe(true);
+  });
+
+  test("a step takes the capability settings of a role, and not both tool lists", () => {
+    const step = (settings: string) =>
+      parseWorkflow(`[steps.a]\nprompt = "a"\n${settings}`, "w").steps.a;
+    expect(step('tools = ["Read"]\nmcp = ["github"]')).toMatchObject({
+      tools: ["Read"],
+      mcp: ["github"],
+    });
+    expect(() => step('tools = ["Read"]\ndeny_tools = ["Edit"]')).toThrow(
+      /set either tools or deny_tools/,
+    );
+    expect(() => step('permission_mode = "yolo"')).toThrow(/permission_mode/);
   });
 
   test("dependents are the steps that come after", () => {

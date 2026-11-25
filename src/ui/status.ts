@@ -9,6 +9,8 @@ import { accent, tone } from "./theme.ts";
 export type StatusAction =
   | "workflows"
   | "agent"
+  | "tools"
+  | "roles"
   | "shell"
   | "close"
   | "focus"
@@ -34,6 +36,8 @@ interface Button {
 const ACTIONS: Button[] = [
   { key: "w", label: () => "Workflows", action: "workflows" },
   { key: "a", label: () => "New agent", action: "agent" },
+  { key: "t", label: () => "Agent tools", action: "tools" },
+  { key: "r", label: () => "Role settings", action: "roles" },
   { key: "s", label: (state) => (state?.shell?.open ? "Hide shell" : "Shell"), action: "shell" },
 ];
 

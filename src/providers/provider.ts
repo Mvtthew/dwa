@@ -1,23 +1,26 @@
 import type { ResolvedProfile } from "../shared/config.ts";
+import type { ResolvedSession } from "../shared/roles.ts";
 
 export interface LaunchRequest {
   profile: ResolvedProfile;
   /** Session id chosen by dwa so it can match hook events to the agent. */
   sessionId: string;
+  /** Continue the conversation of `sessionId` instead of starting a new one (a restart). */
+  resume?: boolean;
   /** Display name, also the address other sessions use to message this one. */
   name: string;
-  /** Agent definition to run as (for Claude Code: a `.claude/agents/<role>.md` file). */
-  role?: string;
-  model?: string;
-  effort?: string;
+  /** What the session may use and how it is tuned, after all layers of configuration. */
+  session: ResolvedSession;
   /** First prompt, given when the agent is spawned with a task. */
   task?: string;
   /** Path of the per-session settings file written from `buildSettings`. */
   settingsPath?: string;
   /** Path of the per-session MCP config written from `buildMcpConfig`. */
   mcpConfigPath?: string;
-  /** Text appended to the session's system prompt. */
-  systemPrompt?: string;
+  /** Path of the file written from `systemPrompt`, appended to the session's system prompt. */
+  systemPromptPath?: string;
+  /** Directory of the plugin generated for this session to carry its dwa skills, if any. */
+  skillPluginPath?: string;
 }
 
 export interface Launch {
@@ -34,6 +37,12 @@ export interface SessionCommands {
   mailbox: string;
 }
 
+/** What has to be named to keep the user's own Claude setup out of a session. */
+export interface SessionIsolation {
+  /** Personal instruction files (`CLAUDE.md` of the user's Claude config) not to load. */
+  personalMemory: string[];
+}
+
 export interface McpServerCommand {
   command: string;
   args: string[];
@@ -48,9 +57,23 @@ export interface Provider {
    * Contents of the per-session settings file that wires the session's lifecycle events and
    * telemetry to dwa. It is passed on the command line, so the user's own settings stay untouched.
    */
-  buildSettings(commands: SessionCommands): unknown;
-  /** Contents of the per-session MCP config that gives the session the dwa tools. */
-  buildMcpConfig(server: McpServerCommand): unknown;
-  /** Text appended to the system prompt, explaining the workspace and its tools. */
-  systemPrompt(name: string): string;
+  buildSettings(
+    commands: SessionCommands,
+    session: ResolvedSession,
+    isolation: SessionIsolation,
+  ): unknown;
+  /**
+   * Contents of the per-session MCP config: the dwa tools and the servers the session's role
+   * lists. `projectServers` are the ones the project itself defines, which every session keeps.
+   */
+  buildMcpConfig(
+    server: McpServerCommand,
+    session: ResolvedSession,
+    projectServers: Record<string, unknown>,
+  ): unknown;
+  /**
+   * Text appended to the system prompt: the workspace and its tools, then the role's own
+   * instructions.
+   */
+  systemPrompt(name: string, session: ResolvedSession): string;
 }

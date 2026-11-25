@@ -1,3 +1,4 @@
+import { ConfigError, pickCapabilities } from "../shared/capabilities.ts";
 import type {
   WorkflowEdit,
   WorkflowRunInfo,
@@ -156,6 +157,14 @@ export class Workflows {
   /** Starts a run of the named workflow. `byId` is who gets the report when it ends. */
   async start(name: string, input: string, byId: string): Promise<WorkflowRunInfo> {
     const definition = this.load(name);
+    // A step whose role does not exist would only fail when its turn comes, deep into the run.
+    const roles = Object.values(definition.steps).flatMap((step) => (step.role ? [step.role] : []));
+    const unknown = this.deps.workspace.unknownRoles(roles);
+    if (unknown.length > 0) {
+      throw new ConfigError(
+        `Workflow "${name}" uses ${unknown.length === 1 ? "a role" : "roles"} with no file in .dwa/roles: ${unknown.join(", ")}.`,
+      );
+    }
     if (!(await this.deps.workspace.state()).up) {
       throw new WorkspaceError("The workspace is not running. Start it with `dwa up`.");
     }
@@ -593,8 +602,7 @@ export class Workflows {
             name: stepId,
             role: step.role,
             profile: step.profile,
-            model: step.model,
-            effort: step.effort,
+            ...pickCapabilities(step),
             task: this.task(run, row, renderPrompt(step.prompt, run.input, results)),
           });
           store.setStepAgent(runId, stepId, agent.id);

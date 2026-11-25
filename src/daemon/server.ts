@@ -5,7 +5,12 @@ import type {
   StatuslineRequest,
   UpRequest,
 } from "../shared/protocol.ts";
-import { POPUP_KINDS } from "../shared/protocol.ts";
+import {
+  POPUP_KINDS,
+  type RefreshRequest,
+  type RestartWhen,
+  type ToolsSaveRequest,
+} from "../shared/protocol.ts";
 import { listWorkflows } from "../shared/workflow.ts";
 import { TmuxError } from "../tmux/driver.ts";
 import { USER } from "./messaging.ts";
@@ -76,10 +81,13 @@ export function startServer(options: ServerOptions) {
       case "POST /shell/toggle":
         return json(await workspace.toggleShell());
       case "POST /popup": {
-        const { kind } = await body<{ kind?: unknown }>(request);
+        const { kind, subject } = await body<{ kind?: unknown; subject?: unknown }>(request);
         const known = POPUP_KINDS.find((entry) => entry === kind);
         if (!known) throw new WorkspaceError(`Unknown popup: use ${POPUP_KINDS.join(", ")}.`);
-        workspace.popup(known);
+        // The subject becomes a word of a command line, so only a plain name or id passes.
+        const about =
+          typeof subject === "string" && /^[\w.-]{1,64}$/.test(subject) ? subject : undefined;
+        workspace.popup(known, about);
         return json({ ok: true });
       }
       case "POST /zoom":
@@ -91,14 +99,25 @@ export function startServer(options: ServerOptions) {
       case "POST /agents/close":
         await workspace.close();
         return json({ ok: true });
+      case "GET /tools":
+        return json(
+          await workspace.toolsInfo(new URL(request.url).searchParams.get("target") ?? ""),
+        );
+      case "POST /tools":
+        return json(await workspace.saveTools(await body<ToolsSaveRequest>(request)));
+      case "POST /agents/refresh":
+        return json(await workspace.refresh(await body<RefreshRequest>(request)));
+      case "POST /agents/restart": {
+        const input = await body<{ target?: string; when?: RestartWhen }>(request);
+        return json({ applied: await workspace.restart(requireTarget(input), input.when) });
+      }
       case "POST /agents/stop":
         return json(await workspace.stop(requireTarget(await body(request))));
       case "POST /focus":
         await workspace.focusMain();
         return json({ ok: true });
       case "POST /hook":
-        workspace.hook(await body<HookRequest>(request));
-        return json({ ok: true });
+        return json({ ok: true, ...workspace.hook(await body<HookRequest>(request)) });
       case "POST /statusline":
         workspace.statusline(await body<StatuslineRequest>(request));
         return json({ ok: true });

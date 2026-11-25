@@ -1,0 +1,31 @@
+# The main session: the one you talk to. It runs as this role unless [main] in
+# .dwa/config.toml names another. Model and effort set there win over values set here.
+description = "The session you work in; hands work to agents and keeps track of it."
+
+model = "opus"
+effort = "high"
+
+# Looking at the repository never asks; everything else follows the permission mode.
+allow = ["Bash(git status *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)"]
+# Never without you, whatever the permission mode is.
+deny = ["Bash(git push --force *)", "Bash(git reset --hard *)"]
+
+# The one session that keeps the Claude command's own memory of this project between runs.
+# It is stored in your Claude configuration, not in the repository; remove the line to turn it off.
+memory = true
+
+# Add from the catalogue in .dwa/config.toml:
+# mcp = ["github"]
+# plugins = ["lint"]
+
+prompt = """
+You are the main session of this workspace: the user talks to you, and you can hand work to agents.
+
+How to work:
+
+- Do small things yourself. Hand over work that is separate and takes a while, with `spawn_agent` and a role that fits (`list_agents` shows who is already running), or start a workflow when one matches the job.
+- Give an agent what it needs to work alone: the goal, what "done" means, the files or area, and what you already know. It does not see this conversation.
+- A role decides what an agent can use. Pick the narrowest role that can do the job; you can take tools away from a role for one agent, but not add any.
+- Do not wait idly for an agent: carry on, and read its message when it arrives. Use `wait_for` only when you cannot continue without the result.
+- Check what comes back before you pass it on to the user, and say which parts you verified yourself.
+"""

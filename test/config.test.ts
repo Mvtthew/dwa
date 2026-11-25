@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { buildClaudeLaunch } from "../src/providers/claude/launch.ts";
+import {
+  buildClaudeLaunch,
+  buildClaudeMcpConfig,
+  buildClaudeSettings,
+} from "../src/providers/claude/launch.ts";
+import { sessionPrompt, workspacePrompt } from "../src/providers/claude/prompt.ts";
 import {
   allProfiles,
   ConfigError,
@@ -11,7 +16,7 @@ import {
   resolveProfile,
 } from "../src/shared/config.ts";
 import { cleanEnv } from "../src/shared/env.ts";
-import { parseRoleTuning, resolveTuning } from "../src/shared/roles.ts";
+import type { ResolvedSession } from "../src/shared/roles.ts";
 import { buildTmuxConf, tmuxQuote } from "../src/tmux/conf.ts";
 import { parsePaneList } from "../src/tmux/layout.ts";
 
@@ -137,24 +142,47 @@ describe("resolveProfile", () => {
 
 describe("buildClaudeLaunch", () => {
   const profile = { name: "work", command: "/bin/cw", args: ["--verbose"], env: { TEAM: "x" } };
+  const session = (values: Partial<ResolvedSession> = {}): ResolvedSession => ({
+    denyTools: [],
+    allow: [],
+    deny: [],
+    mcp: {},
+    plugins: [],
+    hiddenSkills: [],
+    offMcp: [],
+    offPlugins: [],
+    offSkills: [],
+    memory: false,
+    ...values,
+  });
 
-  test("puts profile arguments first and the task last", () => {
+  test("puts profile arguments first, keeps the user's settings out and the task last", () => {
     const launch = buildClaudeLaunch({
       profile,
       sessionId: "sid",
       name: "dev",
-      role: "developer",
+      session: session(),
+      settingsPath: "/run/settings.json",
+      mcpConfigPath: "/run/mcp.json",
+      systemPromptPath: "/run/prompt.md",
       task: "fix it",
     });
     expect(launch.argv).toEqual([
       "/bin/cw",
       "--verbose",
+      "--setting-sources",
+      "project,local",
       "--session-id",
       "sid",
       "--name",
       "dev",
-      "--agent",
-      "developer",
+      "--settings",
+      "/run/settings.json",
+      "--strict-mcp-config",
+      "--mcp-config",
+      "/run/mcp.json",
+      "--append-system-prompt-file",
+      "/run/prompt.md",
       "fix it",
     ]);
   });
@@ -164,20 +192,53 @@ describe("buildClaudeLaunch", () => {
       profile: { ...profile, args: ["--model", "sonnet"] },
       sessionId: "sid",
       name: "dev",
-      model: "opus",
-      effort: "high",
+      session: session({ model: "opus", effort: "high" }),
       task: "fix it",
     });
-    expect(launch.argv.slice(3)).toEqual([
+    expect(launch.argv.slice(-5)).toEqual(["--model", "opus", "--effort", "high", "fix it"]);
+  });
+
+  test("passes what the role allows: tools, permission mode and plugins", () => {
+    const argv = (values: Partial<ResolvedSession>, skillPluginPath?: string) =>
+      buildClaudeLaunch({
+        profile: { ...profile, args: [] },
+        sessionId: "sid",
+        name: "dev",
+        session: session(values),
+        skillPluginPath,
+        task: "go",
+      }).argv;
+    const skill = { name: "style", source: "dwa" as const, path: "/p/.dwa/skills/style" };
+
+    expect(argv({ denyTools: ["Edit", "Write"], permissionMode: "plan" })).toEqual([
+      "/bin/cw",
+      "--setting-sources",
+      "project,local",
+      "--disallowedTools",
+      "Edit,Write",
       "--session-id",
       "sid",
       "--name",
       "dev",
-      "--model",
-      "opus",
-      "--effort",
-      "high",
-      "fix it",
+      "--permission-mode",
+      "plan",
+      "go",
+    ]);
+    // A list of tools is followed by another option, never by the task, which it would swallow.
+    const limited = argv({ tools: ["Read", "Grep"] });
+    expect(limited.slice(3, 6)).toEqual(["--tools", "Read,Grep", "--session-id"]);
+    // Skills need the Skill tool, so a role that lists skills keeps it.
+    expect(argv({ tools: ["Read"], skills: [skill] })[4]).toBe("Read,Skill");
+    expect(argv({ tools: ["Read", "Skill"], skills: [skill] })[4]).toBe("Read,Skill");
+    expect(argv({ tools: [] })[4]).toBe("");
+
+    const plugins = argv({ plugins: [{ name: "lint", path: "/p/tools/lint" }] }, "/run/skills");
+    expect(plugins.slice(-5)).toEqual([
+      "--plugin-dir",
+      "/p/tools/lint",
+      "--plugin-dir",
+      "/run/skills",
+      "go",
     ]);
   });
 
@@ -186,12 +247,94 @@ describe("buildClaudeLaunch", () => {
       profile: { ...profile, env: { MCP_TOOL_TIMEOUT: "5" } },
       sessionId: "sid",
       name: "dev",
+      session: session(),
     });
     expect(launch.env).toEqual({
       CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: "0",
       CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: "0",
       MCP_TOOL_TIMEOUT: "5",
     });
+  });
+});
+
+describe("generated session files", () => {
+  const commands = { hook: "dwa hook", statusline: "dwa statusline", mailbox: "dwa mailbox" };
+  const base: ResolvedSession = {
+    denyTools: [],
+    allow: [],
+    deny: [],
+    mcp: {},
+    plugins: [],
+    hiddenSkills: [],
+    offMcp: [],
+    offPlugins: [],
+    offSkills: [],
+    memory: false,
+  };
+
+  test("settings carry the role's rules and what the flags cannot keep out", () => {
+    const plain = buildClaudeSettings(commands, base, { personalMemory: [] });
+    expect(plain.permissions).toEqual({ allow: ["mcp__dwa"] });
+    expect(plain).not.toHaveProperty("claudeMdExcludes");
+    expect(plain).not.toHaveProperty("skillOverrides");
+
+    const settings = buildClaudeSettings(
+      commands,
+      { ...base, allow: ["Bash(git log *)"], deny: ["Read(.env)"], hiddenSkills: ["deploy"] },
+      { personalMemory: ["/home/.claude/CLAUDE.md"] },
+    );
+    expect(settings.permissions).toEqual({
+      allow: ["mcp__dwa", "Bash(git log *)"],
+      deny: ["Read(.env)"],
+    });
+    expect(settings).toMatchObject({
+      claudeMdExcludes: ["/home/.claude/CLAUDE.md"],
+      skillOverrides: { deploy: "off" },
+    });
+  });
+
+  test("built-in plugins and skills are switched off by id, and memory is off unless asked for", () => {
+    const off = buildClaudeSettings(
+      commands,
+      { ...base, hiddenSkills: ["deploy"], offSkills: ["dataviz"], offPlugins: ["easel@builtin"] },
+      { personalMemory: [] },
+    );
+    expect(off).toMatchObject({
+      skillOverrides: { deploy: "off", dataviz: "off" },
+      enabledPlugins: { "easel@builtin": false },
+      autoMemoryEnabled: false,
+    });
+    const on = buildClaudeSettings(commands, { ...base, memory: true }, { personalMemory: [] });
+    expect(on).not.toHaveProperty("autoMemoryEnabled");
+    expect(on).not.toHaveProperty("enabledPlugins");
+  });
+
+  test("the MCP config has the project's servers, the role's, and always dwa's own", () => {
+    const own = { command: "bun", args: ["cli.ts", "mcp"], env: { DWA_AGENT_ID: "a" } };
+    const config = buildClaudeMcpConfig(
+      own,
+      {
+        ...base,
+        mcp: {
+          github: { command: "gh-mcp", args: ["serve"], env: {} },
+          docs: { type: "http", url: "https://example.test/mcp", headers: {} },
+        },
+      },
+      { github: { command: "from-project" }, db: { command: "db-mcp" }, dwa: { command: "fake" } },
+    );
+    expect(config.mcpServers as Record<string, unknown>).toEqual({
+      github: { type: "stdio", command: "gh-mcp", args: ["serve"], env: {} },
+      db: { command: "db-mcp" },
+      docs: { type: "http", url: "https://example.test/mcp", headers: {} },
+      dwa: { type: "stdio", ...own },
+    });
+  });
+
+  test("the role's instructions follow the workspace part of the prompt", () => {
+    expect(sessionPrompt("dev", base)).toBe(workspacePrompt("dev"));
+    const prompt = sessionPrompt("rev", { ...base, role: "reviewer", prompt: "\nYou review.\n" });
+    expect(prompt.startsWith(workspacePrompt("rev"))).toBe(true);
+    expect(prompt.endsWith("\n\n# Your role: reviewer\n\nYou review.")).toBe(true);
   });
 });
 
@@ -231,6 +374,8 @@ describe("tmux helpers", () => {
       "bind w display-popup -E -w 70% -h 80% -T ' Workflows ' 'DWA_PROJECT='\\''/my proj'\\'' '\\''/bin/bun'\\'' '\\''/dwa/cli.ts'\\'' wizard workflows'",
     );
     expect(conf).toContain("bind -n M-a display-popup -E -w 70% -h 80% -T ' New agent ' ");
+    expect(conf).toContain("bind t display-popup -E -w 70% -h 90% -T ' Agent tools ' ");
+    expect(conf).toContain("bind -n M-r display-popup -E -w 70% -h 90% -T ' Role settings ' ");
   });
 
   test("parsePaneList reads pane id, dead flag and window", () => {
@@ -327,21 +472,5 @@ describe("model and effort settings", () => {
     const mainProject = parseConfig('[main]\neffort = "high"', "project");
     expect(mergeConfig(mainUser, mainProject).main).toEqual({ model: "opus", effort: "high" });
     expect(() => parseConfig('[main]\nprofile = "x"', "cfg")).toThrow(/main/);
-  });
-
-  test("a role file's frontmatter is read for model and effort", () => {
-    expect(
-      parseRoleTuning('---\n\nname: rev\nmodel: "opus"\neffort: high\n---\nmodel: ignored\n'),
-    ).toEqual({ model: "opus", effort: "high" });
-    expect(parseRoleTuning("---\nname: rev\nmodel: inherit\n---\n")).toEqual({});
-    expect(parseRoleTuning("no frontmatter\nmodel: x\n")).toEqual({});
-    expect(parseRoleTuning("---\nmodel: x\nnever closed")).toEqual({});
-  });
-
-  test("explicit beats role beats defaults, per field", () => {
-    expect(
-      resolveTuning({ effort: "low" }, { model: "opus" }, { model: "sonnet", effort: "max" }),
-    ).toEqual({ model: "opus", effort: "low" });
-    expect(resolveTuning({}, {}, {})).toEqual({ model: undefined, effort: undefined });
   });
 });

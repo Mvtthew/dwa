@@ -1,5 +1,10 @@
 /** Types shared by the daemon, the CLI and the UI panes. */
 
+import type { Capabilities } from "./capabilities.ts";
+import type { FileTarget } from "./role-edit.ts";
+import type { SessionSummary } from "./roles.ts";
+import type { ToolChange, ToolView } from "./tools.ts";
+
 export type AgentKind = "main" | "agent";
 
 /**
@@ -54,6 +59,76 @@ export interface AgentInfo {
   waitingOn: string | null;
   /** True when this agent's session is the pane shown under the main session. */
   open: boolean;
+  /** What the session was started with; null for one started before this was recorded. */
+  capabilities: SessionSummary | null;
+  /** The role files or the config changed since the session was started. */
+  outOfDate?: boolean;
+  /** The session restarts with new settings when its turn ends. */
+  pendingRestart?: boolean;
+}
+
+/** A running session as the tools dialog names it. */
+export interface SessionRef {
+  id: string;
+  name: string;
+  role: string | null;
+  kind: AgentKind;
+  activity: AgentActivity;
+}
+
+/** What the tools dialog shows for one session. */
+export interface ToolsInfo {
+  agent: SessionRef;
+  view: ToolView;
+  /** Files a change can be saved in for good: the role, its parents, `[defaults]`. */
+  files: { label: string; file: FileTarget }[];
+  /** The role files or the config changed since this session was started. */
+  outOfDate: boolean;
+}
+
+/** `now` interrupts a working session; `turn-end` waits until it has finished its turn. */
+export type RestartWhen = "now" | "turn-end";
+
+export interface ToolsSaveRequest {
+  /** Session name or id. */
+  target: string;
+  changes: ToolChange[];
+  /**
+   * `agent`: this session only. `run`: also every session of its role started later, until the
+   * workspace stops. `file`: written into `file`; running sessions are then refreshed separately.
+   */
+  scope: "agent" | "run" | "file";
+  file?: FileTarget;
+  /** Needed when the change takes a restart and the session is working, or is the main one. */
+  when?: RestartWhen;
+}
+
+/**
+ * How a change reached a session: `live` without a restart, `restarted`, `pending` (it restarts
+ * when its turn ends), `unchanged` (nothing differed), or `ask` when nothing was done because
+ * the caller has to say `when` first.
+ */
+export type Applied = "live" | "restarted" | "pending" | "unchanged" | "ask";
+
+export interface ToolsSaveResult {
+  applied: Applied;
+  /** For `ask`: why a restart needs a decision. */
+  reason?: "working" | "main";
+  /** For a save into a file: the version it is at now. */
+  version?: number;
+  /** Something the user should know, such as a role that sets the value itself. */
+  note?: string;
+  /** Running sessions that are now behind the files, the changed one included. */
+  behind: SessionRef[];
+}
+
+export interface RefreshRequest {
+  targets: string[];
+  when?: RestartWhen;
+}
+
+export interface RefreshResult {
+  results: { name: string; applied: Applied; error?: string }[];
 }
 
 /** An open question. `from` and `to` are names ("user" or an agent name). */
@@ -140,22 +215,37 @@ export interface WorkspaceState {
 }
 
 /** The wizards that open in a popup over the workspace. */
-export type WizardKind = "workflows" | "agent";
+export type WizardKind = "workflows" | "agent" | "tools" | "roles";
 
 /** Everything the daemon can show in a popup: the wizards, the question queue, the command menu. */
 export type PopupKind = WizardKind | "questions" | "palette";
 
-export const POPUP_KINDS: readonly PopupKind[] = ["workflows", "agent", "questions", "palette"];
+export const POPUP_KINDS: readonly PopupKind[] = [
+  "workflows",
+  "agent",
+  "tools",
+  "roles",
+  "questions",
+  "palette",
+];
 
-export interface SpawnRequest {
+/**
+ * The capability fields (tools, MCP servers, plugins, skills, ...) replace what the role says
+ * for this one session.
+ */
+export interface SpawnRequest extends Omit<Capabilities, "effort"> {
   name?: string;
+  /** A role file in `.dwa/roles/`. Without one the session gets the configured defaults. */
   role?: string;
   profile?: string;
-  /** Passed as `--model`. Without it the role file decides, then the configured default. */
-  model?: string;
   /** Passed as `--effort`: low, medium, high, xhigh or max. */
   effort?: string;
   task?: string;
+  /**
+   * Set for a spawn an agent asks for: the capability fields may then only take away from the
+   * role, never add to it.
+   */
+  narrowOnly?: boolean;
 }
 
 export interface HookRequest {

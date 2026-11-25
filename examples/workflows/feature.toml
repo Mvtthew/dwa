@@ -2,7 +2,7 @@
 #
 # Each step runs as its own agent and starts when the steps it depends on are done.
 # {{input}} is the text given to the run; {{steps.<name>.result}} is what an earlier step
-# handed over with complete_step. "role" is an agent definition in .claude/agents/.
+# handed over with complete_step. "role" is a role file in .dwa/roles/.
 #
 # The review step may send the build back with request_changes. The developer's session stays
 # open until the review approves; after max_rounds passes you are asked what to do.

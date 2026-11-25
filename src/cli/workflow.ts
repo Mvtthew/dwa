@@ -5,6 +5,7 @@ import { runDir } from "../shared/paths.ts";
 import type { WorkflowEdit, WorkflowRunInfo } from "../shared/protocol.ts";
 import { describeRun, type WorkflowSummary } from "../shared/workflow.ts";
 import { call } from "./client.ts";
+import { openEditor } from "./editor.ts";
 
 interface Listing {
   workflows: WorkflowSummary[];
@@ -65,14 +66,8 @@ async function editInEditor(projectRoot: string, id: number, yes: boolean): Prom
   mkdirSync(runDir(projectRoot), { recursive: true });
   const path = join(runDir(projectRoot), `workflow-run-${id}.toml`);
   writeFileSync(path, definition);
-  const editor = (process.env.VISUAL || process.env.EDITOR || "vi").split(/\s+/).filter(Boolean);
   for (;;) {
-    const proc = Bun.spawn([...editor, path], {
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-    if ((await proc.exited) !== 0) {
+    if (!(await openEditor(path))) {
       console.error("The editor did not exit cleanly; nothing was applied.");
       return 1;
     }

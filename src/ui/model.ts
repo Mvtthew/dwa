@@ -10,6 +10,7 @@ import type {
   WorkflowStepInfo,
   WorkspaceState,
 } from "../shared/protocol.ts";
+import { capabilityLines, type SessionSummary } from "../shared/roles.ts";
 
 export type Tone = "good" | "muted" | "attention" | "bad";
 
@@ -41,6 +42,50 @@ export interface Tile {
   open: boolean;
   style: ActivityStyle;
   detail: string | null;
+  /** What the session may use, as short lines; shown for the selected agent. */
+  capabilities: string[];
+  /** What is about to change for the session, or could: shown for the selected agent. */
+  notices: string[];
+}
+
+/** What the user should know about a session that is not as its role says any more. */
+export function agentNotices(agent: AgentInfo): string[] {
+  if (agent.pendingRestart) return ["restarts at turn end"];
+  if (agent.outOfDate) return ["role changed since start"];
+  return [];
+}
+
+/**
+ * Breaks a line into at most `lines` rows of `width` characters, at a space or comma where
+ * there is one; what does not fit after that ends in an ellipsis.
+ */
+export function wrap(text: string, width: number, lines = 2): string[] {
+  if (width <= 0) return [];
+  const rows: string[] = [];
+  let rest = text;
+  while (rest.length > width && rows.length < lines - 1) {
+    const at = rest.lastIndexOf(" ", width);
+    const cut = at > width / 2 ? at : width;
+    rows.push(rest.slice(0, cut).trimEnd());
+    // Later rows are indented, so a continued line reads as one.
+    rest = `  ${rest.slice(cut).trimStart()}`;
+  }
+  rows.push(fit(rest, width));
+  return rows;
+}
+
+/**
+ * What a session was started with, in a few short lines: always the tools, and the MCP servers,
+ * plugins and skills only when there is something to say. Empty when it was not recorded.
+ */
+export function capabilityNote(summary: SessionSummary | null): string[] {
+  if (!summary) return [];
+  const lines = new Map(capabilityLines(summary));
+  const note = [`tools ${lines.get("tools")}`];
+  if (summary.mcp.length > 0) note.push(`mcp ${lines.get("mcp")}`);
+  if (summary.plugins.length > 0) note.push(`plugins ${lines.get("plugins")}`);
+  if (summary.skills) note.push(`skills ${lines.get("skills")}`);
+  return note;
 }
 
 /**
@@ -71,6 +116,8 @@ export function tiles(state: WorkspaceState): Tile[] {
     open: agent.open,
     style: agentStyle(agent),
     detail: agentNote(agent),
+    capabilities: capabilityNote(agent.capabilities),
+    notices: agentNotices(agent),
   }));
 }
 

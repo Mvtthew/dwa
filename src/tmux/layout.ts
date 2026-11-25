@@ -171,6 +171,28 @@ export async function focusPane(run: TmuxRunner, pane: string): Promise<void> {
   await run(["select-pane", "-t", pane]);
 }
 
+/**
+ * Ends what runs in a pane and starts another command in its place. The pane keeps its id,
+ * its size and its position, so a restarted session stays where it was.
+ */
+export async function respawnPane(
+  run: TmuxRunner,
+  options: { pane: string; cwd: string; command: PaneCommand },
+): Promise<void> {
+  await run([
+    "respawn-pane",
+    "-k",
+    "-t",
+    options.pane,
+    "-c",
+    options.cwd,
+    ...envArgs(options.command.env),
+    "--",
+    ...options.command.argv,
+  ]);
+  await setTitle(run, options.pane, options.command.title);
+}
+
 export async function killPane(run: TmuxRunner, pane: string): Promise<void> {
   await run(["kill-pane", "-t", pane]);
 }

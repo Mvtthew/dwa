@@ -8,7 +8,7 @@ import {
 } from "@opentui/core";
 import { MAX_VISIBLE_AGENTS } from "../shared/constants.ts";
 import type { WorkspaceState } from "../shared/protocol.ts";
-import { agentsHeader, tiles as buildTiles, fit, moveCursor, type Tile } from "./model.ts";
+import { agentsHeader, tiles as buildTiles, fit, moveCursor, type Tile, wrap } from "./model.ts";
 import { createText, styled } from "./text.ts";
 import { accent, tone } from "./theme.ts";
 
@@ -20,6 +20,8 @@ export interface AgentsActions {
   toggle(agentId: string): void;
   /** Hide the open agent. */
   close(): void;
+  /** Open the tools dialog for this agent. */
+  tools(agentId: string): void;
 }
 
 export interface AgentsView {
@@ -75,6 +77,8 @@ export function createAgentsView(renderer: CliRenderer, actions: AgentsActions):
         tile.open ? "▸" : " ",
         bold(`${tile.position} ${tile.name}`),
         ...(tile.role ? [dim(` ${tile.role}`)] : []),
+        // A session that is not as its role says any more; the footer says how.
+        ...(tile.notices.length > 0 ? [tone("attention", " ↻")] : []),
       ],
       ["   ", tone(tile.style.tone, status), ...(detail ? [dim(` · ${detail}`)] : [])],
     ]);
@@ -90,7 +94,16 @@ export function createAgentsView(renderer: CliRenderer, actions: AgentsActions):
     footer.content =
       current.length === 0
         ? styled([[dim("No agents running.")], [dim("dwa agent spawn <name>")]])
-        : styled([[dim("click or enter: show / hide")]]);
+        : styled([
+            ...(current[cursor]?.notices ?? []).map((line) => [
+              tone("attention", fit(`↻ ${line}`, renderer.width - 2)),
+            ]),
+            // What the selected agent may use, so the list stays two lines per agent.
+            ...(current[cursor]?.capabilities ?? []).flatMap((line) =>
+              wrap(line, renderer.width - 2).map((row) => [dim(row)]),
+            ),
+            [dim("enter: show / hide · t: tools")],
+          ]);
   };
 
   const rebuild = () => {
@@ -127,6 +140,11 @@ export function createAgentsView(renderer: CliRenderer, actions: AgentsActions):
     if (key.name === "j" || key.name === "down") return select(cursor + 1);
     if (key.name === "k" || key.name === "up") return select(cursor - 1);
     if (key.name === "x") return actions.close();
+    if (key.name === "t") {
+      const tile = current[cursor];
+      if (tile) actions.tools(tile.id);
+      return;
+    }
     if (key.name === "return" || key.name === "enter" || key.name === "linefeed") {
       const tile = current[cursor];
       if (tile) actions.toggle(tile.id);

@@ -20,17 +20,39 @@ Workspace
   attach                                Attach to the running workspace
   palette                               Menu of workspace actions (prefix key, then p)
   shell                                 Show or hide a plain shell under the main session
-  wizard <workflows|agent|menu>         The forms behind the status pane's buttons
+  wizard <workflows|agent|tools|roles|menu> [session or role]
+                                        The forms behind the status pane's buttons
   down                                  Stop every session and the workspace
 
 Agents
   agent spawn [name] [--role <role>] [--profile <name>] [--task <text>]
               [--model <model>] [--effort <low|medium|high|xhigh|max>]
+              [--permission-mode <mode>] [--tools <a,b>] [--deny-tools <a,b>]
+              [--allow <rule>]... [--deny <rule>]... [--mcp <a,b>] [--plugins <a,b>]
+              [--skills <a,b>] [--off-plugins <a,b>] [--off-skills <a,b>] [--memory]
+                                        These replace what the role says, for this agent
   agent list [--json]
   agent open <name|number>              Show an agent's session under the main session
   agent close                           Hide the open agent (it keeps running)
   agent stop <name|number>              End an agent's session
   agent send <name> <text>              Send a message to an agent
+  agent tools <name|main> [--json]      What a session can use: tools, MCP servers, rules
+  agent tools <name|main> --block <x>... --unblock <x>... [--scope agent|role|file]
+              [--file <role>|defaults] [--when now|turn-end]
+                                        Switch tools, MCP servers (mcp__name) or rules off and on:
+                                        for this session, for its role until the workspace stops,
+                                        or in a file
+  agent restart <name|main> [--when turn-end]
+                                        Start a session again with its conversation and the
+                                        role as it is now
+
+Roles and configuration
+  role list [--json]                    Roles in .dwa/roles and your personal ones
+  role show <role> | --main [--json]    What a session of a role is started with, after all layers
+  role new | copy | rename | delete     Create and manage role files (see: role)
+  role edit-prompt <role>               The role's prompt in $EDITOR
+  role history | diff | switch <role>   Numbered versions of a role file, and going back to one
+  config check                          Check the config, the roles and what they refer to
 
 Talking to agents
   ask <name> <question>                 Ask an agent and wait for its answer
@@ -49,7 +71,8 @@ Workflows
 
 Other
   status     Print the workspace state as JSON
-  doctor     Check that bun, tmux and the Claude command(s) are present and new enough
+  doctor     Check that bun, tmux and the Claude command(s) are present and new enough,
+             and that the configuration is sound (as config check does)
   version    Print the version
   help       Show this help
 `;
@@ -96,10 +119,30 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
       task: { type: "string" },
       model: { type: "string" },
       effort: { type: "string" },
+      "permission-mode": { type: "string" },
+      tools: { type: "string" },
+      "deny-tools": { type: "string" },
+      allow: { type: "string", multiple: true },
+      deny: { type: "string", multiple: true },
+      mcp: { type: "string" },
+      plugins: { type: "string" },
+      skills: { type: "string" },
+      "off-plugins": { type: "string" },
+      "off-skills": { type: "string" },
+      memory: { type: "boolean" },
       json: { type: "boolean" },
+      block: { type: "string", multiple: true },
+      unblock: { type: "string", multiple: true },
+      scope: { type: "string" },
+      file: { type: "string" },
+      when: { type: "string" },
     },
   });
   const [action, target] = positionals;
+  const when = values.when === "turn-end" || values.when === "now" ? values.when : undefined;
+  // A comma-separated list; an empty value means "none", which is not the same as not given.
+  const list = (value: string | undefined) =>
+    value?.split(",").flatMap((item) => (item.trim() ? [item.trim()] : []));
   switch (action) {
     case "spawn": {
       const agent = await call<AgentInfo>(projectRoot, "POST", "/agents", {
@@ -109,6 +152,17 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
         model: values.model,
         effort: values.effort,
         task: values.task,
+        permission_mode: values["permission-mode"],
+        tools: list(values.tools),
+        deny_tools: list(values["deny-tools"]),
+        allow: values.allow,
+        deny: values.deny,
+        mcp: list(values.mcp),
+        plugins: list(values.plugins),
+        skills: list(values.skills),
+        off_plugins: list(values["off-plugins"]),
+        off_skills: list(values["off-skills"]),
+        memory: values.memory,
       });
       console.log(`Started agent ${agent.name} (profile ${agent.profile}).`);
       return 0;
@@ -133,6 +187,27 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
         body: words.join(" "),
       });
       console.log(`Message sent to ${sent.to}.`);
+      return 0;
+    }
+    case "tools":
+      return (await import("./tools.ts")).toolsCommand(projectRoot, target, {
+        block: values.block ?? [],
+        unblock: values.unblock ?? [],
+        scope: values.scope,
+        file: values.file,
+        when,
+        json: values.json ?? false,
+      });
+    case "restart": {
+      const { applied } = await call<{ applied: string }>(projectRoot, "POST", "/agents/restart", {
+        target,
+        when,
+      });
+      console.log(
+        applied === "pending"
+          ? `${target} restarts when its turn ends.`
+          : `${target} was restarted.`,
+      );
       return 0;
     }
     case "stop": {
@@ -211,6 +286,10 @@ async function main(argv: string[]): Promise<number> {
       return (await import("./talk.ts")).talkCommand(projectRoot, command, rest);
     case "workflow":
       return (await import("./workflow.ts")).workflowCommand(projectRoot, rest);
+    case "role":
+      return (await import("./roles.ts")).roleCommand(projectRoot, rest);
+    case "config":
+      return (await import("./roles.ts")).configCommand(projectRoot, rest);
     case "palette":
       return (await import("../ui/main.ts")).runWizard("menu", projectRoot, selfArgv);
     case "init":
@@ -232,11 +311,13 @@ async function main(argv: string[]): Promise<number> {
     }
     case "wizard": {
       const kind = rest[0];
-      if (kind !== "workflows" && kind !== "agent" && kind !== "menu") {
-        console.error(`Usage: ${APP_NAME} wizard <workflows|agent|menu>`);
+      const kinds = ["workflows", "agent", "tools", "roles", "menu"] as const;
+      const known = kinds.find((entry) => entry === kind);
+      if (!known) {
+        console.error(`Usage: ${APP_NAME} wizard <${kinds.join("|")}> [session or role]`);
         return 2;
       }
-      return (await import("../ui/main.ts")).runWizard(kind, projectRoot, selfArgv);
+      return (await import("../ui/main.ts")).runWizard(known, projectRoot, selfArgv, rest[1]);
     }
     case "ui": {
       const view = rest[0];

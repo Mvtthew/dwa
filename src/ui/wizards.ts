@@ -6,13 +6,20 @@ import { APP_NAME } from "../shared/constants.ts";
 import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../shared/protocol.ts";
 import { EFFORT_LEVELS } from "../shared/roles.ts";
 import { describeRun, type WorkflowSummary } from "../shared/workflow.ts";
+import { type RoleStore, rolesScreen } from "./role-screens.ts";
+import { toolsScreen } from "./tool-screens.ts";
 import type { Row, Screen } from "./wizard.ts";
 
 export interface WizardApi {
   /** One request to the daemon; throws with the daemon's message when it refuses. */
   call<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T>;
-  /** Agent definitions of the project. */
+  /** Roles a session can run as. */
   roles: string[];
+  /**
+   * What a session of a role may use, one line each for tools, MCP servers, plugins and skills;
+   * for "" the same for a session without a role. Says why when the role cannot be used.
+   */
+  describeRole?: (role: string) => string;
   /** Profiles from the config. */
   profiles: string[];
 }
@@ -49,6 +56,19 @@ export function agentScreen(api: WizardApi): Screen {
       options: [{ value: DEFAULT, label: "none" }, ...orDefault(api.roles).slice(1)],
     },
   ];
+  const { describeRole } = api;
+  if (describeRole) {
+    // Four lines, as `describeRole` gives them; it follows the role chosen above.
+    rows.push({
+      kind: "note",
+      text: "\n\n\n",
+      live: (values) =>
+        describeRole(values.role ?? "")
+          .split("\n")
+          .map((line) => `   ${line}`)
+          .join("\n"),
+    });
+  }
   if (api.profiles.length > 1) {
     rows.push({
       kind: "choice",
@@ -294,6 +314,12 @@ function sessionScreen(api: WizardApi, agent: AgentInfo): Screen {
   }
   rows.push({
     kind: "button",
+    label: "Tools…",
+    hint: "what it can use; block or allow",
+    run: async () => ({ to: await toolsScreen(api, agent.id) }),
+  });
+  rows.push({
+    kind: "button",
     label: "Send a message…",
     run: () => ({
       to: textScreen(`Message ${agent.name}`, "Message", "Send", (body) =>
@@ -328,7 +354,7 @@ function sessionScreen(api: WizardApi, agent: AgentInfo): Screen {
 }
 
 /** The menu: everything the workspace can do, from one list. */
-export async function menuScreen(api: WizardApi): Promise<Screen> {
+export async function menuScreen(api: WizardApi, roles?: RoleStore): Promise<Screen> {
   const state = await api.call<WorkspaceState>("GET", "/state");
   const post = (path: string, body?: unknown) => async () => {
     await api.call("POST", path, body);
@@ -364,6 +390,15 @@ export async function menuScreen(api: WizardApi): Promise<Screen> {
       label: "Workflows…",
       run: async () => ({ to: await workflowsScreen(api) }),
     },
+    ...(roles
+      ? [
+          {
+            kind: "button" as const,
+            label: "Roles…",
+            run: () => ({ to: rolesScreen(api, roles) }),
+          },
+        ]
+      : []),
     {
       kind: "button",
       label: state.shell?.open ? "Hide the shell" : "Show the shell",

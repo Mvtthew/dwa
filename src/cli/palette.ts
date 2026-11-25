@@ -1,12 +1,9 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { listRoles } from "../shared/roles.ts";
 
-/** Agent definitions available in the project, by file name. */
-export function projectRoles(projectRoot: string): string[] {
-  const dir = join(projectRoot, ".claude", "agents");
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((file) => file.endsWith(".md"))
-    .map((file) => file.slice(0, -3))
-    .sort();
+/** Roles a session in this project can run as: the project's and the personal ones, by name. */
+export function projectRoles(
+  projectRoot: string,
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  return listRoles({ projectRoot, env }).map((role) => role.name);
 }

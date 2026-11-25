@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { CONFIG_TEMPLATE, initProject } from "../src/cli/init.ts";
 import { projectRoles } from "../src/cli/palette.ts";
 import { parseConfig } from "../src/shared/config.ts";
-import { listWorkflows } from "../src/shared/workflow.ts";
+import { checkSessions, resolveSession } from "../src/shared/roles.ts";
+import { listWorkflows, loadWorkflow } from "../src/shared/workflow.ts";
+
+/** Keeps the roles of whoever runs the tests (~/.config/dwa/roles) out of them. */
+const ENV = { XDG_CONFIG_HOME: "/nonexistent" };
 
 let dir: string;
 beforeEach(() => {
@@ -24,6 +28,8 @@ describe("init", () => {
       layout: {},
       defaults: { model: "sonnet", effort: "medium" },
       main: { model: "opus", effort: "medium" },
+      mcp: {},
+      plugins: {},
     });
   });
 
@@ -32,23 +38,57 @@ describe("init", () => {
     writeFileSync(join(dir, ".gitignore"), "node_modules/");
     const result = initProject(dir, { roles: true });
     expect(existsSync(join(dir, ".dwa", "config.toml"))).toBe(true);
-    expect(projectRoles(dir)).toEqual(["developer", "explore", "reviewer"]);
+    expect(projectRoles(dir, ENV)).toEqual(["developer", "explore", "main", "reviewer"]);
     expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("node_modules/\n.dwa/run/\n");
-    expect(result.created).toHaveLength(6);
+    expect(result.created).toHaveLength(8);
     expect(listWorkflows(dir).map((workflow) => [workflow.name, workflow.error])).toEqual([
       ["feature", null],
     ]);
-    expect(readFileSync(join(dir, ".claude", "agents", "reviewer.md"), "utf8")).toContain(
-      "name: reviewer",
+    expect(readFileSync(join(dir, ".dwa", "roles", "reviewer.toml"), "utf8")).toContain(
+      'extends = "explore"',
     );
   });
 
-  test("example roles do not list allowed tools, which would hide the dwa tools", () => {
+  test("the example roles resolve with the template config, and the workflow uses only them", () => {
     initProject(dir, { roles: true });
-    for (const role of projectRoles(dir)) {
-      const text = readFileSync(join(dir, ".claude", "agents", `${role}.md`), "utf8");
-      expect(text).not.toMatch(/^tools:/m);
-    }
+    const config = parseConfig(CONFIG_TEMPLATE, "template");
+    const ctx = { projectRoot: dir, env: ENV };
+    const session = (role: string) => resolveSession({ config, role }, ctx);
+    for (const role of projectRoles(dir, ENV)) expect(session(role).prompt).toBeTruthy();
+    expect(session("developer")).toMatchObject({
+      model: "sonnet",
+      effort: "high",
+      permissionMode: "acceptEdits",
+      deny: ["Bash(git push *)"],
+      memory: false,
+    });
+    expect(session("explore")).toMatchObject({
+      tools: ["Read", "Grep", "Glob", "Bash"],
+      permissionMode: "dontAsk",
+    });
+    // The reviewer takes tools, mode and rules from explore and adds its own model and skill.
+    const reviewer = session("reviewer");
+    expect(reviewer).toMatchObject({
+      model: "opus",
+      tools: ["Read", "Grep", "Glob", "Bash"],
+      permissionMode: "dontAsk",
+      allow: session("explore").allow,
+    });
+    expect(reviewer.skills?.map((skill) => [skill.name, skill.source])).toEqual([
+      ["review-checklist", "dwa"],
+    ]);
+    // [main] in the template wins over the role's effort.
+    expect(resolveSession({ config, main: true }, ctx)).toMatchObject({
+      role: "main",
+      model: "opus",
+      effort: "medium",
+      memory: true,
+    });
+    expect(checkSessions(config, ctx)).toEqual([]);
+    const steps = Object.values(loadWorkflow(dir, "feature").steps);
+    expect(steps.every((step) => step.role && projectRoles(dir, ENV).includes(step.role))).toBe(
+      true,
+    );
   });
 
   test("never overwrites existing files and leaves non-git folders without .gitignore", () => {

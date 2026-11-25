@@ -57,6 +57,10 @@ export class FakeTmux {
       case "break-pane":
         this.require(option(args, "-s")).window = option(args, "-n") ?? "window";
         return "";
+      case "respawn-pane":
+        // The pane stays what and where it is; only its command is new.
+        Object.assign(this.require(option(args, "-t")), command(args));
+        return "";
       case "kill-pane":
         this.panes.delete(option(args, "-t") ?? "");
         return "";

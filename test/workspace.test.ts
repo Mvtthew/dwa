@@ -5,6 +5,7 @@ import { claudeProvider } from "../src/providers/claude/launch.ts";
 import type { Config } from "../src/shared/config.ts";
 import { WORKSPACE_WINDOW } from "../src/tmux/layout.ts";
 import { FakeTmux } from "./fake-tmux.ts";
+import { testRoleFiles } from "./role-files.ts";
 
 let config: Config;
 const baseConfig: Config = {
@@ -13,6 +14,8 @@ const baseConfig: Config = {
   layout: {},
   defaults: {},
   main: {},
+  mcp: {},
+  plugins: {},
   default_profile: "me",
   profiles: {
     me: { command: "/bin/claude_me", args: [], env: {} },
@@ -24,17 +27,25 @@ let tmux: FakeTmux;
 let store: Store;
 let workspace: Workspace;
 let files: Map<string, string>;
+/** Links the workspace made, by path, with what each points at. */
+let links: Map<string, string>;
 /** Paste-fallback timers the workspace asked for; a test runs them by hand. */
 let scheduled: (() => void)[];
-/** What the role files say about model and effort. */
-let roles: Record<string, { model?: string; effort?: string }>;
+/** The text of role files; a role not listed here has an empty file. */
+let roles: Record<string, string>;
+/** Other files the workspace can see, by full path, and the commands on PATH. */
+let disk: Record<string, string>;
+let commands: string[];
 
 beforeEach(() => {
   config = structuredClone(baseConfig);
   tmux = new FakeTmux();
   files = new Map();
+  links = new Map();
   scheduled = [];
   roles = {};
+  disk = {};
+  commands = [];
   store = new Store(":memory:");
   let id = 0;
   workspace = new Workspace({
@@ -47,7 +58,15 @@ beforeEach(() => {
     runDir: "/project/.dwa/run",
     writeFile: (path, content) => files.set(path, content),
     loadConfig: async () => config,
-    readRole: (role) => roles[role] ?? {},
+    roleFiles: {
+      // Looked up on every call, so a test can add files after the workspace is made.
+      read: (path) => testRoleFiles(roles, disk, commands).read(path),
+      exists: (path) => testRoleFiles(roles, disk, commands).exists(path),
+      list: (path) => testRoleFiles(roles, disk, commands).list(path),
+      which: (command) => testRoleFiles(roles, disk, commands).which(command),
+    },
+    linkDir: (target, path) => links.set(path, target),
+    wrapperConfigDir: () => "/home/me/.claude-me",
     schedule: (callback) => scheduled.push(callback),
     env: {},
     newId: () => `id-${++id}`,
@@ -67,20 +86,23 @@ describe("up", () => {
     expect(panes.map((pane) => pane.window)).toEqual(Array(3).fill(WORKSPACE_WINDOW));
     expect(panes[0]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "status"]);
     const mainArgv = panes[1]?.argv ?? [];
-    expect(mainArgv.slice(0, 9)).toEqual([
+    expect(mainArgv).toEqual([
       "/bin/claude_me",
+      "--setting-sources",
+      "project,local",
       "--session-id",
       "id-2",
       "--name",
       "main",
       "--settings",
       "/project/.dwa/run/agents/id-1/settings.json",
+      "--strict-mcp-config",
       "--mcp-config",
       "/project/.dwa/run/agents/id-1/mcp.json",
+      "--append-system-prompt-file",
+      "/project/.dwa/run/agents/id-1/prompt.md",
     ]);
-    expect(mainArgv[9]).toBe("--append-system-prompt");
-    expect(mainArgv[10]).toContain('You are "main"');
-    expect(mainArgv).toHaveLength(11);
+    expect(files.get("/project/.dwa/run/agents/id-1/prompt.md")).toContain('You are "main"');
     expect(panes[2]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "agents"]);
     expect(panes[1]?.env).toMatchObject({
       DWA_PROJECT: "/project",
@@ -162,17 +184,19 @@ describe("agents", () => {
     expect(agent.open).toBe(false);
     expect(tmux.windowOf(agent.paneId)).toBe("explore");
     const argv = tmux.panes.get(agent.paneId)?.argv ?? [];
-    expect(argv.slice(0, 5)).toEqual([
+    expect(argv.slice(0, 7)).toEqual([
       "/bin/claude_me",
+      "--setting-sources",
+      "project,local",
       "--session-id",
       "id-4",
       "--name",
       "explore",
     ]);
-    expect(argv[6]).toBe("/project/.dwa/run/agents/id-3/settings.json");
-    expect(argv[10]).toContain('You are "explore"');
-    // The role and the task come last, after everything dwa adds.
-    expect(argv.slice(11)).toEqual(["--agent", "explore", "find the bug"]);
+    expect(argv[8]).toBe("/project/.dwa/run/agents/id-3/settings.json");
+    expect(files.get("/project/.dwa/run/agents/id-3/prompt.md")).toContain('You are "explore"');
+    // The task comes last, after everything dwa adds.
+    expect(argv.at(-1)).toBe("find the bug");
   });
 
   test("a per-agent profile wins over the workspace profile", async () => {
@@ -370,6 +394,19 @@ describe("wizard popups", () => {
       ],
     ]);
   });
+
+  test("the tools dialog opens on the session it was asked for", async () => {
+    await workspace.up();
+    workspace.popup("tools", "id-3");
+    workspace.popup("roles");
+    await workspace.state();
+    const [tools, roles] = tmux.commands("display-popup");
+    expect(tools?.slice(-2)).toEqual([
+      " Agent tools ",
+      "DWA_PROJECT='/project' 'bun' '/dwa/cli.ts' wizard tools 'id-3'",
+    ]);
+    expect(roles?.at(-1)).toBe("DWA_PROJECT='/project' 'bun' '/dwa/cli.ts' wizard roles");
+  });
 });
 
 describe("zoom and detach", () => {
@@ -397,6 +434,203 @@ describe("zoom and detach", () => {
   });
 });
 
+describe("roles", () => {
+  const session = (id: string) => ({
+    settings: JSON.parse(files.get(`/project/.dwa/run/agents/${id}/settings.json`) ?? "{}"),
+    mcp: JSON.parse(files.get(`/project/.dwa/run/agents/${id}/mcp.json`) ?? "{}").mcpServers,
+    prompt: files.get(`/project/.dwa/run/agents/${id}/prompt.md`) ?? "",
+  });
+  const argvOf = (paneId: string) => tmux.panes.get(paneId)?.argv ?? [];
+
+  beforeEach(() => {
+    config.mcp = { github: { command: "gh-mcp", args: ["serve"], env: { TOKEN: "t" } } };
+    config.plugins = { lint: { path: "/project/tools/lint" } };
+    roles.explore = 'deny_tools = ["Edit", "Write"]\nprompt = "You explore."';
+    roles.reviewer = `
+extends = "explore"
+permission_mode = "plan"
+allow = ["Bash(git log *)"]
+deny = ["Read(.env)"]
+mcp = ["github"]
+plugins = ["lint"]
+skills = ["review", "house-style"]
+`;
+    disk = {
+      "/project/.claude/skills/review/SKILL.md": "",
+      "/project/.claude/skills/deploy/SKILL.md": "",
+      "/project/.dwa/skills/house-style/SKILL.md": "",
+      "/project/tools/lint/.mcp.json": JSON.stringify({
+        mcpServers: { linter: { command: "$" + "{CLAUDE_PLUGIN_ROOT}/server" } },
+      }),
+      "/project/.mcp.json": JSON.stringify({ mcpServers: { db: { command: "db-mcp" } } }),
+    };
+    commands = ["gh-mcp"];
+  });
+
+  test("a session is started with what its role says and nothing of the user's own setup", async () => {
+    await workspace.up();
+    const agent = await workspace.spawn({ name: "rev", role: "reviewer", task: "review it" });
+    const dir = "/project/.dwa/run/agents/id-3";
+    expect(argvOf(agent.paneId)).toEqual([
+      "/bin/claude_me",
+      "--setting-sources",
+      "project,local",
+      "--disallowedTools",
+      "Edit,Write",
+      "--session-id",
+      "id-4",
+      "--name",
+      "rev",
+      "--settings",
+      `${dir}/settings.json`,
+      "--strict-mcp-config",
+      "--mcp-config",
+      `${dir}/mcp.json`,
+      "--append-system-prompt-file",
+      `${dir}/prompt.md`,
+      "--permission-mode",
+      "plan",
+      "--plugin-dir",
+      "/project/tools/lint",
+      "--plugin-dir",
+      `${dir}/skills-plugin`,
+      "review it",
+    ]);
+
+    const { settings, mcp, prompt } = session("id-3");
+    expect(settings.permissions).toEqual({
+      allow: ["mcp__dwa", "Bash(git log *)"],
+      deny: ["Read(.env)"],
+    });
+    // The project skill the role does not list is switched off; the personal CLAUDE.md of the
+    // profile's config directory (and of the default one) is not loaded.
+    expect(settings.skillOverrides).toEqual({ deploy: "off" });
+    expect(settings.claudeMdExcludes).toContain("/home/me/.claude-me/CLAUDE.md");
+    expect(settings.claudeMdExcludes).toHaveLength(2);
+
+    // The plugin's server, the project's, the role's and dwa's own.
+    expect(Object.keys(mcp)).toEqual(["linter", "db", "github", "dwa"]);
+    expect(mcp.linter.command).toBe("/project/tools/lint/server");
+    expect(mcp.github).toEqual({
+      type: "stdio",
+      command: "gh-mcp",
+      args: ["serve"],
+      env: { TOKEN: "t" },
+    });
+
+    // The inherited prompt follows the workspace part.
+    expect(prompt).toContain('You are "rev"');
+    expect(prompt.endsWith("# Your role: reviewer\n\nYou explore.")).toBe(true);
+
+    // The dwa skill reaches the session through a plugin made for it; the project skill needs none.
+    expect(
+      JSON.parse(files.get(`${dir}/skills-plugin/.claude-plugin/plugin.json`) ?? "{}").name,
+    ).toBe("dwa");
+    expect([...links]).toEqual([
+      [`${dir}/skills-plugin/skills/house-style`, "/project/.dwa/skills/house-style"],
+    ]);
+  });
+
+  test("a session without dwa skills gets no generated plugin, and every project skill", async () => {
+    await workspace.up();
+    const agent = await workspace.spawn({ name: "ex", role: "explore" });
+    expect(argvOf(agent.paneId)).not.toContain("--plugin-dir");
+    expect(session("id-3").settings).not.toHaveProperty("skillOverrides");
+    expect(Object.keys(session("id-3").mcp)).toEqual(["db", "dwa"]);
+    expect(links.size).toBe(0);
+  });
+
+  test("the main session runs as the main role", async () => {
+    roles.main = 'tools = ["Read", "Bash"]\nprompt = "You lead."';
+    const { main } = await workspace.up();
+    expect(main?.role).toBe("main");
+    expect(argvOf(main?.paneId ?? "").slice(3, 5)).toEqual(["--tools", "Read,Bash"]);
+    expect(session("id-1").prompt.endsWith("# Your role: main\n\nYou lead.")).toBe(true);
+    expect(main?.capabilities?.tools).toEqual(["Read", "Bash"]);
+  });
+
+  test("what a session was started with is kept with the agent", async () => {
+    await workspace.up();
+    const agent = await workspace.spawn({ name: "rev", role: "reviewer", model: "opus" });
+    const expected = {
+      model: "opus",
+      permissionMode: "plan",
+      denyTools: ["Edit", "Write"],
+      allow: ["Bash(git log *)"],
+      deny: ["Read(.env)"],
+      mcp: ["github"],
+      plugins: ["lint"],
+      skills: ["review", "house-style"],
+      memory: false,
+    };
+    expect(agent.capabilities).toEqual(expected);
+    expect((await workspace.state()).agents[0]?.capabilities).toEqual(expected);
+    const stored = JSON.parse(store.getLaunch(agent.id) ?? "{}");
+    expect(stored).toMatchObject({ role: "reviewer", model: "opus", hiddenSkills: ["deploy"] });
+    expect(stored.mcp.github.command).toBe("gh-mcp");
+  });
+
+  test("the user's own spawn can change anything; an agent's can only take away", async () => {
+    await workspace.up();
+    const wide = await workspace.spawn({
+      role: "explore",
+      tools: ["Read", "Edit"],
+      mcp: ["github"],
+    });
+    expect(wide.capabilities).toMatchObject({
+      tools: ["Read", "Edit"],
+      denyTools: [],
+      mcp: ["github"],
+    });
+
+    const narrow = await workspace.spawn({
+      role: "reviewer",
+      narrowOnly: true,
+      deny_tools: ["Bash"],
+      mcp: [],
+      skills: ["review"],
+    });
+    expect(narrow.capabilities).toMatchObject({
+      denyTools: ["Edit", "Write", "Bash"],
+      mcp: [],
+      skills: ["review"],
+    });
+    const refused = (request: object) =>
+      expect(workspace.spawn({ role: "explore", narrowOnly: true, ...request })).rejects;
+    await refused({ tools: ["Edit"] }).toThrow(
+      /an agent can only narrow a role, so it cannot set tools/,
+    );
+    await refused({ mcp: ["github"] }).toThrow(/MCP server "github" is not part of it/);
+    await refused({ permission_mode: "bypassPermissions" }).toThrow(/cannot set permission_mode/);
+    expect((await workspace.state()).agents).toHaveLength(2);
+  });
+
+  test("a session that would miss something is not started", async () => {
+    await workspace.up();
+    commands = [];
+    await expect(workspace.spawn({ name: "rev", role: "reviewer" })).rejects.toThrow(
+      'Cannot start "rev": MCP server "github": command "gh-mcp" was not found.',
+    );
+    await expect(workspace.spawn({ role: "explore", mcp: ["slack"] })).rejects.toThrow(
+      /unknown MCP server "slack"/,
+    );
+    await expect(workspace.spawn({ role: "explore", skills: ["nope"] })).rejects.toThrow(
+      /unknown skill "nope"/,
+    );
+    await expect(workspace.spawn({ role: "explore", tools: "Read" as never })).rejects.toThrow(
+      /Agent settings: tools/,
+    );
+    expect((await workspace.state()).agents).toEqual([]);
+  });
+
+  test("the workspace does not start when the main role is broken", async () => {
+    config.main = { role: "lead" };
+    roles.lead = 'mcp = ["nowhere"]';
+    await expect(workspace.up()).rejects.toThrow(/Role "lead": unknown MCP server "nowhere"/);
+    expect(tmux.commands("new-session")).toHaveLength(0);
+  });
+});
+
 describe("model and effort", () => {
   /** The `--model` and `--effort` arguments of the agent started last. */
   function tuning(): string[] {
@@ -413,7 +647,7 @@ describe("model and effort", () => {
 
   test("the agent's own setting wins, then the role file, then the defaults", async () => {
     config.defaults = { model: "sonnet", effort: "medium" };
-    roles.reviewer = { model: "opus" };
+    roles.reviewer = 'model = "opus"';
     await workspace.up();
 
     await workspace.spawn({ name: "plain" });
@@ -427,13 +661,14 @@ describe("model and effort", () => {
     expect(tuning()).toEqual(["--model", "haiku", "--effort", "low"]);
   });
 
-  test("agents from the config carry their settings, and main is left alone", async () => {
+  test("agents from the config carry their settings, and the defaults reach main too", async () => {
     config.defaults = { model: "sonnet" };
     config.agents = [{ name: "rev", effort: "high" }];
     await workspace.up();
     expect(tuning()).toEqual(["--model", "sonnet", "--effort", "high"]);
+    // Main is a session like the others: the defaults apply, its own effort is not set.
     const main = [...tmux.panes.values()].find((pane) => pane.argv.includes("main"));
-    expect(main?.argv).not.toContain("--model");
+    expect(main?.argv.slice(-2)).toEqual(["--model", "sonnet"]);
   });
 
   test("the main session takes its own section, after the profile's arguments", async () => {
@@ -725,7 +960,7 @@ describe("notify", () => {
       selfArgv: ["bun"],
       runDir: "/project/.dwa/run",
       loadConfig: async () => config,
-      readRole: () => ({}),
+      roleFiles: testRoleFiles(),
     });
     await failing.notify("x");
   });

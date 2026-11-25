@@ -7,6 +7,7 @@ import { type Config, ConfigError } from "../src/shared/config.ts";
 import type { AgentInfo, WorkflowRunInfo } from "../src/shared/protocol.ts";
 import { parseWorkflow } from "../src/shared/workflow.ts";
 import { FakeTmux } from "./fake-tmux.ts";
+import { testRoleFiles } from "./role-files.ts";
 
 const config: Config = {
   keys: {},
@@ -14,6 +15,8 @@ const config: Config = {
   layout: {},
   defaults: {},
   main: {},
+  mcp: {},
+  plugins: {},
   default_profile: "me",
   profiles: { me: { command: "/bin/claude_me", args: [], env: {} } },
 };
@@ -77,6 +80,8 @@ let store: Store;
 let workspace: Workspace;
 let workflows: Workflows;
 let counter: number;
+/** Roles that have no file. */
+let absentRoles: string[];
 
 function build(): void {
   workspace = new Workspace({
@@ -89,7 +94,11 @@ function build(): void {
     runDir: "/project/.dwa/run",
     writeFile: () => undefined,
     loadConfig: async () => config,
-    readRole: () => ({}),
+    roleFiles: {
+      ...testRoleFiles(),
+      // Every role has a file, apart from the ones a test takes away.
+      read: (path) => (absentRoles.some((role) => path.endsWith(`/${role}.toml`)) ? null : ""),
+    },
     schedule: () => undefined,
     env: {},
     newId: () => `id-${++counter}`,
@@ -112,6 +121,7 @@ beforeEach(() => {
   tmux = new FakeTmux();
   store = new Store(":memory:");
   counter = 0;
+  absentRoles = [];
   build();
 });
 
@@ -138,6 +148,23 @@ function userMessages(): string[] {
 }
 
 describe("running a workflow", () => {
+  test("a run does not start when a step's role has no file", async () => {
+    await workspace.up();
+    absentRoles = ["explore"];
+    await expect(workflows.start("chain", "x", "user")).rejects.toThrow(
+      'Workflow "chain" uses a role with no file in .dwa/roles: explore.',
+    );
+    expect(await agents()).toEqual([]);
+    expect(store.runningWorkflowRuns()).toEqual([]);
+  });
+
+  test("a step's own settings reach its session", async () => {
+    DEFINITIONS.limited = '[steps.a]\nrole = "explore"\ndeny_tools = ["Bash"]\nprompt = "a"';
+    await workspace.up();
+    await workflows.start("limited", "x", "user");
+    expect((await agent("a")).capabilities?.denyTools).toEqual(["Bash"]);
+  });
+
   test("starts each step as an agent when the steps before it are done", async () => {
     await workspace.up();
     const run = await workflows.start("chain", "a login page", "user");

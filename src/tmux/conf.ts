@@ -15,13 +15,17 @@ const POPUPS: Record<PopupKind, { title: string; command: string; width: number;
   {
     workflows: { title: "Workflows", command: "wizard workflows", width: 70, height: 80 },
     agent: { title: "New agent", command: "wizard agent", width: 70, height: 80 },
+    tools: { title: "Agent tools", command: "wizard tools", width: 70, height: 90 },
+    roles: { title: "Role settings", command: "wizard roles", width: 70, height: 90 },
     questions: { title: "Questions", command: "answer", width: 80, height: 60 },
     palette: { title: APP_NAME, command: "palette", width: 60, height: 70 },
   };
 
 /** tmux arguments that open one of dwa's popups over the workspace. */
-export function popupArgs(self: string, kind: PopupKind): string[] {
-  const { title, command, width, height } = POPUPS[kind];
+export function popupArgs(self: string, kind: PopupKind, subject?: string): string[] {
+  const { title, width, height } = POPUPS[kind];
+  // What the popup is about (a session for the tools dialog) goes to its command as a word.
+  const command = subject ? `${POPUPS[kind].command} ${tmuxQuote(subject)}` : POPUPS[kind].command;
   return [
     "display-popup",
     "-E",
@@ -66,6 +70,8 @@ export function buildTmuxConf(options: ConfOptions): string {
     ["s", run("key shell")],
     ["w", popup("workflows")],
     ["a", popup("agent")],
+    ["t", popup("tools")],
+    ["r", popup("roles")],
     ["0", run("key focus")],
     ["z", "resize-pane -Z"],
     ["p", popup("palette")],
@@ -89,6 +95,7 @@ export function buildTmuxConf(options: ConfOptions): string {
     "",
     "# Shortcuts: <prefix> then 1..9 opens that agent under main, x closes it, 0 focuses main,",
     "# s shows or hides the shell, w opens the workflows wizard, a the new-agent wizard,",
+    "# t the tools of a session, r the role settings,",
     "# p opens the command menu, q answers open questions, z zooms the focused pane, d detaches. Pressing the prefix twice sends it to the program.",
     "unbind -a -T prefix",
     "unbind -a -T root",

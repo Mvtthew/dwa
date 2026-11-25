@@ -1,34 +1,45 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { ConfigError, EffortSchema, ModelSchema } from "./config.ts";
+import {
+  CAPABILITY_KEYS,
+  ConfigError,
+  capabilityFields,
+  pickCapabilities,
+  refuseBothToolLists,
+} from "./capabilities.ts";
 import { workflowsDir } from "./paths.ts";
 import type { WorkflowRunInfo, WorkflowStepState } from "./protocol.ts";
+import { tomlString } from "./toml.ts";
 
 /** Step ids become agent names and workflow names become file names, so both stay simple. */
 const NAME = /^[A-Za-z0-9][\w-]{0,39}$/;
 
-const StepSchema = z.strictObject({
-  /** First prompt of the step's session. May use `{{input}}` and `{{steps.<id>.result}}`. */
-  prompt: z.string().min(1),
-  /** Agent definition to run as (a `.claude/agents/<role>.md` file). */
-  role: z.string().optional(),
-  profile: z.string().optional(),
-  /** Model and effort for the step's session; without them the role file or the defaults apply. */
-  model: ModelSchema.optional(),
-  effort: EffortSchema.optional(),
-  /** Steps that must be done before this one starts. */
-  depends_on: z.array(z.string()).default([]),
-  /** Leave the step's session running after it completes. */
-  keep_agent: z.boolean().default(false),
-  /**
-   * Makes this a review of an earlier step: its agent may send that step back for another pass
-   * with `request_changes` instead of completing.
-   */
-  reviews: z.string().optional(),
-  /** Review passes before the user is asked what to do. Only with `reviews`. */
-  max_rounds: z.number().int().min(1).optional(),
-});
+const StepSchema = z
+  .strictObject({
+    /** First prompt of the step's session. May use `{{input}}` and `{{steps.<id>.result}}`. */
+    prompt: z.string().min(1),
+    /** Role to run as (a `.dwa/roles/<role>.toml` file). */
+    role: z.string().optional(),
+    profile: z.string().optional(),
+    /**
+     * Model, effort, tools, MCP servers, plugins and skills for the step's session. Anything set
+     * here replaces what the role says; without it the role and the defaults apply.
+     */
+    ...capabilityFields,
+    /** Steps that must be done before this one starts. */
+    depends_on: z.array(z.string()).default([]),
+    /** Leave the step's session running after it completes. */
+    keep_agent: z.boolean().default(false),
+    /**
+     * Makes this a review of an earlier step: its agent may send that step back for another pass
+     * with `request_changes` instead of completing.
+     */
+    reviews: z.string().optional(),
+    /** Review passes before the user is asked what to do. Only with `reviews`. */
+    max_rounds: z.number().int().min(1).optional(),
+  })
+  .superRefine(refuseBothToolLists);
 
 /** Review passes a review step gets when it does not set `max_rounds`. */
 export const DEFAULT_MAX_ROUNDS = 3;
@@ -191,30 +202,11 @@ export function sameWork(a: WorkflowStep, b: WorkflowStep): boolean {
       step.prompt,
       step.role,
       step.profile,
-      step.model,
-      step.effort,
+      CAPABILITY_KEYS.map((field) => step[field] ?? null),
       step.reviews,
       [...step.depends_on].sort(),
     ]);
   return key(a) === key(b);
-}
-
-/** Escapes the control characters TOML does not allow raw in a string. Tab and newline stay. */
-function escapeControl(text: string): string {
-  let out = "";
-  for (const char of text) {
-    const code = char.charCodeAt(0);
-    const raw = code >= 0x20 ? code !== 0x7f : code === 0x09 || code === 0x0a;
-    out += raw ? char : `\\u${code.toString(16).padStart(4, "0")}`;
-  }
-  return out;
-}
-
-function tomlString(value: string): string {
-  if (!value.includes("\n")) return escapeControl(JSON.stringify(value));
-  // A quote is escaped only where it could be read as part of the closing delimiter.
-  const body = value.replace(/\\/g, "\\\\").replace(/"(?="|$)/g, '\\"');
-  return `"""\n${escapeControl(body)}"""`;
 }
 
 /**
@@ -231,8 +223,14 @@ export function formatWorkflow(definition: WorkflowDefinition, header: string[] 
     lines.push(`[steps.${id}]`);
     if (step.role !== undefined) lines.push(`role = ${tomlString(step.role)}`);
     if (step.profile !== undefined) lines.push(`profile = ${tomlString(step.profile)}`);
-    if (step.model !== undefined) lines.push(`model = ${tomlString(step.model)}`);
-    if (step.effort !== undefined) lines.push(`effort = ${tomlString(step.effort)}`);
+    for (const [field, value] of Object.entries(pickCapabilities(step))) {
+      const text = Array.isArray(value)
+        ? `[${value.map(tomlString).join(", ")}]`
+        : typeof value === "boolean"
+          ? String(value)
+          : tomlString(value);
+      lines.push(`${field} = ${text}`);
+    }
     if (step.depends_on.length > 0) {
       lines.push(`depends_on = [${step.depends_on.map(tomlString).join(", ")}]`);
     }
