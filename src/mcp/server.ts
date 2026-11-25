@@ -3,6 +3,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { call } from "../cli/client.ts";
 import { APP_NAME } from "../shared/constants.ts";
 import { daemonSocketPath } from "../shared/paths.ts";
 import type {
@@ -385,12 +386,23 @@ export async function runMcp(env: Env = process.env): Promise<void> {
   const agentId = env.DWA_AGENT_ID ?? "";
   const socket = env.DWA_SOCKET || daemonSocketPath(env.DWA_PROJECT ?? process.cwd());
 
-  const api: Api = async <T>(method: "GET" | "POST", path: string, body?: unknown) => {
-    const response = await fetch(`http://localhost${path}`, {
+  const send = (method: "GET" | "POST", path: string, body?: unknown) =>
+    fetch(`http://localhost${path}`, {
       unix: socket,
       method,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+  const api: Api = async <T>(method: "GET" | "POST", path: string, body?: unknown) => {
+    let response: Response;
+    try {
+      response = await send(method, path, body);
+    } catch (error) {
+      // The daemon is gone. While the workspace runs it can be started again, which the
+      // shared client does; then the tool call is made once more.
+      if (!env.DWA_PROJECT) throw error;
+      await call(env.DWA_PROJECT, "GET", "/ping");
+      response = await send(method, path, body);
+    }
     const data = (await response.json()) as T & { error?: string };
     if (!response.ok) throw new ApiError(data.error ?? `HTTP ${response.status}`);
     return data;

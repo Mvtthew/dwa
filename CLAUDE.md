@@ -23,7 +23,7 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - Role files and `[defaults]` are written only through `src/shared/role-edit.ts`, which keeps the rest of the file byte for byte (`setKeys` in `src/shared/toml.ts`) and records a version in `.dwa/history/`. Never rewrite one of these files from parsed values.
 - History versions are never deleted or renumbered; switching moves the `current` pointer only.
 - What a running session has is its stored `launch` plus the calls its hook refuses (`agents.blocked`). Claude Code does not re-read `--settings`, so a change is either such a refusal or a restart (`--resume`, same pane); see docs/spikes.md, S6. A restart resolves the session from the files as they are now.
-- `dwa hook` prints nothing except the refusal of a blocked tool on `PreToolUse`.
+- `dwa hook` prints nothing except the refusal of a blocked tool on `PreToolUse`. It decides that from `blocked.json` in the session's run folder, not from the daemon's answer, so a refusal holds while the daemon is down; change the list only through `Workspace.setBlocks`, which writes both the store and the file.
 - A workflow step ends only through `complete_step` or `fail_step` (from its agent, or from the user with `dwa workflow complete` / `fail`) or its session ending, never because a turn ended or time passed.
 - The workflow engine reads a step at its latest attempt only (`Store.workflowSteps`); a review that sends work back adds attempt rows, it never rewrites old ones.
 - `Workspace.onAgentEvent` listeners run inside the tmux queue: only enqueue work there, never await a `Workspace` call.

@@ -1,7 +1,10 @@
 // Commands that Claude Code itself runs inside every session: on each hook event and every few
 // seconds for the status line. They must be fast, never fail and never print anything unexpected,
 // because hook output can be fed back to the model. Keep this file's imports minimal.
-import { daemonSocketPath } from "../shared/paths.ts";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { daemonSocketPath, runDir } from "../shared/paths.ts";
+import { BLOCKED_FILE, blockedReason } from "../shared/tools.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -32,6 +35,31 @@ function parse(text: string): unknown {
 }
 
 /**
+ * Whether a tool call is refused, from the list the daemon keeps in the session's run folder.
+ * Read here and not asked from the daemon, so a tool that was switched off stays off while
+ * the daemon restarts. `undefined` when there is no list, so the daemon's answer counts; a
+ * list that is there but cannot be read refuses the call.
+ */
+export function localVerdict(
+  projectRoot: string,
+  agentId: string,
+  tool: string,
+): string | null | undefined {
+  const file = join(runDir(projectRoot), "agents", agentId, BLOCKED_FILE);
+  if (!existsSync(file)) return undefined;
+  try {
+    const blocks = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    if (!Array.isArray(blocks)) throw new Error("not a list");
+    return blockedReason(
+      tool,
+      blocks.filter((item) => typeof item === "string"),
+    );
+  } catch {
+    return `The list of tools switched off for this session could not be read (${file}), so the call is refused. Tell the user.`;
+  }
+}
+
+/**
  * `dwa hook <event>`: forwards the event JSON from stdin to the daemon. Prints nothing, with
  * one exception: before a tool call the daemon may refuse a tool that was switched off for the
  * session after it started, and that refusal is printed in the form Claude Code reads.
@@ -43,14 +71,21 @@ export async function hookCommand(
   const agentId = env.DWA_AGENT_ID;
   if (!event || !agentId) return 0;
   const input = parse(await Bun.stdin.text());
+  const tool = (input as { tool_name?: unknown } | null)?.tool_name;
+  const local =
+    event === "PreToolUse" && typeof tool === "string" && env.DWA_PROJECT
+      ? localVerdict(env.DWA_PROJECT, agentId, tool)
+      : undefined;
   const reply = (await post(env, "/hook", { agentId, event, input })) as { deny?: unknown } | null;
-  if (event === "PreToolUse" && typeof reply?.deny === "string") {
+  // The session's own list decides; the daemon's answer only when there is no list.
+  const deny = local !== undefined ? local : typeof reply?.deny === "string" ? reply.deny : null;
+  if (event === "PreToolUse" && deny) {
     console.log(
       JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
           permissionDecision: "deny",
-          permissionDecisionReason: reply.deny,
+          permissionDecisionReason: deny,
         },
       }),
     );

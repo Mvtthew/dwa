@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -59,7 +60,8 @@ import {
 } from "../shared/roles.ts";
 import {
   applyToolChanges,
-  isBlocked,
+  BLOCKED_FILE,
+  blockedReason,
   liveBlocks,
   type ToolSources,
   toolView,
@@ -580,15 +582,10 @@ export class Workspace {
     }
     if (request.event === "PreToolUse" && typeof input.tool_name === "string") {
       const blocks = parseJson<string[]>(store.getBlocked(row.id)) ?? [];
-      const tool = input.tool_name;
-      if (isBlocked(tool, blocks)) {
-        const server = /^mcp__(.+?)__/.exec(tool)?.[1];
-        const what =
-          server && blocks.includes(`mcp__${server}`) ? `The MCP server ${server}` : tool;
-        return {
-          deny: `${what} was switched off for this session in ${APP_NAME}. Do not try to work around it; say what you could not do.`,
-        };
-      }
+      // The hook decides this from the session's own file; this answer is for a session
+      // whose file is missing.
+      const reason = blockedReason(input.tool_name, blocks);
+      if (reason) return { deny: reason };
     }
     return {};
   }
@@ -784,6 +781,23 @@ export class Workspace {
       return pickCapabilities(parsed.defaults ?? {});
     } catch {
       return {};
+    }
+  }
+
+  /**
+   * Sets what a running session is refused. The list is also written next to the session's
+   * other files, where its hook reads it, so a refusal holds while this daemon is down or slow.
+   */
+  private setBlocks(agentId: string, blocks: string[]): void {
+    this.deps.store.setBlocked(agentId, blocks.length > 0 ? JSON.stringify(blocks) : null);
+    const file = join(this.deps.runDir, "agents", agentId, BLOCKED_FILE);
+    const text = JSON.stringify(blocks);
+    if (this.deps.writeFile) this.deps.writeFile(file, text);
+    else {
+      mkdirSync(dirname(file), { recursive: true });
+      // Written whole and moved into place: the hook must never read half a list.
+      writeFileSync(`${file}.tmp`, text);
+      renameSync(`${file}.tmp`, file);
     }
   }
 
@@ -1120,7 +1134,7 @@ export class Workspace {
       // The session keeps running as it was started; its hook refuses what was taken away.
       const before = parseJson<string[]>(this.deps.store.getBlocked(agent.id)) ?? [];
       const back = before.filter((name) => !difference.blocks.includes(name));
-      this.deps.store.setBlocked(agent.id, JSON.stringify(difference.blocks));
+      this.setBlocks(agent.id, difference.blocks);
       if (back.length > 0) {
         // It was told these were switched off, and would not try them again by itself.
         this.messaging.send(
@@ -1193,7 +1207,7 @@ export class Workspace {
     store.setPendingRestart(agentId, false);
     if (!resume) store.setSessionId(agentId, sessionId);
     store.setLaunch(agentId, JSON.stringify(session));
-    store.setBlocked(agentId, null);
+    this.setBlocks(agentId, []);
     store.setActivity(agentId, "starting", null, this.now());
     store.addEvent({ agentId, at: this.now(), event: "Restart", summary: null });
     this.capabilities.set(agentId, summarizeSession(session));

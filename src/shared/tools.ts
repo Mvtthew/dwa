@@ -1,6 +1,7 @@
 // What the "Agent tools" dialog shows and what a change in it means for a session's
 // capabilities. Pure: the daemon supplies what it knows about servers and tools in use.
 import type { Capabilities } from "./capabilities.ts";
+import { APP_NAME } from "./constants.ts";
 import type { Origins, ResolvedSession } from "./roles.ts";
 
 /**
@@ -310,4 +311,16 @@ export function isBlocked(tool: string, blocks: string[]): boolean {
       // A whole server: every one of its tools.
       (block.startsWith(MCP_PREFIX) && tool.startsWith(`${block}__`)),
   );
+}
+
+/** Name of the file in a session's run folder that lists what it is refused. */
+export const BLOCKED_FILE = "blocked.json";
+
+/** What a session is told when it calls a refused tool; null when the call may go ahead. */
+export function blockedReason(tool: string, blocks: string[]): string | null {
+  if (!isBlocked(tool, blocks)) return null;
+  const server = /^mcp__(.+?)__/.exec(tool)?.[1];
+  const what =
+    server && blocks.includes(`${MCP_PREFIX}${server}`) ? `The MCP server ${server}` : tool;
+  return `${what} was switched off for this session in ${APP_NAME}. Do not try to work around it; say what you could not do.`;
 }

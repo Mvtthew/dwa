@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { localVerdict } from "../src/cli/hook.ts";
 import { initProject } from "../src/cli/init.ts";
 import { Store } from "../src/daemon/db.ts";
 import { Workspace } from "../src/daemon/workspace.ts";
@@ -131,6 +132,9 @@ describe("save for one session", () => {
     });
     expect(result.applied).toBe("live");
     expect(respawns()).toBe(0);
+    // The list is also in the session's folder, where its hook reads it without the daemon.
+    expect(localVerdict(dir, agent.id, "Bash")).toContain("Bash was switched off");
+    expect(localVerdict(dir, agent.id, "Read")).toBeNull();
     expect(event(agent, "PreToolUse", { tool_name: "Bash" }).deny).toContain("switched off");
     expect(event(agent, "PreToolUse", { tool_name: "mcp__notes__search" }).deny).toBeDefined();
     expect(event(agent, "PreToolUse", { tool_name: "Read" })).toEqual({});
@@ -153,6 +157,7 @@ describe("save for one session", () => {
       scope: "agent",
     });
     expect(back.applied).toBe("live");
+    expect(localVerdict(dir, agent.id, "Bash")).toBeNull();
     expect(event(agent, "PreToolUse", { tool_name: "Bash" })).toEqual({});
     expect(respawns()).toBe(0);
   });
