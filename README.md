@@ -52,7 +52,7 @@ The examples below use `bun run dwa`; with the link in place, plain `dwa` does t
 ## Usage
 
 ```sh
-bun run dwa init --roles            # once per project: config template, example roles and a workflow
+bun run dwa init --roles            # once per project: config template, example roles and workflows
 bun run dwa                         # start the workspace for this project, or attach to it
 bun run dwa up                      # the same, spelled out; takes --profile and --no-attach
 bun run dwa help                    # every command (also: dwa ?)
@@ -113,6 +113,8 @@ bun run dwa workflow cancel 1
 bun run dwa workflow complete 1 explore "The flag belongs in src/cli/index.ts"   # close a stuck step yourself
 bun run dwa workflow fail 1 build "wrong approach"
 bun run dwa workflow edit 1         # change the run in progress, in $EDITOR
+bun run dwa workflow show feature   # the steps as a picture; a run number shows how far it is
+bun run dwa workflow design feature # the designer; a run number opens that run
 ```
 
 - Steps without a dependency between them run at the same time.
@@ -125,6 +127,50 @@ bun run dwa workflow edit 1         # change the run in progress, in $EDITOR
 - Runs are stored, so they continue after a daemon restart. A run uses the file as it was when it started.
 - `workflow edit <run>` opens the run's own copy of the definition in `$EDITOR` and applies it when you close the editor; the workflow file is not touched. Steps that have not started can be changed, added or removed freely. Changing a step that has started makes it run again, together with every started step after it, and agents working on those are stopped; you see the list and confirm first. `keep_agent` and `max_rounds` never cause a restart. `workflow edit <run> <file>` applies a file instead (add `--yes` to skip the confirmation), and agents can do the same with `edit_workflow`; you get a message saying what they changed.
 
+### The workflow designer
+
+`Ctrl+Q` then `g`, "Design a workflow…" in the Workflows popup, or `dwa workflow design [name]` opens the designer: the steps as a picture on the left, and on the right a panel for whatever the cursor is on. Everything works with the keyboard and with the mouse.
+
+```
+ ╭───────────╮
+ │ explore   │
+ │ explore   │
+ ╰─────┬─────╯
+       │
+ ╭─────▼─────╮
+ │ build     │◀─×3─╮
+ │ developer │     │
+ ╰─────┬─────╯     │
+       │           │
+ ╭─────▼─────╮     │
+ │ review    │     │
+ │ reviewer  ├─────╯
+ ╰───────────╯
+```
+
+- **The picture.** A box is a step with its role; a line down means "starts when the one above is done"; a line back up is a review with the passes it may ask for. `!` marks a step with something wrong, `∞` one that keeps its agent, `≡` one with settings of its own.
+- **Changing it.** Arrows or a click choose a step. `a` adds one (name and role first; its prompt is written in the panel), `del` removes one and joins what depended on it to what it depended on, `m` picks one up and shows the places it can go (on a line: between those two steps; beside a step: at the same time as it; under a step: after it), `c` draws a line (down: a dependency; up to an earlier step: a review of it). With the mouse: drag a step onto one of the marked places, or onto another step to join them.
+- **The panel.** Name, role, model, effort, what the step waits for, what it reviews, whether it keeps its agent, and the prompt, typed in place with buttons that put in `{{input}}` and the results of earlier steps, or opened in `$EDITOR`. "More settings…" has the same lists a role has (tools, MCP servers, plugins, skills, rules).
+- **Nothing is lost.** Every change can be taken back (`u`, and `U` to do it again). Unsaved work is kept as a draft under `.dwa/run/` with its undo steps and offered again when you open the workflow, also after the popup was closed. While something is wrong the footer says what, and saving is refused.
+- **Saving** shows what changes in the file first. Only the changed lines are written: comments and the rest of the file stay as they are. If the file was changed elsewhere meanwhile, you are shown what changed and choose whose text to go on from.
+- **Starting a new one:** empty, from a template (`feature`, `bugfix`, `parallel-build`, `review-only`), as a copy, or "Describe it to an agent": a session of the `workflow-author` role reads the project, writes the workflow, saves it with the `save_workflow` tool and stays open, so you refine it by talking to it or on the picture.
+
+A run opens in the same designer (Workflows popup, or `dwa workflow design <run>`). Every step shows its state (`○` waits, `●` running, `✓` done, `✖` failed, `◆` needs you), the pass it is on and its agent, and the picture follows the run. The panel has what can be done: complete or fail a running step by hand, decide a review that waits for you, read results, cancel the run. `e` unlocks the steps for editing. Saving then says what the change does to the run (which steps run again) and asks where it goes: this run, the workflow file, or both. The file keeps its comments.
+
+Workflow files have versions like role files, and may be personal (`~/.config/dwa/workflows/`); the project's workflow wins when both have one of the same name.
+
+```sh
+bun run dwa workflow new deploy --from bugfix    # or without --from: a file with one step to start from
+bun run dwa workflow new notes --personal
+bun run dwa workflow duplicate feature feature-fast
+bun run dwa workflow rename feature-fast quick
+bun run dwa workflow move quick --to personal
+bun run dwa workflow delete personal:quick       # its history is kept
+bun run dwa workflow history feature             # * marks the current version
+bun run dwa workflow diff feature v2 v4
+bun run dwa workflow switch feature v2
+```
+
 ### Keys
 
 Press `Ctrl+Q`, release, then:
@@ -135,6 +181,7 @@ Press `Ctrl+Q`, release, then:
 | `x`      | Close the agent pane (the agent keeps running)         |
 | `s`      | Show or hide a plain shell under the main session      |
 | `w`      | Workflows: start a run, steer or edit a running one    |
+| `g`      | Workflow designer: workflows as a picture, history     |
 | `a`      | Start an agent: name, role, model, effort, first task  |
 | `t`      | Agent tools: what a session can use; block or allow    |
 | `r`      | Role settings: edit, create and delete roles, history  |
@@ -147,7 +194,7 @@ Press `Ctrl+Q`, release, then:
 
 Clicking a pane focuses it and dragging a border resizes it. In the agents pane, click an agent to show it under the main session and click it again to hide it; `j`/`k` or the arrow keys and `Enter` do the same, and `t` opens the tools of the selected agent. Under the list the pane shows what the selected agent can use. A `↻` after a name means the session is not as its role says any more: the role changed since it started, or it is about to restart.
 
-The status pane on the left ends with buttons: **Workflows**, **New agent**, **Agent tools**, **Role settings** and **Shell**, then the shortcuts from the table above (close pane, focus main, answer, menu, zoom main, detach), and the dwa version on the last line. Click one, or press its key alone while that pane has the focus. In a short terminal the shortcut buttons are left out so that questions and agents that need you stay visible. The first two, and the menu, open a form in a popup where every row can be clicked: start a workflow, complete or fail a step by hand, decide a review that is waiting for you, edit a run in `$EDITOR`, cancel it; or start an agent with a role, model and effort. The shell is your own `$SHELL` in the project directory. It takes the same place as an open agent, so showing one hides the other, and it keeps running while hidden until you exit it.
+The status pane on the left ends with buttons: **Workflows**, **Workflow designer**, **New agent**, **Agent tools**, **Role settings** and **Shell**, then the shortcuts from the table above (close pane, focus main, answer, menu, zoom main, detach), and the dwa version on the last line. Click one, or press its key alone while that pane has the focus. In a short terminal the shortcut buttons are left out so that questions and agents that need you stay visible. The first two, and the menu, open a form in a popup where every row can be clicked: start a workflow or open a run on its picture; or start an agent with a role, model and effort. The shell is your own `$SHELL` in the project directory. It takes the same place as an open agent, so showing one hides the other, and it keeps running while hidden until you exit it.
 
 The prefix can be changed in the config:
 
@@ -227,7 +274,7 @@ path = "tools/lint-plugin"           # a directory, relative to the project
 - **Built into Claude Code.** Its built-in plugins and skills are on in every session. Switch single ones off by id with `off_plugins = [...]` and `off_skills = [...]`; `/plugin` and `/skills` in a session list the ids. `memory = true` gives a role Claude Code's per-project memory.
 - **Status line.** Sessions show none. Context, cost and limits are in the status pane.
 
-`dwa init --roles` adds four roles to start from, a skill and an example workflow that uses them:
+`dwa init --roles` adds five roles to start from, a skill and four workflows that use them (`feature`, `bugfix`, `parallel-build`, `review-only`). The fifth role, `workflow-author`, writes workflows from a description (see "The workflow designer"); the other four:
 
 | Role        | Model          | Tools                        | Permissions                                                                          | Extra                                                 |
 | ----------- | -------------- | ---------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------- |
@@ -269,6 +316,8 @@ bun run dwa agent restart reviewer --when turn-end
 
 **Role settings** (`Ctrl+Q` then `r`, "Roles…" in the menu, or `dwa wizard roles`) lists the roles and opens one as a form: description, what it starts from, model, effort, permission mode, tools, MCP servers, plugins, skills, rules and memory. Every list can be left to inherit or set for the role. The prompt opens in `$EDITOR`. Roles can be created, duplicated, renamed and deleted there; a rename follows the name through child roles, the config and the workflows, and a role that something still uses cannot be deleted.
 
+A role is either the project's (`.dwa/roles/`) or personal (`~/.config/dwa/roles/`, yours in every project), and every screen says which. New and Duplicate ask where the role goes, and a role can be moved from one place to the other with its history. A personal role that the project has one of the same name for is listed as hidden and can still be opened. "Save globally" in the Agent tools dialog names its targets the same way, and can write to your personal `[defaults]` as well as the project's.
+
 Saving changes only the lines of the settings that changed; comments and the rest of the file stay as they are.
 
 Every change to a role file or to `config.toml` is kept as a numbered version in `.dwa/history/` (personal roles: `~/.config/dwa/history/`): saves from the dialogs, and edits made by hand, which dwa notices the next time it reads the file. Switching to another version gives the file that content and moves a pointer; no version is ever removed, so you can go from v4 to v2 and back to v4. An edit made while on v2 becomes v5.
@@ -280,6 +329,10 @@ bun run dwa role diff reviewer v2 v4
 bun run dwa role switch reviewer v2
 bun run dwa role new tester --description "Runs the tests"
 bun run dwa role copy reviewer critic
+bun run dwa role new helper --personal   # yours, in every project
+bun run dwa role copy reviewer mine --to personal
+bun run dwa role move mine --to project
+bun run dwa role history personal:mine   # personal:<name> or project:<name> names one file exactly
 bun run dwa role rename critic judge
 bun run dwa role delete judge
 bun run dwa role edit-prompt reviewer

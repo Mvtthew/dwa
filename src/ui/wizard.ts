@@ -237,7 +237,12 @@ export function createForm(renderer: CliRenderer, options: FormOptions): Form {
       }
       const field = node.input ?? node.area;
       if (field) {
-        if (here && !busy) field.focus();
+        const on = here && !busy;
+        // A line that is not being typed in shows how it starts; typing goes on at its end.
+        if (node.input && on !== field.focused) {
+          node.input.cursorOffset = on ? node.input.value.length : 0;
+        }
+        if (on) field.focus();
         else field.blur();
       }
     });
@@ -444,6 +449,7 @@ export function createForm(renderer: CliRenderer, options: FormOptions): Form {
         // Notes that follow the form follow the typing too.
         paint();
       });
+      input.cursorOffset = 0;
       frame.add(input);
       box.add(frame);
       return { row, box, text, input };

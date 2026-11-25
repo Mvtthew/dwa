@@ -45,7 +45,7 @@ prompt = "Review. Explorer said: {{steps.explore.result}}"
 /** Texts that are not a workflow, and what the error says. */
 const invalid: [string, string, RegExp][] = [
   ["broken TOML", "[steps", /invalid TOML/],
-  ["no steps", 'description = "x"', /steps/],
+  ["no steps", 'description = "x"', /needs at least one step/],
   ["an empty step table", "[steps]", /at least one step/],
   ["an unknown key", '[steps.a]\nprompt = "x"\nrole_name = "y"', /role_name|Unrecognized/],
   ["a step without a prompt", '[steps.a]\nrole = "x"', /prompt/],

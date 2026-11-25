@@ -143,6 +143,11 @@ export function checkWorkflow(text: string, name: string): WorkflowCheck {
     problems.push({ message: `invalid TOML: ${(error as Error).message}` });
     return failed(true);
   }
+  // A file with nothing in it yet is the same thing as one whose steps were all removed.
+  if ((raw as { steps?: unknown } | null)?.steps === undefined) {
+    problems.push({ message: "a workflow needs at least one step" });
+    return failed(true);
+  }
   const result = WorkflowSchema.safeParse(raw);
   if (!result.success) {
     for (const issue of result.error.issues) {

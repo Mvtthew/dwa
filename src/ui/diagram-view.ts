@@ -100,7 +100,16 @@ export function createDiagramView(
     pressed = under(event);
     handlers.press(pressed);
   };
-  text.onMouseDrag = (event) => handlers.drag(pressed, under(event));
+  text.onMouseDrag = (event) => {
+    // Carrying something to the edge of a picture larger than its box moves the picture along.
+    const column = event.x - box.screenX;
+    const row = event.y - box.screenY;
+    if (row <= 0) box.scrollTop = Math.max(0, box.scrollTop - 1);
+    else if (row >= box.height - 1) box.scrollTop += 1;
+    if (column <= 0) box.scrollLeft = Math.max(0, box.scrollLeft - 2);
+    else if (column >= box.width - 1) box.scrollLeft += 2;
+    handlers.drag(pressed, under(event));
+  };
   text.onMouseDragEnd = (event) => {
     handlers.drop(pressed, under(event));
     pressed = null;

@@ -12,6 +12,7 @@ Experiments run on 2026-11-24 with Claude Code 2.1.331, tmux 3.8, Bun 1.4.3 on m
 | S4    | Can an `ask` tool call block with no timeout?                                                     | Yes for the 35 minutes tested, past both default limits. The longest possible wait is still unmeasured. |
 | S5    | Can a session be cut off from the user-level Claude setup and given only chosen capabilities?     | Yes, with flags plus four keys in the generated settings. Built-in skills and plugins need a decision.  |
 | S6    | Can what a running session may use be changed, live or by restarting it with its conversation?    | Live only through the PreToolUse hook. Everything else by a resume restart, with one extra flag.        |
+| S7    | Does a program in a dwa popup get mouse presses, drags and the wheel?                             | Yes, with popup-relative coordinates. A release outside the popup is lost.                              |
 
 ## S1. tmux composition
 
@@ -190,8 +191,32 @@ Asked of a session with no tool restrictions (Fable 5.2 and Haiku 5.5 gave the s
   ```
 
   The session id, and with it the agent's row and its hook records, stays the same. Never add `--session-id` to it.
+
 - **Stopping the old process:** killing the pane is enough, also in the middle of a turn.
 - **After a restart the session must be told what changed.** It waits for input and still believes it has the tools it had before, so dwa should send it a message such as "You were restarted; you no longer have Write" and, after a turn that was cut off, ask it to carry on.
 - **Tool list for dwa:** the three groups above. `Glob`, `Grep` and the `Task*` tools exist only for an allow list, so the dialog should offer them only for roles that use `tools`.
 
 Not tested: whether a hook `allow` wins over a deny rule in the settings (expected not to); a hook decision of `ask`; what later resumes do after one launch with `--system-prompt-snapshot off` when the flag is left out again; the prompt after the conversation was compacted; `--continue`; resume with `--plugin-dir` changes or changed skills; resume across a Claude Code update; a restart of a session that is waiting at a permission prompt or inside a blocking dwa `ask`; listing the tools of an HTTP server that needs OAuth.
+
+## S7. Mouse in a popup
+
+Run on 2026-11-25 with tmux 3.8 and `@opentui/core` 0.9.9. The question: does a program in a `display-popup` of the dwa server get mouse presses, drags and the wheel, so that the workflow designer can be used with the mouse? Scripts are in `spikes/s7/`. `run.sh` starts two private tmux servers, neither the user's: `dwa-s7-outer` plays the terminal (120 by 40) and runs a client of `dwa-s7-inner`, which has the config dwa generates (`conf.ts` prints it). Mouse input is typed into the outer pane as SGR mouse sequences, as a terminal sends them. `log-mouse.ts` is an OpenTUI program that records every mouse event it receives.
+
+| Question                                   | What was done                                                            | Result                                                                                                                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Press, drag, release                       | Press at one cell of the popup, two moves with the button held, release. | All delivered: `down`, `drag`, `drag`, `dragEnd`, `up`, without `enableMouseMovement`.                                                                                            |
+| Coordinates                                | Compared the cell typed with the cell received.                          | Relative to the popup's content: the program sees its own top left cell as 0,0.                                                                                                   |
+| Wheel                                      | Wheel up and down over the popup.                                        | Delivered as scroll events with the direction. tmux does not enter copy mode.                                                                                                     |
+| Drag out of the popup, release outside     | Press inside, move across the border, release over the pane behind.      | Events stop at the border: the program gets the moves inside and then nothing, not even the release. Its next press arrives normally.                                             |
+| Press outside the popup                    | Press and release on the pane behind.                                    | Nothing reaches the program or the pane, and the popup stays open.                                                                                                                |
+| Drag on the popup's border                 | Press on the border, move, release.                                      | The popup does not move or resize. The press is not delivered; the moves and the release inside are.                                                                              |
+| A second `display-popup` while one is open | Ran `display-popup` with another command and size.                       | Returns at once with status 0 and starts nothing. The open popup keeps its program and size, but its title is replaced by the new request's (here: none).                         |
+| The designer itself                        | `dwa wizard design` in the popup on a scratch project; dragged a step.   | The places to put the step appear while it is carried; releasing on one moves the step, the picture is redrawn and the draft is written. `u` takes it back and removes the draft. |
+
+What this means for dwa:
+
+- **Drag works** in the popup with the config as generated; no extra tmux setting is needed.
+- **A release outside the popup is lost.** The designer stays in "a step is picked up" with the places still marked, which is the keyboard's move mode: a click on a place, or esc, ends it. Nothing is changed by the lost release.
+- **A popup request while a popup is open does nothing.** So a workflow saved by an agent is announced with a message as well as a popup, and the popup is only asked for when the workflow is new. The title of the open popup may change to the new request's.
+
+Not tested: other terminals than the outer tmux that played one here (a real terminal may send drags at a different rate), the wheel over a picture larger than the popup with a real mouse, and a client attached over SSH.

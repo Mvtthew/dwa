@@ -91,6 +91,8 @@ describe("the designer on screen", () => {
     expect(text).toContain("◀─×3─╮");
     expect(text).toContain("FEATURE (PROJECT)");
     expect(text).toContain("Nothing is wrong with this workflow.");
+    // A line longer than its field shows how it starts while nobody types in it.
+    expect(text).toContain("│ Explore the code, implement the");
   });
 
   test("a click selects a step and the panel follows", async () => {

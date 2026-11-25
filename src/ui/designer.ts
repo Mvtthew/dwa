@@ -456,7 +456,10 @@ export function createDesigner(
       picture.draw(diagram);
       const at = mode.kind === "link" ? mode.to : selected;
       const box = diagram.boxes.find((other) => other.id === at);
-      if (box) picture.reveal(box.x, box.y, box.width, box.height);
+      // Not while a step is carried with the mouse: the picture then follows the pointer.
+      if (box && !(mode.kind === "move" && mode.dragging)) {
+        picture.reveal(box.x, box.y, box.width, box.height);
+      }
     }
 
     function paintFooter(): void {
