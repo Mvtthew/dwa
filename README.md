@@ -53,7 +53,9 @@ The examples below use `bun run dwa`; with the link in place, plain `dwa` does t
 
 ```sh
 bun run dwa init --roles            # once per project: config template, example roles and a workflow
-bun run dwa up                      # start the workspace for this project and attach
+bun run dwa                         # start the workspace for this project, or attach to it
+bun run dwa up                      # the same, spelled out; takes --profile and --no-attach
+bun run dwa help                    # every command (also: dwa ?)
 bun run dwa agent spawn explore     # start an agent (optionally --role, --profile, --task)
 bun run dwa agent open explore      # show it under the main session
 bun run dwa agent close             # hide it again, it keeps running

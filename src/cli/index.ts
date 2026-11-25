@@ -12,11 +12,12 @@ import { call, ensureDaemon, isDaemonRunning } from "./client.ts";
 
 const USAGE = `${APP_NAME} ${pkg.version}
 
-Usage: ${APP_NAME} <command> [options]
+Usage: ${APP_NAME}                          Start this project's workspace, or attach to it when it runs
+       ${APP_NAME} <command> [options]
 
 Workspace
   init [--roles]                        Create .dwa/config.toml (--roles: example roles, workflow)
-  up [--profile <name>] [--no-attach]   Start the workspace for this project and attach to it
+  up [--profile <name>] [--no-attach]   The same as running ${APP_NAME} alone; the options work there too
   attach                                Attach to the running workspace
   palette                               Menu of workspace actions (prefix key, then p)
   shell                                 Show or hide a plain shell under the main session
@@ -74,7 +75,7 @@ Other
   doctor     Check that bun, tmux and the Claude command(s) are present and new enough,
              and that the configuration is sound (as config check does)
   version    Print the version
-  help       Show this help
+  help, ?    Show this help
 `;
 
 const selfArgv = [process.execPath, Bun.main];
@@ -245,7 +246,10 @@ async function keyCommand(projectRoot: string, args: string[]): Promise<number> 
 // Heavier commands are imported only when used, so the commands Claude Code runs on every hook
 // event and status line refresh start quickly.
 async function main(argv: string[]): Promise<number> {
-  const [command, ...rest] = argv;
+  // Run alone, or with only the options of `up`, the command starts the workspace or attaches
+  // to the one that runs: `up` does nothing to a running workspace before it attaches.
+  const bare = argv[0] === undefined || argv[0] === "--profile" || argv[0] === "--no-attach";
+  const [command, ...rest] = bare ? ["up", ...argv] : argv;
   if (command === "hook") return (await import("./hook.ts")).hookCommand(rest[0]);
   if (command === "statusline") return (await import("./hook.ts")).statuslineCommand();
   if (command === "mailbox") return (await import("./hook.ts")).mailboxCommand();
@@ -337,8 +341,8 @@ async function main(argv: string[]): Promise<number> {
     case "-v":
       console.log(pkg.version);
       return 0;
-    case undefined:
     case "help":
+    case "?":
     case "--help":
     case "-h":
       console.log(USAGE);
