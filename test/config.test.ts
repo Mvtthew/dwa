@@ -365,8 +365,8 @@ describe("tmux helpers", () => {
     const conf = buildTmuxConf({ selfArgv: ["/bin/bun", "/dwa/cli.ts"], projectRoot: "/my proj" });
     // Popups have a background of their own, from the terminal's palette, with a text colour
     // that reads on it whatever the theme.
-    expect(conf).toContain("set -g popup-style 'bg=brightblack,fg=brightwhite'");
-    expect(conf).toContain("set -g popup-border-style 'bg=brightblack,fg=brightwhite'");
+    expect(conf).toContain("set -g popup-style 'bg=black,fg=white'");
+    expect(conf).toContain("set -g popup-border-style 'bg=black,fg=white'");
     expect(conf).toContain("set -g extended-keys always");
     expect(conf).toContain("bind -n M-9 run-shell -b ");
     expect(conf).toContain("set -g prefix C-q");

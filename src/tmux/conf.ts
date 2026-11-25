@@ -42,7 +42,7 @@ export function popupArgs(self: string, kind: PopupKind, subject?: string): stri
 }
 
 /** How dwa's popups look, in tmux's style words: colours of the terminal's own palette. */
-export const POPUP_STYLE = "bg=brightblack,fg=brightwhite";
+export const POPUP_STYLE = "bg=black,fg=white";
 
 export interface ConfOptions {
   /** Key pressed before a dwa shortcut, in tmux notation. */
@@ -98,8 +98,8 @@ export function buildTmuxConf(options: ConfOptions): string {
     "set -g remain-on-exit on",
     "set -g pane-border-status top",
     "set -g pane-border-format ' #{pane_title} '",
-    // Popups stand out from the panes behind them: the palette's bright black as their
-    // background, with its bright white for text, a pair that reads on dark and light themes.
+    // Popups stand out from the panes behind them: the palette's black as their
+    // background, with its white for text, a pair that reads on dark and light themes.
     `set -g popup-style '${POPUP_STYLE}'`,
     `set -g popup-border-style '${POPUP_STYLE}'`,
     "",
