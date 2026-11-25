@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { TextAttributes } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../src/shared/protocol.ts";
 import { createWizard, type Row, type Screen } from "../src/ui/wizard.ts";
@@ -397,6 +398,17 @@ describe("the wizard on screen", () => {
     expect(shown).toContain("DETAILS");
     expect(shown).toContain("▌  Name");
     expect(shown).toContain("[default] opus  sonnet");
+    // The input sits in a rounded frame under its label and shows its placeholder while empty.
+    const lines = shown.split("\n");
+    const label = lines.findIndex((line) => line.includes("▌  Name"));
+    expect(lines[label + 1]).toMatch(/^ {5}╭─+╮/);
+    expect(lines[label + 2]).toMatch(/^ {5}│ agent\s+│/);
+    expect(lines[label + 3]).toMatch(/^ {5}╰─+╯/);
+    const placeholder = harness
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .find((span) => span.text.trim() === "agent");
+    expect((placeholder?.attributes ?? 0) & TextAttributes.DIM).toBe(TextAttributes.DIM);
 
     await click("Start");
     await Bun.sleep(0);
@@ -404,6 +416,7 @@ describe("the wizard on screen", () => {
 
     await click("Name");
     await harness.mockInput.typeText("helper");
+    expect(await frame()).toMatch(/│ helper\s+│/);
     await click("sonnet");
     expect(await frame()).toContain(" default  opus [sonnet]");
     await click("Start");

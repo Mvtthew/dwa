@@ -308,7 +308,8 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
     }
     const box = new BoxRenderable(renderer, {
       id,
-      height: 3,
+      // An input is its label and a three-row frame; a choice its label, the chips and a gap.
+      height: row.kind === "input" ? 4 : 3,
       flexShrink: 0,
       flexDirection: "column",
       onMouseDown: () => clickFocus(index),
@@ -316,12 +317,27 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
     const text = createText(renderer, `${id}-text`, 1);
     box.add(text);
     if (row.kind === "input") {
+      // The frame has the same colour with and without the keyboard: the mark, the bold label
+      // and the cursor show which field is being typed in.
+      const frame = new BoxRenderable(renderer, {
+        id: `${id}-frame`,
+        height: 3,
+        marginLeft: 3,
+        paddingX: 1,
+        border: true,
+        borderStyle: "rounded",
+        borderColor: RGBA.defaultForeground(),
+        focusedBorderColor: RGBA.defaultForeground(),
+      });
       const input = new InputRenderable(renderer, {
         id: `${id}-input`,
         width: "100%",
-        marginLeft: 3,
         value: values[row.key] ?? "",
-        placeholder: row.placeholder ?? "",
+        // Dimmed like every other hint, so it follows the terminal's theme. OpenTUI draws styled
+        // text here as given, though the input's options only declare a string; its own default
+        // is a fixed grey that disappears on some backgrounds.
+        placeholder: (row.placeholder ? styled([[dim(row.placeholder)]]) : "") as unknown as string,
+        placeholderColor: RGBA.defaultForeground(),
         textColor: RGBA.defaultForeground(),
         focusedTextColor: RGBA.defaultForeground(),
       });
@@ -330,7 +346,8 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
         // Notes that follow the form follow the typing too.
         paint();
       });
-      box.add(input);
+      frame.add(input);
+      box.add(frame);
       return { row, box, text, input };
     }
     const line = new BoxRenderable(renderer, {
