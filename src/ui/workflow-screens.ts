@@ -20,7 +20,7 @@ import {
   type StepView,
 } from "./designer-model.ts";
 import { historyScreen, nameScreen, type RoleStore, roleScreen } from "./role-screens.ts";
-import { moveLabel, scopeHint, scopeRow, scopeTitle, scopeValue } from "./scope-rows.ts";
+import { moveLabel, scopeHint, scopeRow, scopeTitle, scopeValue, WHERE } from "./scope-rows.ts";
 import { OFF, ON, type Outcome, type Row, type Screen, type Values, type View } from "./wizard.ts";
 import type { WizardApi } from "./wizards.ts";
 import type { Draft, WorkflowStore } from "./workflow-store.ts";
@@ -195,7 +195,7 @@ export function describeScreen(deps: DesignDeps): Screen {
         kind: "input",
         key: "name",
         label: "Name",
-        placeholder: "leave empty and the agent picks one",
+        placeholder: "letters, digits, - and _",
       },
       scopeRow("workflow"),
       {
@@ -206,10 +206,10 @@ export function describeScreen(deps: DesignDeps): Screen {
           const description = values.text?.trim() ?? "";
           if (!description) throw new Error("Say what the workflow should do first.");
           const name = values.name?.trim() ?? "";
-          if (name) checkNewName(deps.store, name);
+          checkNewName(deps.store, name);
           await deps.api.call("POST", "/workflows/author", {
             description,
-            name: name || undefined,
+            name,
             personal: scopeValue(values) === "user",
           });
           return { close: true };
@@ -258,8 +258,17 @@ export function newWorkflowScreen(deps: DesignDeps): Screen {
   rows.push({
     kind: "button",
     label: "Describe it to an agent…",
-    hint: "an agent writes it; you can name it on the next screen",
-    run: () => ({ to: describeScreen(deps) }),
+    hint: "an agent writes it; the name above is used",
+    // The name and the place typed on this screen go along.
+    run: (values) => ({
+      to: {
+        ...describeScreen(deps),
+        values: {
+          name: values.name?.trim() ?? "",
+          ...(values[WHERE] ? { [WHERE]: values[WHERE] } : {}),
+        },
+      },
+    }),
   });
   const existing = store.list().filter((workflow) => !workflow.error);
   if (existing.length > 0) rows.push(gap, { kind: "heading", text: "OR A COPY OF" });

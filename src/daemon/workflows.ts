@@ -376,20 +376,18 @@ export class Workflows {
   /** Starts the session that writes a workflow from a description and stays to refine it. */
   async author(
     description: string,
-    /** The name and the place the user chose; without a name the agent picks one. */
-    wanted: { name?: string; personal?: boolean } = {},
+    /** The name and the place the user chose. */
+    wanted: { name: string; personal?: boolean },
   ): Promise<AgentInfo> {
     const { workspace } = this.deps;
     const { name, personal = false } = wanted;
-    if (name !== undefined) {
-      if (!validWorkflowName(name)) {
-        throw new ConfigError("A workflow name uses letters, digits, - and _ (up to 40).");
-      }
-      const ctx = { projectRoot: workspace.projectRoot, env: this.deps.env };
-      const source = personal ? "user" : "project";
-      if (listAllWorkflows(ctx).some((entry) => entry.name === name && entry.source === source)) {
-        throw new ConfigError(`There is already a workflow "${name}".`);
-      }
+    if (!validWorkflowName(name)) {
+      throw new ConfigError("A workflow name uses letters, digits, - and _ (up to 40).");
+    }
+    const ctx = { projectRoot: workspace.projectRoot, env: this.deps.env };
+    const source = personal ? "user" : "project";
+    if (listAllWorkflows(ctx).some((entry) => entry.name === name && entry.source === source)) {
+      throw new ConfigError(`There is already a workflow "${name}".`);
     }
     if (workspace.unknownRoles([AUTHOR_ROLE]).length > 0) {
       throw new ConfigError(
@@ -397,7 +395,7 @@ export class Workflows {
       );
     }
     const where = [
-      name ? `Save it under the name "${name}".` : "",
+      `Save it under the name "${name}".`,
       personal ? "Save it as a personal workflow (personal: true)." : "",
     ]
       .filter(Boolean)

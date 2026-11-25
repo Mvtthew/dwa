@@ -212,7 +212,7 @@ export function startServer(options: ServerOptions) {
         );
         return json(
           await workflows.author(text(input.description, "description"), {
-            name: typeof input.name === "string" && input.name ? input.name : undefined,
+            name: text(input.name, "name"),
             personal: input.personal === true,
           }),
         );

@@ -382,6 +382,35 @@ describe("starting a new workflow", () => {
     expect(hint(screen, "plain")).toBe("personal");
   });
 
+  test("describing a workflow to an agent needs a name, which is taken along from this screen", async () => {
+    const { deps } = fakeDeps({ "project:feature": FEATURE });
+    const sent: unknown[] = [];
+    deps.api.call = async <T>(_method: string, path: string, body?: unknown) => {
+      sent.push([path, body]);
+      return {} as T;
+    };
+    const screen = await next(newWorkflowScreen(deps), "Describe it to an agent…", {
+      name: " nightly ",
+      where: "user",
+    });
+    expect(screen.values).toEqual({ name: "nightly", where: "user" });
+    const start = (values: Values) => press(screen, "Start the agent", values);
+    await expect(start({ text: " ", name: "nightly" })).rejects.toThrow(
+      "Say what the workflow should do first.",
+    );
+    await expect(start({ text: "review things", name: " " })).rejects.toThrow("Type a name first.");
+    await expect(start({ text: "review things", name: "feature" })).rejects.toThrow(
+      'There is already a workflow "feature".',
+    );
+    expect(sent).toEqual([]);
+    expect(await start({ text: " review things ", name: "nightly", where: "user" })).toEqual({
+      close: true,
+    });
+    expect(sent).toEqual([
+      ["/workflows/author", { description: "review things", name: "nightly", personal: true }],
+    ]);
+  });
+
   test("without workflows there is nothing to copy", () => {
     const screen = newWorkflowScreen(fakeDeps({}).deps);
     expect(texts(screen)).not.toContain("OR A COPY OF");

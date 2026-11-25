@@ -145,12 +145,14 @@ describe("a workflow written by an agent", () => {
 
   test("describing a workflow starts a session of the author role with that as its task", async () => {
     await workspace.up();
-    const agent = await workflows.author("review every commit on the branch");
+    const agent = await workflows.author("review every commit on the branch", {
+      name: "commits",
+    });
     expect(agent.role).toBe(AUTHOR_ROLE);
     expect(agent.task).toContain("What it should do: review every commit on the branch");
     // The user asked for it, so its session is shown under the main one at once.
     expect(agent.open).toBe(true);
-    expect(agent.task).not.toContain("Save it under the name");
+    expect(agent.task).toContain('Save it under the name "commits".');
 
     const named = await workflows.author("x", { name: "nightly", personal: true });
     expect(named.task).toContain('Save it under the name "nightly".');
@@ -162,6 +164,6 @@ describe("a workflow written by an agent", () => {
     );
 
     absentRoles = [AUTHOR_ROLE];
-    await expect(workflows.author("x")).rejects.toThrow("init --roles");
+    await expect(workflows.author("x", { name: "other" })).rejects.toThrow("init --roles");
   });
 });
