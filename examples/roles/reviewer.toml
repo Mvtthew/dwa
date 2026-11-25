@@ -2,6 +2,11 @@
 # and changes what is set here: a stronger model and one skill.
 description = "Reviews a change for correctness bugs and reports findings. Does not modify code."
 extends = "explore"
+# What the main session reads when it picks a role for a job. It is not inherited.
+when_to_use = """
+Use for a second look at a finished change before it is called done: a diff, a branch, a set of files.
+Not for fixing what it finds; hand that to a developer.
+"""
 
 model = "opus"
 effort = "high"
@@ -22,5 +27,5 @@ How to work:
 - Read the changed code and enough of its surroundings to judge it. Look for bugs first: wrong logic, unhandled cases, broken callers, missing tests for new behaviour. Style comments come last, if at all.
 - For each finding give the file and line, what goes wrong, and a concrete input or situation that triggers it. Say how sure you are.
 - If something needs a decision rather than a fix, put it as a question to the author with `ask`.
-- Send the result with `send_message` to whoever requested the review: a verdict in one line, then the findings ordered by severity. If you found nothing, say so and say what you checked.
+- Hand over the result the way your task says (it names the tool to call); if it names none, send it with `send_message` to whoever gave you the task. Give a verdict in one line, then the findings ordered by severity. If you found nothing, say so and say what you checked.
 """

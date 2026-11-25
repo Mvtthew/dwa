@@ -73,7 +73,9 @@ describe("the dwa tools", () => {
       "complete_step",
       "edit_workflow",
       "fail_step",
+      "finish_task",
       "list_agents",
+      "list_roles",
       "list_workflows",
       "report_progress",
       "request_changes",
@@ -166,7 +168,22 @@ describe("agents and messages", () => {
     });
     expect((await use("wait_for", { agent: "review" })).text).toBe("review: idle");
     expect((await use("wait_for", { agent: "build" })).text).toBe("You cannot wait for yourself.");
+    routes["POST /agents/outcome"] = () => ({ message: "nobody is not running." });
     expect((await use("wait_for", { agent: "nobody" })).text).toBe("nobody is not running.");
+    expect(calls.at(-1)?.body).toEqual({ target: "nobody", from: "agent-1" });
+  });
+
+  test("wait_for keeps waiting for an idle agent that still owes its result", async () => {
+    let looks = 0;
+    routes["GET /state"] = () => {
+      looks++;
+      // Idle between two reminders, then gone: it reported and its session ended.
+      if (looks > 1) return { main: null, agents: [] };
+      return { main: null, agents: [{ ...agent("a2", "dev", "idle"), reportDue: true }] };
+    };
+    routes["POST /agents/outcome"] = () => ({ message: 'Result of "dev":\n\nDone.' });
+    expect((await use("wait_for", { agent: "dev" })).text).toBe('Result of "dev":\n\nDone.');
+    expect(looks).toBe(2);
   });
 
   test("spawn_agent and stop_agent pass the request on", async () => {
@@ -180,10 +197,31 @@ describe("agents and messages", () => {
       task: "look",
       effort: "low",
       narrowOnly: true,
+      from: "agent-1",
     });
     expect((await use("stop_agent", { name: "helper" })).text).toBe('Stopped agent "helper".');
-    expect(calls[1]?.body).toEqual({ target: "helper" });
-    expect((await use("spawn_agent", { effort: "extreme" })).isError).toBe(true);
+    expect(calls[1]?.body).toEqual({ target: "helper", from: "agent-1" });
+    expect((await use("spawn_agent", { task: "look", effort: "extreme" })).isError).toBe(true);
+    // The instruction to report travels with the task, so a session is not started without one.
+    expect((await use("spawn_agent", { role: "explore" })).isError).toBe(true);
+    await use("spawn_agent", { role: "explore", task: "look", keep: true });
+    expect(calls[2]?.body).toMatchObject({ keep: true, from: "agent-1" });
+  });
+
+  test("finish_task hands the result over as the calling agent and returns what the daemon says", async () => {
+    routes["POST /agents/finish"] = () => ({
+      message: "Result delivered to main. This session ends now.",
+    });
+    expect((await use("finish_task", { result: "All done." })).text).toBe(
+      "Result delivered to main. This session ends now.",
+    );
+    expect(calls[0]?.body).toEqual({ agentId: "agent-1", result: "All done." });
+  });
+
+  test("list_roles asks as the calling agent and returns the list as it is", async () => {
+    routes["POST /roles/list"] = () => ({ roles: "- explore: Reads the code." });
+    expect((await use("list_roles")).text).toBe("- explore: Reads the code.");
+    expect(calls[0]?.body).toEqual({ from: "agent-1" });
   });
 });
 

@@ -3,6 +3,8 @@
 # through the dwa `save_role` tool only (and only the role it was started for), and stays open
 # so that the role can be refined by talking to it.
 description = "Writes a dwa role from a description and refines it on request. Reads only; saves through save_role."
+# Started from the settings screens, not by a session that hands work over.
+in_role_list = false
 
 model = "sonnet"
 effort = "medium"
@@ -37,6 +39,9 @@ The format is TOML:
 Keep `prompt` as the last key. Every key is optional, and a key that is not one of these is an error:
 
 - `description`: one line, shown in lists and read by whoever picks a role for a job.
+- `when_to_use`: what to hand to this role and what not, in a few lines, for a session that picks a role for a job (the main session is given it). Without it that session reads `description`. Write it when one line cannot say where this role ends and its neighbours begin. Not inherited.
+- `in_role_list = false`: keep the role out of the list of roles work can be handed to. Only for a role that is started in some other way.
+- `role_list = true`: sessions of this role are given that list. For a role whose job is to hand work to others; leave it out otherwise.
 - `extends = "NAME"`: start from another role; what this file sets replaces the parent's value, the rest is inherited, the prompt included. Use it when the new role is an existing one with a small difference.
 - `model` (for example "sonnet", "opus", "haiku") and `effort` ("low", "medium", "high", "xhigh", "max").
 - `tools`: the built-in tools the session has, and no others (Read, Grep, Glob, Edit, Write, Bash, WebFetch, WebSearch, Agent, ...). Or `deny_tools`: built-in tools taken away from the full set. Never both in one file. Without either, the session has every built-in tool. The dwa tools (messages, questions, progress) are always there.
@@ -52,7 +57,7 @@ How to write a good one:
 - Read first: the roles in `.dwa/roles/` (so the new one fits beside them and does not repeat one), `.dwa/config.toml` (what the catalogue offers), README and CLAUDE.md (what the project is, how its checks are run).
 - Give the least access that does the job. A role that only reads gets a `tools` list without Edit and Write. A role that runs the project's checks gets `allow` rules for exactly those commands. Add `deny` rules for what must never happen (pushing, deleting).
 - Never set `permission_mode` to "bypassPermissions" or "auto", and never turn `memory` on, unless the user asked for that in so many words. If the description seems to need it, ask first.
-- The prompt is all a session knows about its job besides its task. Say what the role is for, how to work, what it must not touch, when to ask (the dwa `ask` tool), and what to hand over at the end and to whom (`send_message`). Write it for this project: name its test command, its folders, its conventions. Do not restate what the limits already enforce, except to say that working around a refusal is wrong.
+- The prompt is all a session knows about its job besides its task. Say what the role is for, how to work, what it must not touch, when to ask (the dwa `ask` tool), and what to hand over at the end: say what the result has to contain, and that it is handed over the way the task says (a task names the tool to call), or with `send_message` to whoever gave the task when it names none. Write it for this project: name its test command, its folders, its conventions. Do not restate what the limits already enforce, except to say that working around a refusal is wrong.
 - Keep it short. A dozen lines a session follows beat a page it skims.
 - If the description leaves a real choice open (may it edit files, may it run shell commands, which model), ask with the dwa `ask` tool before writing. Do not ask about what you can decide sensibly yourself.
 

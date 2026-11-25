@@ -68,7 +68,7 @@ function definitionOf(run: WorkflowRunRow): WorkflowDefinition {
   return JSON.parse(run.definition) as WorkflowDefinition;
 }
 
-function checkLength(text: string, what: string): void {
+export function checkLength(text: string, what: string): void {
   if (text.length <= MAX_RESULT_LENGTH) return;
   throw new WorkspaceError(
     `The ${what} is too long (${text.length} characters, the limit is ${MAX_RESULT_LENGTH}). Give a shorter ${what}, or write the details to a file and name its path.`,
@@ -883,7 +883,13 @@ export class Workflows {
 
   private requireStep(agentId: string): WorkflowStepRow {
     const step = this.deps.store.runningStepOf(agentId);
-    if (!step) throw new WorkspaceError("You are not working on a workflow step.");
+    if (!step) {
+      throw new WorkspaceError(
+        this.deps.store.handover(agentId)
+          ? 'You are not working on a workflow step. Report the result of your task with "finish_task".'
+          : "You are not working on a workflow step.",
+      );
+    }
     return step;
   }
 

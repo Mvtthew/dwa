@@ -14,6 +14,7 @@ import {
 import { listWorkflows } from "../shared/workflow.ts";
 import { noticeWorkflowEdits } from "../shared/workflow-edit.ts";
 import { TmuxError } from "../tmux/driver.ts";
+import type { Delegation } from "./delegation.ts";
 import { USER } from "./messaging.ts";
 import type { RoleAuthor } from "./role-author.ts";
 import type { Workflows } from "./workflows.ts";
@@ -23,6 +24,7 @@ export interface ServerOptions {
   socketPath: string;
   workspace: Workspace;
   workflows: Workflows;
+  delegation: Delegation;
   roleAuthor: RoleAuthor;
   /** Called after `/down` has answered, to stop the daemon process. */
   onShutdown: () => void;
@@ -62,7 +64,7 @@ function sender(value: unknown): string {
 
 /** The daemon's local API on a Unix socket. The CLI and the UI panes are its clients. */
 export function startServer(options: ServerOptions) {
-  const { workspace, workflows, roleAuthor } = options;
+  const { workspace, workflows, delegation, roleAuthor } = options;
   const { messaging } = workspace;
 
   const route = async (request: Request): Promise<Response> => {
@@ -77,6 +79,10 @@ export function startServer(options: ServerOptions) {
         return json(await workspace.up(await body<UpRequest>(request)));
       case "POST /agents":
         return json(await workspace.spawn(await body<SpawnRequest>(request)));
+      case "POST /roles/list": {
+        const input = await body<{ from?: string }>(request);
+        return json({ roles: workspace.roleList(input.from) });
+      }
       case "POST /agents/open":
         return json(await workspace.open(requireTarget(await body(request))));
       case "POST /agents/toggle":
@@ -115,8 +121,26 @@ export function startServer(options: ServerOptions) {
         const input = await body<{ target?: string; when?: RestartWhen }>(request);
         return json({ applied: await workspace.restart(requireTarget(input), input.when) });
       }
-      case "POST /agents/stop":
-        return json(await workspace.stop(requireTarget(await body(request))));
+      case "POST /agents/stop": {
+        const input = await body<{ target?: unknown; from?: string }>(request);
+        const target = requireTarget(input);
+        try {
+          delegation.expectStop(messaging.resolve(target), sender(input.from));
+        } catch {
+          // Not a running agent's name or id; stopping it says what is wrong.
+        }
+        return json(await workspace.stop(target));
+      }
+      case "POST /agents/outcome": {
+        const input = await body<{ target?: unknown; from?: string }>(request);
+        return json({ message: delegation.outcome(requireTarget(input), sender(input.from)) });
+      }
+      case "POST /agents/finish": {
+        const input = await body<{ agentId?: string; result?: string }>(request);
+        return json({
+          message: await delegation.finish(text(input.agentId, "agentId"), input.result ?? ""),
+        });
+      }
       case "POST /focus":
         await workspace.focusMain();
         return json({ ok: true });

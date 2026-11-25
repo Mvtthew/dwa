@@ -25,6 +25,26 @@ export interface AgentRow {
   progress: string | null;
 }
 
+/**
+ * What a session that another session started with `spawn_agent` owes: a result for whoever
+ * started it. Sessions the user started, those of the config and workflow steps have no such row.
+ */
+export interface HandoverRow {
+  id: string;
+  name: string;
+  state: AgentState;
+  /** The first line of what the session last said. */
+  detail: string | null;
+  /** The id of the session that started it. */
+  spawnedBy: string;
+  /** 1 when the session stays open after it has reported. */
+  keep: number;
+  /** When it last reported a result; null while it still owes one. */
+  finishedAt: number | null;
+  /** Times it was reminded to report since someone last spoke to it. */
+  reminders: number;
+}
+
 /** `fromId` / `toId` are agent ids, or "user". */
 export interface MessageRow {
   id: number;
@@ -175,7 +195,15 @@ const MIGRATIONS = [
    ALTER TABLE agents ADD COLUMN blocked TEXT;`,
   // NULL for sessions from before this column: they are taken to have a conversation.
   "ALTER TABLE agents ADD COLUMN had_turn INTEGER;",
+  // Set for a session another session started: see `HandoverRow`.
+  `ALTER TABLE agents ADD COLUMN spawned_by TEXT;
+   ALTER TABLE agents ADD COLUMN keep INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE agents ADD COLUMN finished_at INTEGER;
+   ALTER TABLE agents ADD COLUMN reminders INTEGER NOT NULL DEFAULT 0;`,
 ];
+
+const HANDOVER_COLUMNS = `id, name, state, detail, spawned_by AS spawnedBy, keep,
+  finished_at AS finishedAt, reminders`;
 
 const COLUMNS = `id, kind, name, role, profile, session_id AS sessionId, pane_id AS paneId,
   state, task, created_at AS createdAt, activity, detail, activity_since AS activitySince,
@@ -360,6 +388,76 @@ export class Store {
 
   setProgress(id: string, progress: string | null): void {
     this.db.query("UPDATE agents SET progress = ? WHERE id = ?").run(progress, id);
+  }
+
+  /** Records that another session started this one and is owed its result. */
+  setSpawner(id: string, spawnedBy: string, keep: boolean): void {
+    this.db
+      .query("UPDATE agents SET spawned_by = ?, keep = ? WHERE id = ?")
+      .run(spawnedBy, keep ? 1 : 0, id);
+  }
+
+  /** The session as one that owes a result, running or not; null when nobody started it. */
+  handover(id: string): HandoverRow | null {
+    return this.db
+      .query(`SELECT ${HANDOVER_COLUMNS} FROM agents WHERE id = ? AND spawned_by IS NOT NULL`)
+      .get(id) as HandoverRow | null;
+  }
+
+  /** Running sessions this one started that have not reported a result yet, oldest first. */
+  owedTo(spawnerId: string): HandoverRow[] {
+    return this.db
+      .query(
+        `SELECT ${HANDOVER_COLUMNS} FROM agents
+         WHERE spawned_by = ? AND state = 'running' AND finished_at IS NULL
+         ORDER BY created_at, rowid`,
+      )
+      .all(spawnerId) as HandoverRow[];
+  }
+
+  /** Sessions that reported and were to end, but still run (the daemon stopped in between). */
+  reportedAndRunning(): HandoverRow[] {
+    return this.db
+      .query(
+        `SELECT ${HANDOVER_COLUMNS} FROM agents
+         WHERE spawned_by IS NOT NULL AND state = 'running' AND keep = 0
+           AND finished_at IS NOT NULL`,
+      )
+      .all() as HandoverRow[];
+  }
+
+  /** The session of this name or id that `spawnerId` started and that is gone; the latest one. */
+  lastStoppedHandover(target: string, spawnerId: string): HandoverRow | null {
+    return this.db
+      .query(
+        `SELECT ${HANDOVER_COLUMNS} FROM agents
+         WHERE (name = ? OR id = ?) AND spawned_by = ? AND state = 'stopped'
+         ORDER BY stopped_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(target, target, spawnerId) as HandoverRow | null;
+  }
+
+  setFinished(id: string, now: number): void {
+    this.db.query("UPDATE agents SET finished_at = ?, reminders = 0 WHERE id = ?").run(now, id);
+  }
+
+  /** Counts one more reminder to report and returns the new count. */
+  addHandoverReminder(id: string): number {
+    const row = this.db
+      .query("UPDATE agents SET reminders = reminders + 1 WHERE id = ? RETURNING reminders")
+      .get(id) as { reminders: number } | null;
+    return row?.reminders ?? 0;
+  }
+
+  resetHandoverReminders(id: string): void {
+    this.db.query("UPDATE agents SET reminders = 0 WHERE id = ?").run(id);
+  }
+
+  /** The newest message addressed to someone, delivered or not. */
+  lastMessageTo(toId: string): MessageRow | null {
+    return this.db
+      .query(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE to_id = ? ORDER BY id DESC LIMIT 1`)
+      .get(toId) as MessageRow | null;
   }
 
   /** Any agent by id, running or not (for naming the sender of an old message). */

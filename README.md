@@ -67,7 +67,7 @@ Closing the terminal leaves everything running; `dwa attach` brings it back.
 
 ### Talking to agents
 
-Every session gets a set of dwa tools: `list_agents`, `send_message`, `ask`, `answer`, `report_progress`, `wait_for`, `spawn_agent` and `stop_agent`. So you can tell the main session "start a reviewer and ask it to check my last commit" and it will. An agent that needs a decision calls `ask`, which blocks until it is answered, with no time limit. Questions for you show up in the status pane.
+Every session gets a set of dwa tools: `list_agents`, `list_roles`, `send_message`, `ask`, `answer`, `report_progress`, `wait_for`, `spawn_agent`, `stop_agent` and `finish_task`. So you can tell the main session "start a reviewer and ask it to check my last commit" and it will. An agent a session starts this way hands its result back with `finish_task` and then its session ends by itself, so nothing is left idle; the result reaches the session that started it, and your inbox gets a line saying the agent finished. A session started with `keep` stays for follow-ups until it is stopped. An agent that ends its turn without reporting is reminded twice, then the session that waits is told; it is never removed without its report. Agents you start yourself stay until you stop them. An agent that needs a decision calls `ask`, which blocks until it is answered, with no time limit. Questions for you show up in the status pane.
 
 From a shell, without any model call:
 
@@ -271,6 +271,7 @@ path = "tools/lint-plugin"           # a directory, relative to the project
 - **The main session** is a role too: `main` when `.dwa/roles/main.toml` exists, or the one named by `role` in `[main]`. `model` and `effort` in `[main]` win over the role's and over the profile's.
 - **Skills** are looked up by name in `.claude/skills`, then `.dwa/skills`, then `~/.config/dwa/skills`. A role with a `skills` list has only those; project skills it does not list are switched off for it. Skills from the dwa folders appear in the session as `dwa:<name>`. Skills that come with a plugin follow the plugin.
 - **Personal layer.** `~/.config/dwa/config.toml` can add catalogue entries, and `~/.config/dwa/roles/` holds roles for every project. The project's entry or role of the same name wins.
+- **Who does what.** The main session is told which roles it can hand work to: the `main` role sets `role_list = true`, and dwa adds the list after the role's prompt, one entry per role with its `when_to_use` text (several lines if you like: what to hand to the role and what not), or its `description` when it has none. Your own rules that span roles ("tests always go to the runner") go into the `main` role's prompt. A role with `in_role_list = false` is not offered. The list in the prompt is from the session's start; the `list_roles` tool gives the current one. Edit the text in the role settings or with `dwa role edit-when-to-use <role>`.
 - **Agents starting agents.** The `spawn_agent` tool lets a session pick a role and take things away from it for the new agent (tools, permission rules, MCP servers, plugins, skills). It cannot add anything. This guards against mistakes; it is not a security boundary, since a session that can run shell commands can run `dwa` itself.
 - **Missing things.** A session is not started when its role names an MCP server whose command is not installed, a plugin directory that does not exist, or an unknown role, catalogue entry or skill. `dwa config check` (also part of `dwa doctor`) reports all of this ahead of time, and `dwa role show <role>` prints what a session of a role ends up with, command line included.
 - **The project's MCP servers** from `.mcp.json` are in every session unless a role, an agent or `[defaults]` names them in `off_mcp = [...]`.
@@ -341,6 +342,7 @@ bun run dwa role history personal:mine   # personal:<name> or project:<name> nam
 bun run dwa role rename critic judge
 bun run dwa role delete judge
 bun run dwa role edit-prompt reviewer
+bun run dwa role edit-when-to-use reviewer   # what the main session reads when it picks a role
 ```
 
 `.dwa/history/` is meant to be committed with the role files; `.dwa/run/` is not.

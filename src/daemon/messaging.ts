@@ -10,6 +10,9 @@ export const USER = "user";
 /** The sender id of messages the workflow engine writes itself (reminders, run reports). */
 export const WORKFLOW = "workflow";
 
+/** The sender id of what the workspace itself says about handed-over work (`Delegation`). */
+export const WORKSPACE = "workspace";
+
 /** How long a message waits for the mailbox hook before it is pasted into an idle session. */
 const PASTE_FALLBACK_MS = 3000;
 
@@ -66,7 +69,7 @@ export class Messaging {
   }
 
   nameOf(id: string): string {
-    if (id === USER || id === WORKFLOW) return id;
+    if (id === USER || id === WORKFLOW || id === WORKSPACE) return id;
     return this.deps.store.getAgentName(id) ?? "unknown";
   }
 
@@ -222,7 +225,9 @@ export class Messaging {
         ? "the user"
         : fromId === WORKFLOW
           ? "the workflow engine"
-          : `agent "${this.nameOf(fromId)}"`;
+          : fromId === WORKSPACE
+            ? "the workspace"
+            : `agent "${this.nameOf(fromId)}"`;
     return `[dwa] Message from ${from}:\n${body}`;
   }
 

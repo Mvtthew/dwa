@@ -171,7 +171,7 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
     "wait_for",
     {
       description:
-        "Wait until another agent has finished its current turn (or has stopped). Blocks with no time limit. Returns what the agent last said.",
+        "Wait until another agent has finished its current turn (or has stopped). Blocks with no time limit. Returns what the agent last said; for an agent you started that has reported its result and ended, the result.",
       inputSchema: { agent: z.string() },
     },
     ({ agent: target }, extra) =>
@@ -187,11 +187,19 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
           }
           const everyone = [...(state.main ? [state.main] : []), ...state.agents];
           const found = everyone.find((agent) => agent.name === target || agent.id === target);
-          if (!found) return `${target} is not running.`;
-          if (found.id === agentId) return "You cannot wait for yourself.";
-          if (found.activity !== "working" && found.activity !== "starting") {
-            return describeAgent(found);
+          if (!found) {
+            // Gone: if the caller started it, the daemon knows how it ended.
+            const outcome = await api<{ message: string }>("POST", "/agents/outcome", {
+              target,
+              from: agentId,
+            });
+            return outcome.message;
           }
+          if (found.id === agentId) return "You cannot wait for yourself.";
+          const busy = found.activity === "working" || found.activity === "starting";
+          // An idle session that still owes its result is about to be reminded to report it.
+          const dueSoon = found.activity === "idle" && found.reportDue && !found.waitingOn;
+          if (!busy && !dueSoon) return describeAgent(found);
           await Bun.sleep(RETRY_MS);
         }
         return `Stopped waiting for ${target}.`;
@@ -202,11 +210,25 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
     "spawn_agent",
     {
       description:
-        "Start another session in this workspace. This is how work is delegated here, in place of the built-in Agent tool and its subagents. Give it a task to begin with, and the name of a role to run as. The role decides which tools, MCP servers, plugins and skills the session has; you can take some of them away for this session, but not add any.",
+        "Start another session in this workspace. This is how work is delegated here, in place of the built-in Agent tool and its subagents. Give it a task to begin with, and the name of a role to run as. The session reports the result of the task to you as a message and then ends, unless you start it with keep. The role decides which tools, MCP servers, plugins and skills the session has; you can take some of them away for this session, but not add any.",
       inputSchema: {
         name: z.string().optional(),
-        role: z.string().optional().describe("A role of this workspace (a file in .dwa/roles)."),
-        task: z.string().optional().describe("The first prompt for the new session."),
+        role: z
+          .string()
+          .optional()
+          .describe("A role of this workspace (a file in .dwa/roles); list_roles shows them."),
+        task: z
+          .string()
+          .min(1)
+          .describe(
+            "The first prompt for the new session. It does not see your conversation: give the goal, what done means and what you already know.",
+          ),
+        keep: z
+          .boolean()
+          .optional()
+          .describe(
+            "Keep the session open after it has reported its result, for follow-up tasks you send it as messages. You then end it with stop_agent.",
+          ),
         profile: z.string().optional(),
         model: z
           .string()
@@ -228,8 +250,25 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
     },
     (request) =>
       tool(async () => {
-        const agent = await api<AgentInfo>("POST", "/agents", { ...request, narrowOnly: true });
+        const agent = await api<AgentInfo>("POST", "/agents", {
+          ...request,
+          narrowOnly: true,
+          from: agentId,
+        });
         return `Started agent "${agent.name}".`;
+      }),
+  );
+
+  server.registerTool(
+    "list_roles",
+    {
+      description:
+        "List the roles of this workspace that work can be handed to with spawn_agent, and what each is for. Roles can change while you work; this is the list as it is now.",
+    },
+    () =>
+      tool(async () => {
+        const { roles } = await api<{ roles: string }>("POST", "/roles/list", { from: agentId });
+        return roles;
       }),
   );
 
@@ -241,8 +280,34 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
     },
     ({ name }) =>
       tool(async () => {
-        const agent = await api<AgentInfo>("POST", "/agents/stop", { target: name });
+        const agent = await api<AgentInfo>("POST", "/agents/stop", {
+          target: name,
+          from: agentId,
+        });
         return `Stopped agent "${agent.name}".`;
+      }),
+  );
+
+  server.registerTool(
+    "finish_task",
+    {
+      description:
+        "Hand over the result of the task you were started for, when another session started you with spawn_agent (your first prompt says so). The result goes to that session, and your session ends unless it was started to be kept. Not for workflow steps (complete_step) and not for notes on the way (report_progress).",
+      inputSchema: {
+        result: z
+          .string()
+          .describe(
+            "Everything the session that waits needs: it gets this text and nothing else. If you could not finish, say what stopped you.",
+          ),
+      },
+    },
+    ({ result }) =>
+      tool(async () => {
+        const { message } = await api<{ message: string }>("POST", "/agents/finish", {
+          agentId,
+          result,
+        });
+        return message;
       }),
   );
 

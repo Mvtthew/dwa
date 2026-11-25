@@ -20,6 +20,7 @@ import {
 } from "../shared/capabilities.ts";
 import {
   type Config,
+  ConfigError,
   EffortSchema,
   type ResolvedProfile,
   resolveProfile,
@@ -46,6 +47,7 @@ import type {
   WorkspaceState,
 } from "../shared/protocol.ts";
 import { describeTarget, noticeEdits, saveValues } from "../shared/role-edit.ts";
+import { guideEntries, roleGuideList, roleGuidePrompt } from "../shared/role-guide.ts";
 import {
   diskFiles,
   findRole,
@@ -57,6 +59,7 @@ import {
   resolveSession,
   type SessionSummary,
   summarizeSession,
+  UnknownRoleError,
 } from "../shared/roles.ts";
 import { type Scope, scopeLabel } from "../shared/scope.ts";
 import {
@@ -86,9 +89,10 @@ import {
 } from "../tmux/layout.ts";
 import { parseStatusline, reduceHook, snippet } from "./activity.ts";
 import type { AgentRow, Store } from "./db.ts";
+import { reportSuffix } from "./delegation.ts";
 import { WorkspaceError } from "./errors.ts";
 import { Messaging, USER } from "./messaging.ts";
-import { workflowRuns } from "./workflows.ts";
+import { MAX_REMINDERS, workflowRuns } from "./workflows.ts";
 
 export { WorkspaceError };
 
@@ -340,7 +344,19 @@ export class Workspace {
   }
 
   spawn(request: SpawnRequest = {}): Promise<AgentInfo> {
-    return this.serial(() => this.spawnNow(request));
+    return this.serial(async () => {
+      try {
+        return await this.spawnNow(request);
+      } catch (error) {
+        // An agent that named a role that does not exist is told where the roles are listed.
+        if (error instanceof UnknownRoleError && request.from) {
+          throw new ConfigError(
+            `${error.message} Call list_roles to see the roles and what each is for.`,
+          );
+        }
+        throw error;
+      }
+    });
   }
 
   private async spawnNow(request: SpawnRequest): Promise<AgentInfo> {
@@ -376,6 +392,15 @@ export class Workspace {
         profile: request.profile,
       };
       const session = this.resolve(name, this.sessionRequest(config, stored));
+      // A session another one starts for a task owes it the result (`Delegation`). The task
+      // says so, and is stored that way, so that a session started afresh reads it again.
+      const spawner =
+        request.from && request.task ? this.deps.store.getRunning(request.from) : null;
+      const keep = request.keep === true;
+      const task =
+        spawner && request.task
+          ? `${request.task}${reportSuffix(spawner.name, keep)}`
+          : request.task;
 
       const id = this.newId();
       const sessionId = this.newId();
@@ -384,7 +409,7 @@ export class Workspace {
         sessionId,
         name,
         session,
-        task: request.task,
+        task,
         ...this.sessionFiles(id, name, session, profile),
       });
       const paneId = await spawnPoolWindow(this.deps.run, {
@@ -400,12 +425,13 @@ export class Workspace {
           profile: profile.name,
           sessionId,
           role: request.role,
-          task: request.task,
+          task,
         },
         paneId,
         session,
         stored,
       );
+      if (spawner) this.deps.store.setSpawner(row.id, spawner.id, keep);
       return {
         ...row,
         telemetry: null,
@@ -591,6 +617,17 @@ export class Workspace {
     return {};
   }
 
+  /**
+   * The roles a session can hand work to as they are now, for `list_roles`. `agentId` is the
+   * session that asks; its own role is left out.
+   */
+  roleList(agentId?: string): string {
+    const launch = agentId
+      ? parseJson<ResolvedSession>(this.deps.store.getLaunch(agentId))
+      : undefined;
+    return roleGuideList(guideEntries(this.roleContext(), { except: launch?.role }));
+  }
+
   /** A progress note an agent reports about its own work. */
   progress(agentId: string, summary: string, percent?: number): void {
     const row = this.deps.store.getRunning(agentId);
@@ -681,6 +718,10 @@ export class Workspace {
     const questions = this.messaging.openQuestions();
     for (const agent of live) {
       agent.waitingOn = questions.find((question) => question.fromId === agent.id)?.to ?? null;
+      const owed = store.handover(agent.id);
+      if (owed && owed.finishedAt === null && owed.reminders <= MAX_REMINDERS) {
+        agent.reportDue = true;
+      }
     }
 
     return {
@@ -1350,7 +1391,12 @@ export class Workspace {
         2,
       ),
     );
-    write(systemPromptPath, provider.systemPrompt(name, session));
+    // The list of roles is made here and not kept with the session, so a restart gets the
+    // roles as they are now and a role that changes does not make this session out of date.
+    const roleGuide = session.roleList
+      ? roleGuidePrompt(guideEntries(this.roleContext(), { except: session.role }))
+      : undefined;
+    write(systemPromptPath, provider.systemPrompt(name, session, { roleGuide }));
     return {
       settingsPath,
       mcpConfigPath,

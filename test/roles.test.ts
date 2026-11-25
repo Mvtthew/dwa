@@ -302,6 +302,22 @@ describe("resolveSession", () => {
     );
   });
 
+  test("the role list is inherited like the prompt and is absent when it is off", () => {
+    const files = {
+      [`${ROOT}/.dwa/roles/lead.toml`]: 'role_list = true\nwhen_to_use = "Never."',
+      [`${ROOT}/.dwa/roles/deputy.toml`]: 'extends = "lead"',
+      [`${ROOT}/.dwa/roles/quiet.toml`]: 'extends = "lead"\nrole_list = false',
+      [`${ROOT}/.dwa/roles/plain.toml`]: "in_role_list = false",
+    };
+    const resolved = (role: string) => resolveSession({ config: CONFIG, role }, context(files));
+    expect(resolved("lead").roleList).toBe(true);
+    expect(resolved("deputy").roleList).toBe(true);
+    // Not `false`: a session stored before the field existed must compare equal to this one.
+    expect("roleList" in resolved("quiet")).toBe(false);
+    expect("roleList" in resolved("plain")).toBe(false);
+    expect("roleList" in resolveSession({ config: CONFIG }, context(files))).toBe(false);
+  });
+
   test("names what does not exist", () => {
     const ctx = context({
       ...FILES,

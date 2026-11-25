@@ -53,6 +53,7 @@ Roles and configuration
   role show <role> | --main [--json]    What a session of a role is started with, after all layers
   role new | copy | rename | delete     Create and manage role files (see: role)
   role edit-prompt <role>               The role's prompt in $EDITOR
+  role edit-when-to-use <role>          What to hand to the role, in $EDITOR
   role history | diff | switch <role>   Numbered versions of a role file, and going back to one
   config check                          Check the config, the roles and what they refer to
 

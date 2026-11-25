@@ -50,6 +50,12 @@ export interface McpServerCommand {
 }
 
 /** One coding-agent CLI. Claude Code is the only implementation for now. */
+/** Parts of the system prompt that are worked out when the session's files are written. */
+export interface PromptExtras {
+  /** The list of roles (`roleGuidePrompt`); empty or absent when the session gets none. */
+  roleGuide?: string;
+}
+
 export interface Provider {
   id: string;
   buildLaunch(request: LaunchRequest): Launch;
@@ -73,7 +79,7 @@ export interface Provider {
   ): unknown;
   /**
    * Text appended to the system prompt: the workspace and its tools, then the role's own
-   * instructions.
+   * instructions, then the roles the session can hand work to when it is given that list.
    */
-  systemPrompt(name: string, session: ResolvedSession): string;
+  systemPrompt(name: string, session: ResolvedSession, extras?: PromptExtras): string;
 }

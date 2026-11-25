@@ -54,6 +54,7 @@ const ROLE_USAGE = `Usage:
   ${APP_NAME} role rename <role> <new name> Also changes every file that names the role
   ${APP_NAME} role delete <role>            Refused while something uses the role
   ${APP_NAME} role edit-prompt <role>       The role's prompt in $EDITOR
+  ${APP_NAME} role edit-when-to-use <role>  What to hand to the role, in $EDITOR
   ${APP_NAME} role history <role> [--json]  Versions of the role file
   ${APP_NAME} role diff <role> [vA] [vB]    What changed (the current version against the one before)
   ${APP_NAME} role switch <role> <vN>       Give the file the content of that version
@@ -98,6 +99,7 @@ async function roleFileCommand(
     "rename",
     "delete",
     "edit-prompt",
+    "edit-when-to-use",
     "history",
     "diff",
     "switch",
@@ -158,12 +160,17 @@ async function roleFileCommand(
     printWarnings(warnings);
     return 0;
   }
-  if (action === "edit-prompt") {
+  if (action === "edit-prompt" || action === "edit-when-to-use") {
+    // The two longer texts of a role file, each edited as a file of its own.
+    const [field, what] =
+      action === "edit-prompt"
+        ? (["prompt", "the prompt"] as const)
+        : (["when_to_use", "when to use"] as const);
     const loaded = findRoleIn(role, ctx);
     if (!loaded) throw new ConfigError(`Unknown role "${name}".`);
     mkdirSync(runDir(ctx.projectRoot), { recursive: true });
-    const path = join(runDir(ctx.projectRoot), `role-${name}-prompt.md`);
-    const before = loaded.role.prompt ?? "";
+    const path = join(runDir(ctx.projectRoot), `role-${name}-${field.replaceAll("_", "-")}.md`);
+    const before = loaded.role[field] ?? "";
     writeFileSync(path, before);
     if (!(await openEditor(path))) {
       console.error("The editor did not exit cleanly; nothing was changed.");
@@ -174,15 +181,16 @@ async function roleFileCommand(
       console.log("No changes.");
       return 0;
     }
-    // A prompt always ends its last line, so the closing quotes stand on their own.
-    const prompt = after === "" || after.endsWith("\n") ? after : `${after}\n`;
+    // The text always ends its last line, so the closing quotes stand on their own. Emptied,
+    // "when to use" is taken out of the file and the description speaks for the role again.
+    const text = after === "" || after.endsWith("\n") ? after : `${after}\n`;
     const version = saveValues(
       { kind: "role", name, source: role.source },
-      { prompt },
-      "prompt edited",
+      field === "when_to_use" && text.trim() === "" ? { when_to_use: null } : { [field]: text },
+      field === "prompt" ? "prompt edited" : "when to use edited",
       ctx,
     );
-    console.log(`Saved the prompt of role ${name} (v${version.n}).`);
+    console.log(`Saved ${what} of role ${name} (v${version.n}).`);
     return 0;
   }
   if (action === "history") {
@@ -251,6 +259,7 @@ function showSession(title: string, config: Config, session: ResolvedSession): v
   if (off.length > 0) console.log(`  ${"built-ins".padEnd(12)}off: ${off.join(", ")}`);
   const promptLines = session.prompt?.trim().split("\n").length ?? 0;
   console.log(`  ${"prompt".padEnd(12)}${promptLines > 0 ? `${promptLines} lines` : "none"}`);
+  if (session.roleList) console.log(`  ${"role list".padEnd(12)}on`);
   console.log(`\n  ${launchPreview(config, session).join(" ")}`);
 }
 
@@ -287,10 +296,21 @@ export async function roleCommand(projectRoot: string, args: string[]): Promise<
           ...entry,
           description: role?.description ?? null,
           extends: role?.extends ?? null,
+          when_to_use: role?.when_to_use ?? null,
+          role_list: role?.role_list ?? null,
+          in_role_list: role?.in_role_list ?? null,
           error: null,
         };
       } catch (error) {
-        return { ...entry, description: null, extends: null, error: (error as Error).message };
+        return {
+          ...entry,
+          description: null,
+          extends: null,
+          when_to_use: null,
+          role_list: null,
+          in_role_list: null,
+          error: (error as Error).message,
+        };
       }
     });
     if (values.json) {

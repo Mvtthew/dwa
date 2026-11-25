@@ -41,6 +41,15 @@ const RoleSchema = z
     description: z.string().optional(),
     /** A role this one starts from. Whatever is set here replaces the parent's value. */
     extends: z.string().regex(NAME_PATTERN).optional(),
+    /**
+     * What to hand to this role and what not, for a session that picks a role for a job. May
+     * be several lines; the role list falls back to `description` without it. Not inherited.
+     */
+    when_to_use: z.string().optional(),
+    /** Whether sessions of this role are given the list of roles they can hand work to. */
+    role_list: z.boolean().optional(),
+    /** False keeps this role out of that list. Not inherited. */
+    in_role_list: z.boolean().optional(),
     /** Instructions for the session, added to its system prompt. */
     prompt: z.string().optional(),
     ...capabilityFields,
@@ -150,7 +159,10 @@ export function findRole(name: string, ctx: RoleContext): LoadedRole | null {
   return null;
 }
 
-function missingRole(name: string, ctx: RoleContext): ConfigError {
+/** A role that has no file, so that a caller can add its own advice to the message. */
+export class UnknownRoleError extends ConfigError {}
+
+function missingRole(name: string, ctx: RoleContext): UnknownRoleError {
   const files = ctx.files ?? diskFiles;
   const expected = join(rolesDir(ctx.projectRoot), `${name}.toml`);
   const native = join(ctx.projectRoot, ".claude", "agents", `${name}.md`);
@@ -159,7 +171,9 @@ function missingRole(name: string, ctx: RoleContext): ConfigError {
     : "";
   const known = listRoles(ctx).map((entry) => entry.name);
   const available = known.length > 0 ? ` Roles here: ${known.join(", ")}.` : "";
-  return new ConfigError(`Unknown role "${name}": there is no ${expected}.${hint}${available}`);
+  return new UnknownRoleError(
+    `Unknown role "${name}": there is no ${expected}.${hint}${available}`,
+  );
 }
 
 /** The role and what it extends, the most distant parent first. */
@@ -217,6 +231,12 @@ export interface ResolvedSession {
   /** Whether the session uses the Claude command's own per-project memory. */
   memory: boolean;
   prompt?: string;
+  /**
+   * The session is given the list of roles it can hand work to. Present only when on: this
+   * object is compared with the stored one to see whether a session is out of date, and the
+   * list itself is written with the session's files, never kept here.
+   */
+  roleList?: true;
 }
 
 /** The short form of a resolved session for lists and panes: names only, no definitions. */
@@ -466,6 +486,7 @@ export function resolveSession(request: SessionRequest, ctx: RoleContext): Resol
 
   // The prompt is inherited like any other value: the nearest role that has one gives it.
   const prompt = chain.findLast((loaded) => loaded.role.prompt !== undefined)?.role.prompt;
+  const roleList = chain.findLast((loaded) => loaded.role.role_list !== undefined)?.role.role_list;
 
   // Without `subagents` the tools that start them are taken away, in whichever of the two
   // forms the session has its tools, so no list of a role can bring them back.
@@ -497,6 +518,7 @@ export function resolveSession(request: SessionRequest, ctx: RoleContext): Resol
     offSkills: caps.off_skills ?? [],
     memory: caps.memory ?? false,
     prompt: prompt?.trim() ? prompt : undefined,
+    ...(roleList ? { roleList: true as const } : {}),
   };
 }
 

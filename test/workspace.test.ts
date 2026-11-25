@@ -113,6 +113,29 @@ describe("up", () => {
     });
   });
 
+  test("a role that asks for it gets the roles it can hand work to in its prompt", async () => {
+    roles = {
+      main: 'role_list = true\nin_role_list = false\nprompt = "Lead."',
+      explore: 'description = "Reads the code."',
+      helper: 'when_to_use = "Odd jobs."',
+    };
+    await workspace.up();
+    const prompt = files.get("/project/.dwa/run/agents/id-1/prompt.md") ?? "";
+    expect(prompt).toContain("# Your role: main\n\nLead.\n\n# Roles you can hand work to");
+    expect(prompt).toContain("- explore: Reads the code.\n- helper: Odd jobs.");
+    expect(prompt).not.toContain("- main");
+
+    const explore = await workspace.spawn({ role: "explore" });
+    const other = files.get(`/project/.dwa/run/agents/${explore.id}/prompt.md`) ?? "";
+    expect(other).toContain('You are "explore"');
+    expect(other).not.toContain("Roles you can hand work to");
+
+    // The list is not part of what the session was started with: another role changing
+    // does not make this one out of date.
+    roles = { ...roles, helper: 'when_to_use = "Everything."' };
+    expect((await workspace.state()).main?.outOfDate).toBeUndefined();
+  });
+
   test("is a no-op when the workspace is already running", async () => {
     await workspace.up();
     await workspace.up();
@@ -608,6 +631,28 @@ skills = ["review", "house-style"]
     await refused({ permission_mode: "bypassPermissions" }).toThrow(/cannot set permission_mode/);
     await refused({ subagents: true }).toThrow(/cannot turn subagents on/);
     expect((await workspace.state()).agents).toHaveLength(2);
+  });
+
+  test("list_roles gives the roles as they are now, without the asking session's own", async () => {
+    roles = { main: "in_role_list = false", explore: 'description = "Reads the code."' };
+    await workspace.up();
+    const explore = await workspace.spawn({ role: "explore" });
+    expect(workspace.roleList("id-1")).toBe("- explore: Reads the code.");
+    roles = { ...roles, helper: 'when_to_use = "Odd jobs."' };
+    expect(workspace.roleList("id-1")).toBe("- explore: Reads the code.\n- helper: Odd jobs.");
+    expect(workspace.roleList(explore.id)).toBe("- helper: Odd jobs.");
+  });
+
+  test("an agent that names a role that does not exist is pointed to list_roles", async () => {
+    // In these tests every role has a file except "main", so a parent of that name is missing.
+    roles = { odd: 'extends = "main"' };
+    await workspace.up();
+    await expect(workspace.spawn({ role: "odd", narrowOnly: true, from: "id-1" })).rejects.toThrow(
+      /Unknown role "main".* Call list_roles to see the roles and what each is for\.$/,
+    );
+    const mine = await workspace.spawn({ role: "odd" }).catch((error: Error) => error.message);
+    expect(mine).toContain('Unknown role "main"');
+    expect(mine).not.toContain("list_roles");
   });
 
   test("a session that would miss something is not started", async () => {

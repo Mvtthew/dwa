@@ -57,6 +57,11 @@ export interface AgentInfo {
   progress: string | null;
   /** Who this agent is blocked on through a question it asked ("user" or an agent name). */
   waitingOn: string | null;
+  /**
+   * The session owes a result to the one that started it and is still being reminded to
+   * report it, so an idle moment is not yet its last word.
+   */
+  reportDue?: boolean;
   /** True when this agent's session is the pane shown under the main session. */
   open: boolean;
   /** What the session was started with; null for one started before this was recorded. */
@@ -258,6 +263,14 @@ export interface SpawnRequest extends Omit<Capabilities, "effort"> {
    * role, never add to it.
    */
   narrowOnly?: boolean;
+  /**
+   * The id of the session that asks (`spawn_agent`). The new session then owes it a result
+   * and ends once it has reported one with `finish_task`. Absent for the user's own spawns,
+   * the agents of the config and workflow steps.
+   */
+  from?: string;
+  /** With `from`: the session stays open after it has reported its result. */
+  keep?: boolean;
 }
 
 export interface HookRequest {

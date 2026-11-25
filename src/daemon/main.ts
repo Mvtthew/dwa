@@ -7,6 +7,7 @@ import { daemonSocketPath, runDir, socketDir, tmuxSocketName } from "../shared/p
 import { buildTmuxConf } from "../tmux/conf.ts";
 import { createTmux } from "../tmux/driver.ts";
 import { Store } from "./db.ts";
+import { Delegation } from "./delegation.ts";
 import { RoleAuthor } from "./role-author.ts";
 import { startServer } from "./server.ts";
 import { Workflows } from "./workflows.ts";
@@ -101,6 +102,7 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
   });
 
   const workflows = new Workflows({ store, workspace, projectRoot });
+  const delegation = new Delegation({ store, workspace });
   const roleAuthor = new RoleAuthor({
     store,
     workspace,
@@ -119,11 +121,13 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
     socketPath,
     workspace,
     workflows,
+    delegation,
     roleAuthor,
     onShutdown: shutdown,
   });
   // Runs that were in progress when the daemon last stopped carry on.
   workflows.resume().catch((error) => console.error("could not resume workflows:", error));
+  delegation.resume().catch((error) => console.error("could not end reported sessions:", error));
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
   console.log(`dwa daemon for ${projectRoot} listening on ${socketPath} (pid ${process.pid})`);

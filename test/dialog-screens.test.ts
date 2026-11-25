@@ -482,6 +482,23 @@ describe("the role settings", () => {
     });
   });
 
+  test("saving the form keeps when_to_use, and the two role-list choices are saved", async () => {
+    const { store, saves } = fakeStore({
+      lead: { description: "Leads", when_to_use: "Never.\n", in_role_list: false },
+    });
+    const screen = roleScreen(state([]).api, store, "lead");
+    expect(screen.values).toMatchObject({ in_role_list: OFF, role_list: "" });
+    await press(screen, "Save", { role_list: ON });
+    // Nothing about when_to_use: it is not in the form, and must not be removed for that.
+    expect(saves[0]?.changes).toEqual({ role_list: true });
+
+    await press(screen, "Save", { in_role_list: ON });
+    expect(saves[1]?.changes).toEqual({ in_role_list: null });
+    expect(await button(screen, "Edit when to use").run(screen.values ?? {})).toEqual({
+      exec: ["role", "edit-when-to-use", "project:lead"],
+    });
+  });
+
   test("the prompt opens in the editor only when the form is saved", async () => {
     const { store } = fakeStore(roles());
     const screen = roleScreen(state([]).api, store, "reviewer");

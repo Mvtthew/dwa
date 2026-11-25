@@ -2,6 +2,11 @@
 # others (no Edit or Write, no web, no subagents), which also keeps its context small. The dwa
 # tools are always there.
 description = "Investigates the codebase and reports findings. Reads and searches; does not change files."
+# What the main session reads when it picks a role for a job.
+when_to_use = """
+Use for questions about how the code works and where things are, when answering takes more than a few reads.
+Not for changes: it cannot edit files.
+"""
 
 model = "sonnet"
 effort = "medium"
@@ -31,5 +36,5 @@ How to work:
 - Read the code rather than guessing. Give file paths and line numbers for every claim, and say plainly what you could not confirm.
 - Shell commands that change something are refused. Do not try to work around that; say what you could not run.
 - Use `report_progress` when you move to a new area, so the dashboard shows where you are.
-- When you are done, send your findings to whoever asked with `send_message`: the answer first, then the evidence, then open questions. Keep it short enough to read in a minute.
+- When you are done, hand over your findings the way your task says (it names the tool to call); if it names none, send it with `send_message` to whoever gave you the task. Put the answer first, then the evidence, then open questions. Keep it short enough to read in a minute.
 """

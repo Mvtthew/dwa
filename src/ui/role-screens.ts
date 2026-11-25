@@ -117,6 +117,10 @@ function fieldsFrom(
   fields.permission_mode = text("permission_mode") as RoleFields["permission_mode"];
   if (values.memory) fields.memory = values.memory === ON;
   if (values.subagents) fields.subagents = values.subagents === ON;
+  if (values.role_list && values.role_list !== INHERIT) fields.role_list = values.role_list === ON;
+  // Being listed is what a role is without the key; a `true` the file spells out is kept.
+  if (values.in_role_list === OFF) fields.in_role_list = false;
+  else if (values.in_role_list === ON && before.in_role_list === true) fields.in_role_list = true;
 
   const more = split(values.moreTools);
   // What the file already lists keeps its order, so an untouched list is not a change.
@@ -147,7 +151,8 @@ function fieldsFrom(
 export function roleChanges(before: RoleFields, after: RoleFields): RoleChanges {
   const changes: Record<string, unknown> = {};
   for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (key === "prompt") continue;
+    // The two longer texts are edited in $EDITOR, not in this form.
+    if (key === "prompt" || key === "when_to_use") continue;
     const next = (after as Record<string, unknown>)[key];
     if (!same((before as Record<string, unknown>)[key], next)) changes[key] = next ?? null;
   }
@@ -329,6 +334,8 @@ export function roleScreen(
     permission_mode: role.permission_mode ?? INHERIT,
     memory: role.memory === undefined ? INHERIT : role.memory ? ON : OFF,
     subagents: role.subagents === undefined ? INHERIT : role.subagents ? ON : OFF,
+    role_list: role.role_list === undefined ? INHERIT : role.role_list ? ON : OFF,
+    in_role_list: role.in_role_list === false ? OFF : ON,
     toolsMode: role.tools ? "only" : role.deny_tools ? "except" : INHERIT,
     moreTools: "",
   };
@@ -363,6 +370,25 @@ export function roleScreen(
         key: "extends",
         label: "Starts from (extends)",
         options: [{ value: INHERIT, label: "nothing" }, ...inheritOr(others).slice(1)],
+      },
+      {
+        kind: "choice",
+        key: "in_role_list",
+        label: "Offered to sessions that hand work over",
+        options: [
+          { value: ON, label: "yes" },
+          { value: OFF, label: "no" },
+        ],
+      },
+      {
+        kind: "choice",
+        key: "role_list",
+        label: "Its sessions are given the list of roles",
+        options: [
+          { value: INHERIT, label: "inherit" },
+          { value: ON, label: "on" },
+          { value: OFF, label: "off" },
+        ],
       },
     );
   }
@@ -564,6 +590,15 @@ export function roleScreen(
       run: (current) => {
         needSaved(current);
         return { exec: ["role", "edit-prompt", formatRef(key)] };
+      },
+    },
+    {
+      kind: "button",
+      label: "Edit when to use…",
+      hint: "what to hand to this role; opens $EDITOR",
+      run: (current) => {
+        needSaved(current);
+        return { exec: ["role", "edit-when-to-use", formatRef(key)] };
       },
     },
     {

@@ -46,7 +46,14 @@ export type FileTarget =
 export type RoleRef = string | { name: string; source?: Scope };
 
 /** Keys of a role file besides the capability fields. */
-export type RoleFields = Capabilities & { description?: string; extends?: string; prompt?: string };
+export type RoleFields = Capabilities & {
+  description?: string;
+  extends?: string;
+  when_to_use?: string;
+  role_list?: boolean;
+  in_role_list?: boolean;
+  prompt?: string;
+};
 
 /** Values to set; `null` removes the key from the file. */
 export type RoleChanges = { [K in keyof RoleFields]?: RoleFields[K] | null };

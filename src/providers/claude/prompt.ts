@@ -1,19 +1,27 @@
 import type { ResolvedSession } from "../../shared/roles.ts";
+import type { PromptExtras } from "../provider.ts";
 
 /**
- * What is appended to a session's system prompt: the workspace part, then the instructions of
- * its role. Appended and not passed as an agent definition, so Claude Code's own system prompt
+ * What is appended to a session's system prompt: the workspace part, the instructions of its
+ * role, and the roles it can hand work to when it is given that list. Appended and not passed as an agent definition, so Claude Code's own system prompt
  * stays as it is for every role, the main session included.
  */
-export function sessionPrompt(name: string, session: ResolvedSession): string {
+export function sessionPrompt(
+  name: string,
+  session: ResolvedSession,
+  extras: PromptExtras = {},
+): string {
   // A deny rule that is just the tool's name removes it as well.
   const hasAgent =
     (session.tools ? session.tools.includes("Agent") : !session.denyTools.includes("Agent")) &&
     !session.deny.includes("Agent");
-  const workspace = workspacePrompt(name, hasAgent);
-  if (!session.prompt) return workspace;
-  const title = session.role ? `Your role: ${session.role}` : "Your role";
-  return `${workspace}\n\n# ${title}\n\n${session.prompt.trim()}`;
+  const parts = [workspacePrompt(name, hasAgent)];
+  if (session.prompt) {
+    const title = session.role ? `Your role: ${session.role}` : "Your role";
+    parts.push(`# ${title}\n\n${session.prompt.trim()}`);
+  }
+  if (extras.roleGuide) parts.push(extras.roleGuide);
+  return parts.join("\n\n");
 }
 
 /**
@@ -34,8 +42,10 @@ Use the dwa MCP tools to work with the others:
 - ask: ask another agent or the user a question and wait for the answer. It blocks until someone answers, with no time limit, so use it whenever you need a decision before you can continue.
 - answer: answer a question that was addressed to you (it comes with a question id).
 - report_progress: a one-line note on where you are, shown in the workspace dashboard. Use it at meaningful steps of longer work.
-- wait_for: wait until another agent has finished its current turn.
-- spawn_agent / stop_agent: start or end another session. This is how work is delegated here: give the new session a role and a task.
+- wait_for: wait until another agent has finished its current turn. For an agent you started, it waits for the result and returns it.
+- list_roles: the roles work can be handed to and what each is for.
+- spawn_agent / stop_agent: start or end another session. This is how work is delegated here: give the new session a role and a task. It sends you the result as a message and ends by itself; one started with keep stays for follow-ups until you stop it.
+- finish_task: only when your first prompt says another session started you for a task. It hands that session your result, and your session ends unless it is kept; ending your turn does not finish the task.
 - list_workflows / run_workflow / workflow_status: workflows are fixed sequences of steps defined for this project, each step done by its own agent. A run reports back with a message when it ends.
 - complete_step / fail_step: only when your first prompt says you are a step of a workflow. The step stays open until you call one of them; ending your turn does not complete it.
 - request_changes: only when your first prompt says your step reviews another step. It sends that step back for another pass with your feedback.

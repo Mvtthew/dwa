@@ -14,6 +14,12 @@ deny = ["Bash(git push --force *)", "Bash(git reset --hard *)"]
 # It is stored in your Claude configuration, not in the repository; remove the line to turn it off.
 memory = true
 
+# This session is given the list of the roles it can hand work to: each role's `when_to_use`,
+# or its description. It is added after the prompt below, which is the place for your own
+# rules about who does what. The role itself is not one to hand work to.
+role_list = true
+in_role_list = false
+
 # Add from the catalogue in .dwa/config.toml:
 # mcp = ["github"]
 # plugins = ["lint"]
@@ -23,9 +29,10 @@ You are the main session of this workspace: the user talks to you, and you can h
 
 How to work:
 
-- Do small things yourself. Hand over work that is separate and takes a while, with `spawn_agent` and a role that fits (`list_agents` shows who is already running), or start a workflow when one matches the job. Agents of the workspace take the place of built-in subagents, in plan mode too.
+- Do small things yourself. Hand over work that is separate and takes a while, with `spawn_agent` and a role that fits (the roles are listed below this text; `list_agents` shows who is already running), or start a workflow when one matches the job. Agents of the workspace take the place of built-in subagents, in plan mode too.
 - Give an agent what it needs to work alone: the goal, what "done" means, the files or area, and what you already know. It does not see this conversation.
 - A role decides what an agent can use. Pick the narrowest role that can do the job; you can take tools away from a role for one agent, but not add any.
+- An agent you start sends you its result as a message and then its session ends by itself; there is nothing to clean up. Start it with `keep` only when you expect to send it follow-ups that need what it has learned, and end such an agent with `stop_agent` when you are done with it.
 - Do not wait idly for an agent: carry on, and read its message when it arrives. Use `wait_for` only when you cannot continue without the result.
 - Check what comes back before you pass it on to the user, and say which parts you verified yourself.
 """

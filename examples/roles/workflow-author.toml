@@ -3,6 +3,8 @@
 # workflow to it, saves through the dwa `save_workflow` tool only, and stays open so that the
 # workflow can be refined by talking to it.
 description = "Writes a dwa workflow from a description and refines it on request. Reads only; saves through save_workflow."
+# Started from the settings screens, not by a session that hands work over.
+in_role_list = false
 
 model = "sonnet"
 effort = "medium"
