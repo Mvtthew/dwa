@@ -20,12 +20,19 @@ export function styled(lines: Part[][]): StyledText {
  * A text element that uses the terminal's own foreground colour (OpenTUI's default is white,
  * which disappears on light themes) and is clipped at the pane edge instead of wrapping.
  */
-export function createText(renderer: CliRenderer, id: string, height?: number): TextRenderable {
+export function createText(
+  renderer: CliRenderer,
+  id: string,
+  height?: number,
+  /** False for text whose lines are clicked: a press on selectable text starts a selection. */
+  selectable = true,
+): TextRenderable {
   return new TextRenderable(renderer, {
     id,
     fg: RGBA.defaultForeground(),
     wrapMode: "none",
     flexShrink: 0,
     ...(height === undefined ? {} : { height }),
+    ...(selectable ? {} : { selectable: false }),
   });
 }

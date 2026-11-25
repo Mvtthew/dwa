@@ -21,7 +21,8 @@ export type StatusAction =
   | "detach";
 
 export interface StatusOptions {
-  run(action: StatusAction): void;
+  /** The subject is what a clicked line is about: `run:<id>` for a workflow run, a question's id. */
+  run(action: StatusAction, subject?: string): void;
   /** Shown at the very bottom. */
   version: string;
 }
@@ -90,7 +91,16 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
     flexShrink: 1,
     overflow: "hidden",
   });
-  const text = createText(renderer, "status-text");
+  const text = createText(renderer, "status-text", undefined, false);
+  /** What a click on a line of the text opens, by line number: a workflow run or a question. */
+  const targets = new Map<number, { action: StatusAction; subject?: string }>();
+  text.onMouseDown = (event) => {
+    const row = event.y - text.screenY;
+    // The body cuts the text off; a line that is not shown cannot be clicked.
+    if (row < 0 || row >= body.height) return;
+    const target = targets.get(row);
+    if (target) options.run(target.action, target.subject);
+  };
   body.add(text);
   root.add(body);
 
@@ -164,6 +174,12 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
       const model = statusModel(state, nowMs);
       const width = Math.max(10, renderer.width - 2);
       const lines: Part[][] = [];
+      targets.clear();
+      /** Adds a line that opens something when clicked. */
+      const link = (line: Part[], action: StatusAction, subject?: string) => {
+        targets.set(lines.length, { action, subject });
+        lines.push(line);
+      };
 
       const { subject, subjectStyle } = model;
       lines.push([bold((subject?.name ?? "main").toUpperCase())]);
@@ -191,17 +207,22 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
       if (model.workflows.length > 0) {
         lines.push([], [bold("WORKFLOWS")]);
         for (const run of model.workflows) {
-          lines.push([
-            fit(run.heading, width - run.state.length - 2),
-            dim("  "),
-            tone(run.tone, run.state),
-          ]);
+          const opens = `run:${run.id}`;
+          link(
+            [fit(run.heading, width - run.state.length - 2), dim("  "), tone(run.tone, run.state)],
+            "design",
+            opens,
+          );
           for (const step of run.steps) {
-            lines.push([
-              tone(step.style.tone, `  ${step.style.glyph} `),
-              fit(step.name, width - 4),
-              ...(step.style.label === "needs you" ? [tone("attention", " needs you")] : []),
-            ]);
+            link(
+              [
+                tone(step.style.tone, `  ${step.style.glyph} `),
+                fit(step.name, width - 4),
+                ...(step.style.label === "needs you" ? [tone("attention", " needs you")] : []),
+              ],
+              "design",
+              opens,
+            );
           }
         }
       }
@@ -219,10 +240,15 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
         const title = bold(`QUESTIONS ${model.questions.length}`);
         lines.push([], [mine ? tone("attention", title) : title]);
         for (const question of model.questions.slice(0, 4)) {
-          lines.push([question.forUser ? tone("attention", "◆ ") : dim("◷ "), question.heading]);
-          lines.push([dim(`  ${fit(oneLine(question.text), width - 2)}`)]);
+          const id = String(question.id);
+          link(
+            [question.forUser ? tone("attention", "◆ ") : dim("◷ "), question.heading],
+            "questions",
+            id,
+          );
+          link([dim(`  ${fit(oneLine(question.text), width - 2)}`)], "questions", id);
         }
-        lines.push([dim(`  ${formatKey(state.keyPrefix)} q to answer`)]);
+        link([dim(`  click, or ${formatKey(state.keyPrefix)} q for all`)], "questions");
       }
 
       if (model.inbox.length > 0) {
@@ -241,6 +267,7 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
       paintButtons(state);
     },
     showMessage(message) {
+      targets.clear();
       text.content = styled([[bold("STATUS")], [], [dim(message)]]);
     },
   };

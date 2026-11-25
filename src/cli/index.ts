@@ -57,7 +57,7 @@ Roles and configuration
 
 Talking to agents
   ask <name> <question>                 Ask an agent and wait for its answer
-  answer [id] [text]                    Answer an open question (asks which one when run bare)
+  answer [id] [text]                    Answer an open question (goes through them when run bare, asks for the text when given only an id)
   inbox                                 Show open questions and messages agents sent to you
 
 Workflows

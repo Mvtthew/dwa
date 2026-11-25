@@ -16,7 +16,7 @@ import {
   TextareaRenderable,
   type TextRenderable,
 } from "@opentui/core";
-import { fit, moveCursor, type Tone } from "./model.ts";
+import { fit, moveCursor, type Tone, wrapAll } from "./model.ts";
 import { createText, styled } from "./text.ts";
 import { accent, tone } from "./theme.ts";
 
@@ -312,7 +312,12 @@ export function createForm(renderer: CliRenderer, options: FormOptions): Form {
   const build = (row: Row, index: number): RowNode => {
     const id = `${options.id}-row-${built}-${index}`;
     if (row.kind === "heading" || row.kind === "note") {
-      const lines = row.text.split("\n");
+      // A note is shown whole: long lines go on below, and the list scrolls when it gets tall. A
+      // live note keeps its lines, since its text is replaced line for line.
+      const lines =
+        row.kind === "note" && !row.live
+          ? wrapAll(row.text, Math.max(10, options.width()))
+          : row.text.split("\n");
       const box = new BoxRenderable(renderer, { id, height: lines.length, flexShrink: 0 });
       const text = createText(renderer, `${id}-text`, lines.length);
       text.content = styled(

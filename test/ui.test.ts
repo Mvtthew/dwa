@@ -12,6 +12,7 @@ import {
   tiles,
   untilReset,
   workflowLine,
+  wrapAll,
 } from "../src/ui/model.ts";
 import { createStatusView } from "../src/ui/status.ts";
 
@@ -208,7 +209,7 @@ describe("questions and messages", () => {
     expect(frame).toContain("◆ #3 dev → you");
     expect(frame).toContain("Which database should I u…");
     expect(frame).toContain("◷ #4 rev → dev");
-    expect(frame).toContain("Ctrl+Q q to answer");
+    expect(frame).toContain("click, or Ctrl+Q q for all");
     expect(frame).toContain("MESSAGES TO YOU");
     expect(frame).toContain("from dev  just now");
     expect(frame).toContain("The fix is ready for revi…");
@@ -241,6 +242,7 @@ describe("workflows in the status pane", () => {
 
   test("a run in progress shows its steps, a finished one only its outcome", () => {
     expect(workflowLine(run)).toEqual({
+      id: 3,
       heading: "#3 feature",
       state: "running",
       tone: "good",
@@ -251,6 +253,7 @@ describe("workflows in the status pane", () => {
       ],
     });
     expect(workflowLine({ ...run, state: "failed" })).toEqual({
+      id: 3,
       heading: "#3 feature",
       state: "failed",
       tone: "bad",
@@ -502,5 +505,103 @@ describe("panes", () => {
     expect(frame).toContain("model N/A · cost N/A");
     expect(frame).toContain("N/A");
     expect(frame).not.toContain("NEEDS YOU");
+  });
+});
+
+describe("clicking lines of the status pane", () => {
+  const step = {
+    attempt: 1,
+    dependsOn: [],
+    agent: null,
+    result: null,
+    error: null,
+    needsAttention: false,
+  };
+  const run: WorkflowRunInfo = {
+    id: 3,
+    name: "feature",
+    input: "",
+    state: "running",
+    startedBy: "user",
+    createdAt: NOW,
+    finishedAt: null,
+    steps: [{ ...step, id: "build", state: "running" }],
+  };
+  const question = {
+    id: 7,
+    from: "dev",
+    to: "user",
+    fromId: "id-dev",
+    toId: "user",
+    question: "Which database?",
+    options: [],
+    createdAt: NOW,
+  };
+
+  test("a run, a step and a question open that item, the hint the whole queue", async () => {
+    const harness = await createTestRenderer({ width: 30, height: 50 });
+    const pressed: [string, string | undefined][] = [];
+    const view = createStatusView(harness.renderer, {
+      run: (action, subject) => pressed.push([action, subject]),
+      version: "1.2.3",
+    });
+    view.update({ ...workspace([agent("dev")]), workflows: [run], questions: [question] }, NOW);
+    await harness.renderOnce();
+    const lines = harness.captureCharFrame().split("\n");
+    const click = async (part: string) => {
+      const row = lines.findIndex((line) => line.includes(part));
+      expect(row).toBeGreaterThan(-1);
+      await harness.mockMouse.click(4, row);
+      await harness.renderOnce();
+    };
+    await click("#3 feature");
+    await click("● build");
+    await click("#7 dev → you");
+    await click("Which database?");
+    await click("q for all");
+    await click("USAGE");
+    await click("AGENTS 1");
+    harness.renderer.destroy();
+    expect(pressed).toEqual([
+      ["design", "run:3"],
+      ["design", "run:3"],
+      ["questions", "7"],
+      ["questions", "7"],
+      ["questions", undefined],
+    ]);
+  });
+
+  test("after a message replaced the text nothing is clickable", async () => {
+    const harness = await createTestRenderer({ width: 30, height: 50 });
+    const pressed: string[] = [];
+    const view = createStatusView(harness.renderer, {
+      run: (action) => pressed.push(action),
+      version: "1.2.3",
+    });
+    view.update({ ...workspace([agent("dev")]), workflows: [run], questions: [question] }, NOW);
+    await harness.renderOnce();
+    const row = harness
+      .captureCharFrame()
+      .split("\n")
+      .findIndex((line) => line.includes("#3 feature"));
+    view.showMessage("The daemon is not running.");
+    await harness.renderOnce();
+    await harness.mockMouse.click(4, row);
+    harness.renderer.destroy();
+    expect(pressed).toEqual([]);
+  });
+});
+
+describe("wrapAll", () => {
+  test("keeps every word and the indent of a continued line", () => {
+    expect(wrapAll("  step: done\n      one two three four", 16)).toEqual([
+      "  step: done",
+      "      one two",
+      "      three four",
+    ]);
+    expect(wrapAll("short", 16)).toEqual(["short"]);
+    expect(wrapAll("a\n\nb", 16)).toEqual(["a", "", "b"]);
+    // A word longer than the row is cut, not dropped.
+    expect(wrapAll("abcdefghij", 4)).toEqual(["abcd", "efgh", "ij"]);
   });
 });

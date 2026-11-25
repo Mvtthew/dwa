@@ -75,6 +75,7 @@ From a shell, without any model call:
 bun run dwa agent send dev "the API changed, re-read docs/api.md"
 bun run dwa ask reviewer "is the migration safe to run?"   # waits and prints the answer
 bun run dwa answer                  # walk through open questions (also Ctrl+Q then q)
+bun run dwa answer 3                # show question 3 and read the answer
 bun run dwa answer 3 "use postgres" # answer question 3 directly
 bun run dwa inbox                   # messages agents sent to you
 ```
@@ -196,7 +197,7 @@ Popups are drawn on the black of your terminal's palette with its white for text
 
 Clicking a pane focuses it and dragging a border resizes it. In the agents pane, click an agent to show it under the main session and click it again to hide it; `j`/`k` or the arrow keys and `Enter` do the same, and `t` opens the tools of the selected agent. Under the list the pane shows what the selected agent can use. A `↻` after a name means the session is not as its role says any more: the role changed since it started, or it is about to restart.
 
-The status pane on the left ends with buttons: **Workflows**, **Workflow designer**, **New agent**, **Agent tools**, **Role settings** and **Shell**, then the shortcuts from the table above (close pane, focus main, answer, menu, zoom main, detach), and the dwa version on the last line. Click one, or press its key alone while that pane has the focus. In a short terminal the shortcut buttons are left out so that questions and agents that need you stay visible. The first two, and the menu, open a form in a popup where every row can be clicked: start a workflow or open a run on its picture; or start an agent with a role, model and effort. The shell is your own `$SHELL` in the project directory. It takes the same place as an open agent, so showing one hides the other, and it keeps running while hidden until you exit it.
+The status pane on the left ends with buttons: **Workflows**, **Workflow designer**, **New agent**, **Agent tools**, **Role settings** and **Shell**, then the shortcuts from the table above (close pane, focus main, answer, menu, zoom main, detach), and the dwa version on the last line. Click one, or press its key alone while that pane has the focus. In a short terminal the shortcut buttons are left out so that questions and agents that need you stay visible. The lists above the buttons can be clicked too: a workflow run or one of its steps opens that run on its picture, and a question opens that question to answer. The first two, and the menu, open a form in a popup where every row can be clicked: start a workflow or open a run on its picture; or start an agent with a role, model and effort. The shell is your own `$SHELL` in the project directory. It takes the same place as an open agent, so showing one hides the other, and it keeps running while hidden until you exit it.
 
 The prefix can be changed in the config:
 

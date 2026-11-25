@@ -75,6 +75,29 @@ export function wrap(text: string, width: number, lines = 2): string[] {
 }
 
 /**
+ * Breaks every line of a text into rows of at most `width` characters, at a space where there is
+ * one. Nothing is left out, and a continued line keeps the indent it started with.
+ */
+export function wrapAll(text: string, width: number): string[] {
+  const rows: string[] = [];
+  for (const line of text.split("\n")) {
+    const indent = /^ */.exec(line)?.[0] ?? "";
+    // An indent that leaves no room for words is dropped rather than kept.
+    const lead = indent.length < width / 2 ? indent : "";
+    const room = Math.max(1, width - lead.length);
+    let rest = line.slice(indent.length);
+    while (rest.length > room) {
+      const at = rest.lastIndexOf(" ", room);
+      const cut = at > room / 2 ? at : room;
+      rows.push(lead + rest.slice(0, cut).trimEnd());
+      rest = rest.slice(cut).trimStart();
+    }
+    rows.push(lead + rest);
+  }
+  return rows;
+}
+
+/**
  * What a session was started with, in a few short lines: always the tools, and the MCP servers,
  * plugins and skills only when there is something to say. Empty when it was not recorded.
  */
@@ -210,6 +233,7 @@ const RUN_TONE: Record<WorkflowRunState, Tone> = {
 };
 
 export interface WorkflowLine {
+  id: number;
   /** "#3 feature". */
   heading: string;
   state: WorkflowRunState;
@@ -220,6 +244,7 @@ export interface WorkflowLine {
 
 export function workflowLine(run: WorkflowRunInfo): WorkflowLine {
   return {
+    id: run.id,
     heading: `#${run.id} ${run.name}`,
     state: run.state,
     tone: RUN_TONE[run.state],

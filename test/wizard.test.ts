@@ -298,6 +298,23 @@ describe("the wizard on screen", () => {
     return { harness, done, frame, click };
   }
 
+  test("a note longer than the form goes on below instead of being cut", async () => {
+    const text = `explore: done\n      ${"word ".repeat(20)}the very end`;
+    const { frame } = await setup({
+      title: "Results",
+      rows: [
+        { kind: "note", text },
+        { kind: "button", label: "Back", run: () => ({ close: true }) },
+      ],
+    });
+    const lines = (await frame()).split("\n");
+    const last = lines.findIndex((line) => line.includes("the very end"));
+    expect(last).toBeGreaterThan(-1);
+    // The continued line keeps the indent, and the button comes after the whole note.
+    expect(lines[last]).toMatch(/^\s{6,}\S/);
+    expect(lines.findIndex((line) => line.includes("Back"))).toBeGreaterThan(last);
+  });
+
   function form(sent: Record<string, string>[]): Screen {
     return {
       title: "Start an agent",

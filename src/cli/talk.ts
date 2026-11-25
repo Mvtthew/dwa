@@ -41,15 +41,25 @@ function show(question: QuestionInfo): void {
   });
 }
 
-/** Walks through the open questions and reads an answer for each. Used in the popup. */
-async function answerInteractively(projectRoot: string): Promise<number> {
+/**
+ * The questions to go through, in order: those for the user first (the user may also answer on
+ * behalf of an agent), or the one question asked for, if it is still open.
+ */
+export function answerQueue(questions: QuestionInfo[], only?: number): QuestionInfo[] {
+  return questions
+    .filter((question) => only === undefined || question.id === only)
+    .sort((a, b) => Number(b.to === "user") - Number(a.to === "user") || a.id - b.id);
+}
+
+/**
+ * Walks through the open questions, or shows the one asked for, and reads an answer for each.
+ * Used in the popup.
+ */
+async function answerInteractively(projectRoot: string, only?: number): Promise<number> {
   const state = await call<WorkspaceState>(projectRoot, "GET", "/state");
-  // Questions for the user first; the user may also answer on behalf of an agent.
-  const questions = [...state.questions].sort(
-    (a, b) => Number(b.to === "user") - Number(a.to === "user") || a.id - b.id,
-  );
+  const questions = answerQueue(state.questions, only);
   if (questions.length === 0) {
-    console.log("No open questions.");
+    console.log(only === undefined ? "No open questions." : `Question #${only} is no longer open.`);
     await Bun.sleep(1200);
     return 0;
   }
@@ -137,10 +147,11 @@ export async function talkCommand(
     case "answer": {
       const [id, ...words] = args;
       if (id === undefined) return answerInteractively(projectRoot);
-      if (!/^\d+$/.test(id) || words.length === 0) {
-        console.error("Usage: dwa answer [<id> <text>]");
+      if (!/^\d+$/.test(id)) {
+        console.error("Usage: dwa answer [<id> [<text>]]");
         return 2;
       }
+      if (words.length === 0) return answerInteractively(projectRoot, Number(id));
       await call(projectRoot, "POST", "/questions/answer", {
         id: Number(id),
         answer: words.join(" "),

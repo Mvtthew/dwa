@@ -80,13 +80,13 @@ export async function runUi(view: UiView, projectRoot: string): Promise<never> {
         })
       : createStatusView(renderer, {
           version: pkg.version,
-          run: (action) => {
+          run: (action, subject) => {
             if (action === "shell") return post("/shell/toggle");
             if (action === "close") return post("/agents/close");
             if (action === "focus") return post("/focus");
             if (action === "zoom") return post("/zoom");
             if (action === "detach") return post("/detach");
-            return post("/popup", { kind: action });
+            return post("/popup", { kind: action, subject });
           },
         });
 

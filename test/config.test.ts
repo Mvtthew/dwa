@@ -520,3 +520,24 @@ describe("personal defaults", () => {
     }
   });
 });
+
+describe("answerQueue", () => {
+  const question = (id: number, to: string) => ({
+    id,
+    from: "dev",
+    to,
+    fromId: "id-dev",
+    toId: to,
+    question: "?",
+    options: [],
+    createdAt: 0,
+  });
+  const open = [question(1, "rev"), question(2, "user"), question(3, "user")];
+
+  test("the user's questions come first, and one id gives that question alone", async () => {
+    const { answerQueue } = await import("../src/cli/talk.ts");
+    expect(answerQueue(open).map((entry) => entry.id)).toEqual([2, 3, 1]);
+    expect(answerQueue(open, 1).map((entry) => entry.id)).toEqual([1]);
+    expect(answerQueue(open, 9)).toEqual([]);
+  });
+});
