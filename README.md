@@ -192,6 +192,8 @@ Press `Ctrl+Q`, release, then:
 | `d`      | Detach (everything keeps running)                      |
 | `Ctrl+Q` | Send a real Ctrl+Q to the program in the pane          |
 
+Popups are drawn on the bright black of your terminal's palette with its bright white for text, so they stand out from the panes behind them.
+
 Clicking a pane focuses it and dragging a border resizes it. In the agents pane, click an agent to show it under the main session and click it again to hide it; `j`/`k` or the arrow keys and `Enter` do the same, and `t` opens the tools of the selected agent. Under the list the pane shows what the selected agent can use. A `↻` after a name means the session is not as its role says any more: the role changed since it started, or it is about to restart.
 
 The status pane on the left ends with buttons: **Workflows**, **Workflow designer**, **New agent**, **Agent tools**, **Role settings** and **Shell**, then the shortcuts from the table above (close pane, focus main, answer, menu, zoom main, detach), and the dwa version on the last line. Click one, or press its key alone while that pane has the focus. In a short terminal the shortcut buttons are left out so that questions and agents that need you stay visible. The first two, and the menu, open a form in a popup where every row can be clicked: start a workflow or open a run on its picture; or start an agent with a role, model and effort. The shell is your own `$SHELL` in the project directory. It takes the same place as an open agent, so showing one hides the other, and it keeps running while hidden until you exit it.

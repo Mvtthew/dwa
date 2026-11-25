@@ -1,7 +1,7 @@
 // The workflow designer on screen: the picture of the steps on the left, a panel for whatever
 // the cursor is on at the right, and a footer that says what is wrong and which keys work.
 // Everything is done on the picture or in the panel; both work with the keyboard and the mouse.
-import { BoxRenderable, bold, type CliRenderer, dim, type KeyEvent } from "@opentui/core";
+import { BoxRenderable, bold, type CliRenderer, dim, type KeyEvent, RGBA } from "@opentui/core";
 import {
   type Diagram,
   layoutDiagram,
@@ -179,6 +179,8 @@ export function createDesigner(
       marginLeft: 1,
       paddingLeft: 1,
       border: ["left"],
+      // The terminal's own text colour: OpenTUI's default border is a fixed white.
+      borderColor: RGBA.defaultForeground(),
     });
     const footer = createText(renderer, "designer-footer", 3);
 
