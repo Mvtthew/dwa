@@ -192,7 +192,7 @@ Press `Ctrl+Q`, release, then:
 | `d`      | Detach (everything keeps running)                      |
 | `Ctrl+Q` | Send a real Ctrl+Q to the program in the pane          |
 
-Popups are drawn on the bright black of your terminal's palette with its bright white for text, so they stand out from the panes behind them.
+Popups are drawn on the black of your terminal's palette with its white for text, so they stand out from the panes behind them.
 
 Clicking a pane focuses it and dragging a border resizes it. In the agents pane, click an agent to show it under the main session and click it again to hide it; `j`/`k` or the arrow keys and `Enter` do the same, and `t` opens the tools of the selected agent. Under the list the pane shows what the selected agent can use. A `↻` after a name means the session is not as its role says any more: the role changed since it started, or it is about to restart.
 
