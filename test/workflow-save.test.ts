@@ -148,7 +148,20 @@ describe("a workflow written by an agent", () => {
     const agent = await workflows.author("review every commit on the branch");
     expect(agent.role).toBe(AUTHOR_ROLE);
     expect(agent.task).toContain("What it should do: review every commit on the branch");
+    // The user asked for it, so its session is shown under the main one at once.
+    expect(agent.open).toBe(true);
+    expect(agent.task).not.toContain("Save it under the name");
+
+    const named = await workflows.author("x", { name: "nightly", personal: true });
+    expect(named.task).toContain('Save it under the name "nightly".');
+    expect(named.task).toContain("Save it as a personal workflow (personal: true).");
+    await expect(workflows.author("x", { name: "not a name" })).rejects.toThrow("letters, digits");
+    workflows.saveFile("taken", TEXT, "user");
+    await expect(workflows.author("x", { name: "taken" })).rejects.toThrow(
+      'There is already a workflow "taken".',
+    );
+
     absentRoles = [AUTHOR_ROLE];
-    expect(() => workflows.author("x")).toThrow("init --roles");
+    await expect(workflows.author("x")).rejects.toThrow("init --roles");
   });
 });

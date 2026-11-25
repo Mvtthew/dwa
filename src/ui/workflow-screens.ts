@@ -192,13 +192,26 @@ export function describeScreen(deps: DesignDeps): Screen {
       },
       { kind: "text", key: "text", label: "What it should do", height: 6 },
       {
+        kind: "input",
+        key: "name",
+        label: "Name",
+        placeholder: "leave empty and the agent picks one",
+      },
+      scopeRow("workflow"),
+      {
         kind: "button",
         label: "Start the agent",
         tone: "good",
         run: async (values) => {
           const description = values.text?.trim() ?? "";
           if (!description) throw new Error("Say what the workflow should do first.");
-          await deps.api.call("POST", "/workflows/author", { description });
+          const name = values.name?.trim() ?? "";
+          if (name) checkNewName(deps.store, name);
+          await deps.api.call("POST", "/workflows/author", {
+            description,
+            name: name || undefined,
+            personal: scopeValue(values) === "user",
+          });
           return { close: true };
         },
       },
@@ -245,7 +258,7 @@ export function newWorkflowScreen(deps: DesignDeps): Screen {
   rows.push({
     kind: "button",
     label: "Describe it to an agent…",
-    hint: "an agent writes it; no name is needed here",
+    hint: "an agent writes it; you can name it on the next screen",
     run: () => ({ to: describeScreen(deps) }),
   });
   const existing = store.list().filter((workflow) => !workflow.error);

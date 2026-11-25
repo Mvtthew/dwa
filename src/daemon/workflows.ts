@@ -20,6 +20,7 @@ import {
   revisionOf,
   reworkSteps,
   sameWork,
+  validWorkflowName,
   type WorkflowDefinition,
 } from "../shared/workflow.ts";
 import { createWorkflow, noticeWorkflowEdits, saveWorkflowText } from "../shared/workflow-edit.ts";
@@ -373,17 +374,40 @@ export class Workflows {
   }
 
   /** Starts the session that writes a workflow from a description and stays to refine it. */
-  author(description: string): Promise<AgentInfo> {
+  async author(
+    description: string,
+    /** The name and the place the user chose; without a name the agent picks one. */
+    wanted: { name?: string; personal?: boolean } = {},
+  ): Promise<AgentInfo> {
     const { workspace } = this.deps;
+    const { name, personal = false } = wanted;
+    if (name !== undefined) {
+      if (!validWorkflowName(name)) {
+        throw new ConfigError("A workflow name uses letters, digits, - and _ (up to 40).");
+      }
+      const ctx = { projectRoot: workspace.projectRoot, env: this.deps.env };
+      const source = personal ? "user" : "project";
+      if (listAllWorkflows(ctx).some((entry) => entry.name === name && entry.source === source)) {
+        throw new ConfigError(`There is already a workflow "${name}".`);
+      }
+    }
     if (workspace.unknownRoles([AUTHOR_ROLE]).length > 0) {
       throw new ConfigError(
         `This project has no role "${AUTHOR_ROLE}", which writes workflows. Add it with: ${APP_NAME} init --roles`,
       );
     }
-    return workspace.spawn({
+    const where = [
+      name ? `Save it under the name "${name}".` : "",
+      personal ? "Save it as a personal workflow (personal: true)." : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const agent = await workspace.spawn({
       role: AUTHOR_ROLE,
-      task: `Write a workflow for this project and save it with save_workflow.\n\nWhat it should do: ${description}`,
+      task: `Write a workflow for this project and save it with save_workflow.${where ? ` ${where}` : ""}\n\nWhat it should do: ${description}`,
     });
+    // The user asked for this session and will talk to it, so it is shown at once.
+    return workspace.open(agent.name).catch(() => agent);
   }
 
   /** A run with its own copy of the definition as plain TOML: what the designer works from. */

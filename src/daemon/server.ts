@@ -207,8 +207,15 @@ export function startServer(options: ServerOptions) {
         );
       }
       case "POST /workflows/author": {
-        const input = await body<{ description?: string }>(request);
-        return json(await workflows.author(text(input.description, "description")));
+        const input = await body<{ description?: string; name?: string; personal?: boolean }>(
+          request,
+        );
+        return json(
+          await workflows.author(text(input.description, "description"), {
+            name: typeof input.name === "string" && input.name ? input.name : undefined,
+            personal: input.personal === true,
+          }),
+        );
       }
       case "POST /workflows/view": {
         const input = await body<{ id?: unknown }>(request);
