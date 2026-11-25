@@ -1,0 +1,55 @@
+# Explore, build two parts at the same time, review both.
+# Start it with: dwa workflow run parallel-build "what to build"
+#
+# "code" and "tests" depend on the same step, so they start together, each as its own agent.
+# The review starts when both are done. Rename the two steps and change their prompts to split
+# the work the way your change needs.
+description = "Explore, build two parts side by side, review the whole"
+
+[steps.explore]
+role = "explore"
+prompt = """
+Find out what is needed for this change and where it belongs in the code. Say which files hold
+the code and which hold its tests. Do not edit anything.
+
+The change: {{input}}
+"""
+
+[steps.code]
+role = "developer"
+depends_on = ["explore"]
+prompt = """
+Implement this change: {{input}}
+
+Change the code only. Another agent writes the tests at the same time; do not edit test files.
+
+Findings from the exploration:
+{{steps.explore.result}}
+"""
+
+[steps.tests]
+role = "developer"
+depends_on = ["explore"]
+prompt = """
+Write the tests for this change: {{input}}
+
+Change test files only. Another agent implements the change at the same time; write the tests
+from what the change must do, not from its code.
+
+Findings from the exploration:
+{{steps.explore.result}}
+"""
+
+[steps.review]
+role = "reviewer"
+depends_on = ["code", "tests"]
+prompt = """
+Review the change that was just made for: {{input}}
+Run the tests. Report what is wrong and what is missing; do not edit anything.
+
+What the developer of the code reports:
+{{steps.code.result}}
+
+What the developer of the tests reports:
+{{steps.tests.result}}
+"""

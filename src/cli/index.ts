@@ -62,9 +62,9 @@ Talking to agents
 
 Workflows
   workflow list                         The project's and your personal workflows, and the runs
-  workflow new <name> [--personal]      A new workflow file to start from
-  workflow show <name>                  The steps of a workflow as a picture
-  workflow design [name]                Open the workflow designer (also: prefix g)
+  workflow new <name> [--from <template>] [--personal]  A new workflow file
+  workflow show <name or run>           The steps as a picture; a run shows how far it is
+  workflow design [name or run]         Open the workflow designer (also: prefix g)
   workflow duplicate|rename|move|delete <name> ...   Change the files (see: workflow show)
   workflow history|diff|switch <name>   Versions of a workflow file and the way back to one
   workflow run <name> [input]           Start a run; each step gets its own agent
@@ -296,7 +296,9 @@ async function main(argv: string[]): Promise<number> {
     case "workflow":
       if (rest[0] === "design") {
         // Over the workspace when it is running, otherwise in this terminal.
-        const subject = rest[1];
+        // A number is a run: its picture, live.
+        const run = /^#?(\d+)$/.exec(rest[1] ?? "");
+        const subject = run ? `run:${run[1]}` : rest[1];
         const shown = await call(projectRoot, "POST", "/popup", { kind: "design", subject })
           .then(() => true)
           .catch(() => false);

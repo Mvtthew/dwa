@@ -3,13 +3,7 @@ import { TextAttributes } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../src/shared/protocol.ts";
 import { createWizard, type Row, type Screen } from "../src/ui/wizard.ts";
-import {
-  agentScreen,
-  menuScreen,
-  runScreen,
-  type WizardApi,
-  workflowsScreen,
-} from "../src/ui/wizards.ts";
+import { agentScreen, menuScreen, type WizardApi, workflowsScreen } from "../src/ui/wizards.ts";
 
 interface Call {
   path: string;
@@ -127,53 +121,6 @@ describe("the workflows wizard", () => {
     );
     expect(texts).toContain("No workflows defined. Add one with: dwa workflow new <name>");
     expect(texts).toContain("No runs yet.");
-  });
-
-  test("a running run offers its steps, a decision, editing and cancelling", async () => {
-    const { api, calls } = fakeApi({
-      "/workflows/status": () => run,
-      "/workflows/step/complete": () => run,
-      "/workflows/step/fail": () => run,
-      "/workflows/step/decide": () => run,
-      "/workflows/cancel": () => run,
-    });
-    const screen = runScreen(api, run);
-    expect(screen.title).toBe('Run #2 of "feature": running');
-    expect([...buttons(screen).keys()]).toEqual([
-      "Complete it by hand…",
-      "Fail it…",
-      "Another pass",
-      "Accept the work as it is",
-      "Fail the run",
-      "Edit the steps",
-      "Cancel the run…",
-      "Show the results",
-      "Back",
-    ]);
-
-    const complete = await next(screen, "Complete it by hand…");
-    await press(complete, "Complete the step", { text: "built by hand" });
-    const fail = await next(screen, "Fail it…");
-    await press(fail, "Fail the step and the run", { text: "wrong" });
-    await press(screen, "Another pass");
-    await press(await next(screen, "Cancel the run…"), "Yes, cancel the run");
-    expect(calls).toEqual([
-      { path: "/workflows/step/complete", body: { id: 2, step: "build", result: "built by hand" } },
-      { path: "/workflows/step/fail", body: { id: 2, step: "build", reason: "wrong" } },
-      { path: "/workflows/step/decide", body: { id: 2, step: "review", decision: "another pass" } },
-      { path: "/workflows/cancel", body: { id: 2 } },
-    ]);
-
-    expect(await press(screen, "Edit the steps")).toEqual({ exec: ["workflow", "edit", "2"] });
-    const results = await next(screen, "Show the results");
-    expect(results.rows[0]).toMatchObject({ kind: "note" });
-    expect((results.rows[0] as { text: string }).text).toContain("      explore result");
-  });
-
-  test("a finished run only shows its results", () => {
-    const { api } = fakeApi();
-    const done = runScreen(api, { ...run, state: "done", steps: [step("explore", "done")] });
-    expect([...buttons(done).keys()]).toEqual(["Show the results", "Back"]);
   });
 });
 

@@ -270,6 +270,35 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
   );
 
   server.registerTool(
+    "save_workflow",
+    {
+      description:
+        "Write a workflow file from a complete TOML definition: a new workflow, or a new version of one that exists. The text is checked first; when something is wrong nothing is written and you are told what. The user is told about every save and sees a new workflow as a picture.",
+      inputSchema: {
+        name: z.string().describe("Letters, digits, - and _."),
+        definition: z
+          .string()
+          .describe("The whole file: description and every [steps.<name>] table."),
+        personal: z
+          .boolean()
+          .optional()
+          .describe("Keep it in the user's personal folder instead of the project."),
+      },
+    },
+    ({ name, definition, personal }) =>
+      tool(async () => {
+        const saved = await api<{
+          name: string;
+          path: string;
+          version: number;
+          created: boolean;
+          steps: string[];
+        }>("POST", "/workflows/save", { from: agentId, name, definition, personal });
+        return `${saved.created ? "Created" : "Saved"} workflow "${saved.name}" (v${saved.version}) at ${saved.path}\nSteps: ${saved.steps.join(" -> ")}`;
+      }),
+  );
+
+  server.registerTool(
     "run_workflow",
     {
       description:

@@ -37,6 +37,7 @@ describe("the role store on disk", () => {
       ["main", "project", false],
       ["mine", "user", false],
       ["reviewer", "project", false],
+      ["workflow-author", "project", false],
     ]);
     const hidden = store.list().find((role) => role.hidden);
     expect(hidden).toEqual({

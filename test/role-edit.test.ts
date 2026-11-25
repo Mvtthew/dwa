@@ -132,7 +132,9 @@ describe("roles as files", () => {
     expect(roleUsers("explore", ctx)).toEqual([
       "role reviewer extends it",
       "[[agents]] in config.toml",
+      "workflow bugfix, step diagnose",
       "workflow feature, step explore",
+      "workflow parallel-build, step explore",
     ]);
     expect(roleUsers("main", ctx)).toEqual(["the main session ([main] in config.toml)"]);
     expect(() => deleteRole("explore", ctx)).toThrow("still used");
@@ -432,7 +434,9 @@ describe("roles in the project and in the personal folder", () => {
       "role reviewer extends it",
       "the main session ([main] in your personal config.toml)",
       "[[agents]] in your personal config.toml",
+      "workflow bugfix, step diagnose",
       "workflow feature, step explore",
+      "workflow parallel-build, step explore",
     ]);
     expect(() => deleteRole("explore", ctx)).toThrow("your personal config.toml");
     // A personal role that is the one used has users like any other.
@@ -452,8 +456,10 @@ describe("roles in the project and in the personal folder", () => {
     workflow("feature", '[steps.hidden]\nrole = "explore"\nprompt = "x"\n');
     expect(roleUsers("explore", ctx)).toEqual([
       "role reviewer extends it",
+      "workflow bugfix, step diagnose",
       "workflow feature, step explore",
       "your personal workflow mine, step look",
+      "workflow parallel-build, step explore",
     ]);
     expect(() => deleteRole("explore", ctx)).toThrow("your personal workflow mine, step look");
     // A personal role used by a personal workflow only.

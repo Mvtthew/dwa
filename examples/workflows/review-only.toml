@@ -1,0 +1,14 @@
+# Review what is already there. Start it with: dwa workflow run review-only "what to review"
+#
+# One step and no changes: the reviewer reads the work and reports. Give it a branch, a commit
+# range, a file or "the uncommitted changes".
+description = "Review existing work and report, without changing it"
+
+[steps.review]
+role = "reviewer"
+prompt = """
+Review this: {{input}}
+
+Report what is wrong, what is risky and what is missing, the most serious first, each with the
+file and line. Do not edit anything.
+"""

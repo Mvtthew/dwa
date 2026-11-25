@@ -1,7 +1,10 @@
 import { ConfigError, pickCapabilities } from "../shared/capabilities.ts";
+import { APP_NAME } from "../shared/constants.ts";
 import type {
+  AgentInfo,
   WorkflowEdit,
   WorkflowRunInfo,
+  WorkflowRunView,
   WorkflowStepInfo,
   WorkflowStepState,
 } from "../shared/protocol.ts";
@@ -9,21 +12,35 @@ import {
   DEFAULT_MAX_ROUNDS,
   dependents,
   formatWorkflow,
+  listAllWorkflows,
   loadWorkflow,
   parseWorkflow,
   readySteps,
   renderPrompt,
+  revisionOf,
   reworkSteps,
   sameWork,
   type WorkflowDefinition,
 } from "../shared/workflow.ts";
-import { noticeWorkflowEdits } from "../shared/workflow-edit.ts";
+import { createWorkflow, noticeWorkflowEdits, saveWorkflowText } from "../shared/workflow-edit.ts";
 import type { QuestionRow, Store, WorkflowRunRow, WorkflowStepRow } from "./db.ts";
 import { WorkspaceError } from "./errors.ts";
 import { USER, WORKFLOW } from "./messaging.ts";
 import type { Workspace } from "./workspace.ts";
 
 /** Reminders an agent gets for ending a turn without completing its step, before the user is told. */
+/** The role of the session that writes workflows from a description. */
+export const AUTHOR_ROLE = "workflow-author";
+
+/** What saving a workflow file for an agent did. */
+export interface SavedWorkflow {
+  name: string;
+  path: string;
+  version: number;
+  created: boolean;
+  steps: string[];
+}
+
 export const MAX_REMINDERS = 2;
 
 /** Longest step result. Results travel to later steps inside their first prompt. */
@@ -42,6 +59,8 @@ export interface WorkflowsDeps {
   now?: () => number;
   /** Reads a definition by name; replaced in tests. */
   load?: (name: string) => WorkflowDefinition;
+  /** Where the personal folder is looked up; the process's own environment when left out. */
+  env?: Record<string, string | undefined>;
 }
 
 function definitionOf(run: WorkflowRunRow): WorkflowDefinition {
@@ -308,16 +327,100 @@ export class Workflows {
   }
 
   /**
-   * Replaces a running run's definition with `text` (TOML). With `preview` nothing is changed
-   * and the result says what would happen.
+   * Writes a workflow file with a text an agent made: checked, with a version in the history
+   * like every other change, and the user is told. A workflow that is new is shown to the user
+   * in the designer; one that is changed is not, so that a popup never interrupts twice.
    */
-  edit(runId: number, text: string, byId: string, preview = false): Promise<WorkflowEdit> {
+  saveFile(name: string, text: string, byId: string, personal = false): SavedWorkflow {
+    const { store, workspace } = this.deps;
+    const ctx = { projectRoot: workspace.projectRoot, env: this.deps.env };
+    noticeWorkflowEdits(ctx);
+    const definition = parseWorkflow(text, name, "the definition");
+    const roles = Object.values(definition.steps).flatMap((step) => (step.role ? [step.role] : []));
+    const unknown = workspace.unknownRoles(roles);
+    if (unknown.length > 0) {
+      throw new ConfigError(
+        `${unknown.length === 1 ? "There is no role" : "There are no roles"} ${unknown.join(", ")}: a role is a file in .dwa/roles. Use roles that exist.`,
+      );
+    }
+    const who = byId === USER ? USER : `agent ${nameOf(store, byId)}`;
+    const source = personal ? "user" : "project";
+    const existing = listAllWorkflows(ctx).find(
+      (entry) => entry.name === name && entry.source === source,
+    );
+    let path: string;
+    let version = 1;
+    if (existing) {
+      version = saveWorkflowText({ name, source }, text, who, ctx).n;
+      path = existing.path;
+    } else {
+      path = createWorkflow(name, text, who, ctx, { personal }).path;
+    }
+    const steps = Object.keys(definition.steps).join(" → ");
+    if (byId !== USER) {
+      try {
+        workspace.messaging.send(
+          WORKFLOW,
+          USER,
+          `Agent "${nameOf(store, byId)}" ${existing ? `changed workflow "${name}" (now v${version})` : `wrote a new workflow "${name}"`}: ${steps}\nLook at it with: ${APP_NAME} workflow design ${name}`,
+        );
+      } catch (error) {
+        console.error(error);
+      }
+    }
+    if (!existing) workspace.popup("design", `${personal ? "personal" : "project"}:${name}`);
+    return { name, path, version, created: !existing, steps: Object.keys(definition.steps) };
+  }
+
+  /** Starts the session that writes a workflow from a description and stays to refine it. */
+  author(description: string): Promise<AgentInfo> {
+    const { workspace } = this.deps;
+    if (workspace.unknownRoles([AUTHOR_ROLE]).length > 0) {
+      throw new ConfigError(
+        `This project has no role "${AUTHOR_ROLE}", which writes workflows. Add it with: ${APP_NAME} init --roles`,
+      );
+    }
+    return workspace.spawn({
+      role: AUTHOR_ROLE,
+      task: `Write a workflow for this project and save it with save_workflow.\n\nWhat it should do: ${description}`,
+    });
+  }
+
+  /** A run with its own copy of the definition as plain TOML: what the designer works from. */
+  view(runId: number): WorkflowRunView {
+    const run = this.status(runId);
+    const text = formatWorkflow(definitionOf(this.requireRun(runId)));
+    return {
+      run,
+      text,
+      revision: revisionOf(text),
+      editable: run.state === "running" && !run.steps.some((step) => step.state === "failed"),
+    };
+  }
+
+  /**
+   * Replaces a running run's definition with `text` (TOML). With `preview` nothing is changed
+   * and the result says what would happen. With `base`, the revision the text was made from,
+   * the edit is refused when the run's definition is no longer that one.
+   */
+  edit(
+    runId: number,
+    text: string,
+    byId: string,
+    preview = false,
+    base?: string,
+  ): Promise<WorkflowEdit> {
     return this.serial(async () => {
       const { store, workspace } = this.deps;
       const run = this.requireRun(runId);
       if (run.state !== "running") {
         throw new WorkspaceError(
           `Workflow run #${runId} is ${run.state}; only a running run can be edited.`,
+        );
+      }
+      if (base !== undefined && base !== revisionOf(formatWorkflow(definitionOf(run)))) {
+        throw new WorkspaceError(
+          `Workflow run #${runId} was changed by someone else meanwhile; look at it again first.`,
         );
       }
       const before = definitionOf(run);

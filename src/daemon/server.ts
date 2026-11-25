@@ -190,12 +190,37 @@ export function startServer(options: ServerOptions) {
         const input = await body<{ id?: unknown }>(request);
         return json({ definition: workflows.definition(Number(input.id)) });
       }
+      case "POST /workflows/save": {
+        const input = await body<{
+          name?: string;
+          definition?: string;
+          from?: string;
+          personal?: boolean;
+        }>(request);
+        return json(
+          workflows.saveFile(
+            text(input.name, "name"),
+            text(input.definition, "definition"),
+            sender(input.from),
+            input.personal === true,
+          ),
+        );
+      }
+      case "POST /workflows/author": {
+        const input = await body<{ description?: string }>(request);
+        return json(await workflows.author(text(input.description, "description")));
+      }
+      case "POST /workflows/view": {
+        const input = await body<{ id?: unknown }>(request);
+        return json(workflows.view(Number(input.id)));
+      }
       case "POST /workflows/edit": {
         const input = await body<{
           id?: unknown;
           definition?: string;
           from?: string;
           preview?: boolean;
+          base?: string;
         }>(request);
         return json(
           await workflows.edit(
@@ -203,6 +228,7 @@ export function startServer(options: ServerOptions) {
             text(input.definition, "definition"),
             sender(input.from),
             input.preview === true,
+            typeof input.base === "string" ? input.base : undefined,
           ),
         );
       }

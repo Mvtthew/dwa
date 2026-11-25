@@ -15,11 +15,13 @@ import {
   noticeWorkflowEdits,
   renameWorkflow,
   requireWorkflow,
+  setDescription,
   switchWorkflow,
   workflowHistory,
   workflowTemplate,
   workflowWarnings,
 } from "../shared/workflow-edit.ts";
+import { readTemplates } from "../ui/workflow-store.ts";
 import { printDiff, printHistory, versionNumber } from "./versions.ts";
 
 export const WORKFLOW_FILE_ACTIONS = [
@@ -35,12 +37,12 @@ export const WORKFLOW_FILE_ACTIONS = [
 ];
 
 const USAGE = `Usage:
-  ${APP_NAME} workflow new <name> [--description <text>] [--personal]
+  ${APP_NAME} workflow new <name> [--from <template>] [--description <text>] [--personal]
   ${APP_NAME} workflow duplicate <workflow> <new name> [--to personal|project]
   ${APP_NAME} workflow rename <workflow> <new name>
   ${APP_NAME} workflow move <workflow> --to personal|project   With its history; the name stays
   ${APP_NAME} workflow delete <workflow>            Its history is kept
-  ${APP_NAME} workflow show <workflow>              The steps as a picture
+  ${APP_NAME} workflow show <workflow or run>       The steps as a picture; a run number shows how far it is
   ${APP_NAME} workflow history <workflow> [--json]  Versions of the file
   ${APP_NAME} workflow diff <workflow> [vA] [vB]    What changed (the current version against the one before)
   ${APP_NAME} workflow switch <workflow> <vN>       Give the file the content of that version
@@ -67,6 +69,7 @@ export function workflowFileCommand(projectRoot: string, action: string, args: s
       project: { type: "boolean" },
       to: { type: "string" },
       description: { type: "string" },
+      from: { type: "string" },
     },
   });
   const [word, second, third] = positionals;
@@ -80,7 +83,18 @@ export function workflowFileCommand(projectRoot: string, action: string, args: s
   if (!word) return usage();
   try {
     if (action === "new") {
-      const text = workflowTemplate(values.description ?? "");
+      let text = workflowTemplate(values.description ?? "");
+      if (values.from !== undefined) {
+        const templates = readTemplates();
+        const template = templates.find((entry) => entry.name === values.from);
+        if (!template) {
+          const names = templates.map((entry) => entry.name).join(", ");
+          throw new Error(`There is no template "${values.from}". The templates are: ${names}.`);
+        }
+        text = values.description
+          ? setDescription(template.text, values.description)
+          : template.text;
+      }
       const entry = createWorkflow(word, text, "workflow new", ctx, { personal: values.personal });
       console.log(`Created ${entry.path}`);
       return 0;

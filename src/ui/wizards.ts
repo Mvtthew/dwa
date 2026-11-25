@@ -5,8 +5,9 @@
 import { APP_NAME } from "../shared/constants.ts";
 import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../shared/protocol.ts";
 import { EFFORT_LEVELS } from "../shared/roles.ts";
-import { describeRun, type WorkflowSummary } from "../shared/workflow.ts";
+import type { WorkflowSummary } from "../shared/workflow.ts";
 import { type RoleStore, rolesScreen } from "./role-screens.ts";
+import { openRun } from "./run-screens.ts";
 import { toolsScreen } from "./tool-screens.ts";
 import type { Row, Screen } from "./wizard.ts";
 import { type DesignDeps, designListScreen, newWorkflowScreen } from "./workflow-screens.ts";
@@ -143,114 +144,6 @@ function textScreen(
   };
 }
 
-export function runScreen(api: WizardApi, run: WorkflowRunInfo): Screen {
-  const [, ...steps] = describeRun(run).split("\n");
-  const rows: Row[] = [{ kind: "note", text: steps.join("\n") || "No steps." }];
-  const post = (path: string, body: Record<string, unknown>) => async () => {
-    await api.call("POST", path, { id: run.id, ...body });
-    return { close: true as const };
-  };
-
-  if (run.state === "running") {
-    for (const step of run.steps) {
-      if (step.state === "rejected") {
-        rows.push(
-          { kind: "heading", text: `"${step.id}" still asks for changes` },
-          {
-            kind: "button",
-            label: "Another pass",
-            run: post("/workflows/step/decide", { step: step.id, decision: "another pass" }),
-          },
-          {
-            kind: "button",
-            label: "Accept the work as it is",
-            run: post("/workflows/step/decide", { step: step.id, decision: "accept" }),
-          },
-          {
-            kind: "button",
-            label: "Fail the run",
-            tone: "bad",
-            run: post("/workflows/step/decide", { step: step.id, decision: "fail" }),
-          },
-        );
-      }
-      if (step.state !== "running") continue;
-      rows.push(
-        { kind: "heading", text: `Step "${step.id}"` },
-        {
-          kind: "button",
-          label: "Complete it by hand…",
-          run: () => ({
-            to: textScreen(
-              `Complete "${step.id}"`,
-              "Result for the steps that follow",
-              "Complete the step",
-              (result) =>
-                api.call("POST", "/workflows/step/complete", { id: run.id, step: step.id, result }),
-            ),
-          }),
-        },
-        {
-          kind: "button",
-          label: "Fail it…",
-          tone: "bad",
-          run: () => ({
-            to: textScreen(`Fail "${step.id}"`, "Reason", "Fail the step and the run", (reason) =>
-              api.call("POST", "/workflows/step/fail", { id: run.id, step: step.id, reason }),
-            ),
-          }),
-        },
-      );
-    }
-    rows.push(
-      { kind: "heading", text: "Run" },
-      {
-        kind: "button",
-        label: "Edit the steps",
-        hint: "opens $EDITOR",
-        run: () => ({ exec: ["workflow", "edit", String(run.id)] }),
-      },
-      {
-        kind: "button",
-        label: "Cancel the run…",
-        tone: "bad",
-        run: () => ({
-          to: {
-            title: `Cancel run #${run.id}?`,
-            rows: [
-              { kind: "note", text: "Its agents are stopped and nothing further starts." },
-              {
-                kind: "button",
-                label: "Yes, cancel the run",
-                tone: "bad",
-                run: post("/workflows/cancel", {}),
-              },
-              back,
-            ],
-          },
-        }),
-      },
-    );
-  }
-  rows.push(
-    {
-      kind: "button",
-      label: "Show the results",
-      run: async () => {
-        const fresh = await api.call<WorkflowRunInfo>("POST", "/workflows/status", { id: run.id });
-        return {
-          to: {
-            title: `Results of run #${run.id}`,
-            rows: [{ kind: "note", text: describeRun(fresh, true) }, back],
-          },
-        };
-      },
-    },
-    back,
-  );
-  return { title: `Run #${run.id} of "${run.name}": ${run.state}`, rows };
-}
-
 export async function workflowsScreen(api: WizardApi, design?: DesignDeps): Promise<Screen> {
   const { workflows, runs } = await api.call<{
     workflows: WorkflowSummary[];
@@ -284,13 +177,11 @@ export async function workflowsScreen(api: WizardApi, design?: DesignDeps): Prom
       label: `#${run.id} ${run.name}`,
       hint: needsYou ? `${run.state} · needs you` : run.state,
       tone: needsYou ? "attention" : undefined,
-      // The list may be a moment old; open the run as it is now.
-      run: async () => ({
-        to: runScreen(
-          api,
-          await api.call<WorkflowRunInfo>("POST", "/workflows/status", { id: run.id }),
-        ),
-      }),
+      // The run opens on its picture, as it is now.
+      run: () => {
+        if (!design) throw new Error("Runs cannot be opened from here.");
+        return openRun(design, run.id);
+      },
     });
   }
   if (design) {

@@ -242,6 +242,8 @@ export function nameScreen(
   done: (name: string, where: Scope) => Outcome | Promise<Outcome>,
   /** With a place, the screen also asks where the new file is kept, starting at this one. */
   where?: Scope,
+  /** What is being named, for the wording of that question. */
+  what: Parameters<typeof scopeRow>[0] = "role",
 ): Screen {
   return {
     title,
@@ -249,7 +251,7 @@ export function nameScreen(
     rows: [
       { kind: "note", text: note },
       { kind: "input", key: "name", label: "Name", placeholder: "letters, digits, - and _" },
-      ...(where ? [scopeRow("role")] : []),
+      ...(where ? [scopeRow(what)] : []),
       {
         kind: "button",
         label,

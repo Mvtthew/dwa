@@ -1,0 +1,43 @@
+# Find the cause, fix it, review the fix. Start it with: dwa workflow run bugfix "what goes wrong"
+#
+# The first step only looks: it reproduces the fault and names its cause, so the fix is made
+# for the right reason. The review may send the fix back with request_changes.
+description = "Find the cause of a bug, fix it, review the fix"
+
+[steps.diagnose]
+role = "explore"
+prompt = """
+Find the cause of this fault. Reproduce it if you can, and name the code that is wrong and why.
+Do not edit anything.
+
+The fault: {{input}}
+"""
+
+[steps.fix]
+role = "developer"
+depends_on = ["diagnose"]
+prompt = """
+Fix this fault: {{input}}
+
+Fix the cause below, not only what shows. Add a test that fails without the fix.
+
+The cause that was found:
+{{steps.diagnose.result}}
+"""
+
+[steps.review]
+role = "reviewer"
+depends_on = ["fix"]
+reviews = "fix"
+max_rounds = 3
+prompt = """
+Review the fix that was just made for: {{input}}
+Approve it only when it removes the cause and a test covers it; otherwise send it back with
+what must change.
+
+The cause that was found:
+{{steps.diagnose.result}}
+
+What the developer reports:
+{{steps.fix.result}}
+"""

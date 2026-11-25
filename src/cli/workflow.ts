@@ -1,9 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { APP_NAME } from "../shared/constants.ts";
+import { diagramText, layoutDiagram } from "../shared/diagram.ts";
 import { runDir } from "../shared/paths.ts";
-import type { WorkflowEdit, WorkflowRunInfo } from "../shared/protocol.ts";
+import type { WorkflowEdit, WorkflowRunInfo, WorkflowRunView } from "../shared/protocol.ts";
 import { describeRun, type WorkflowSummary } from "../shared/workflow.ts";
+import { view as designView } from "../ui/designer-model.ts";
 import { call } from "./client.ts";
 import { openEditor } from "./editor.ts";
 import { WORKFLOW_FILE_ACTIONS, workflowFileCommand } from "./workflow-files.ts";
@@ -89,6 +91,17 @@ async function editInEditor(projectRoot: string, id: number, yes: boolean): Prom
 /** `dwa workflow list | run | status | cancel | complete | fail | definition | edit`. */
 export async function workflowCommand(projectRoot: string, args: string[]): Promise<number> {
   const [action, target, ...words] = args;
+  const shownRun = action === "show" ? /^#?(\d+)$/.exec(target ?? "") : null;
+  if (shownRun) {
+    // A number is a run: the picture of its own steps, with how far each one is.
+    const { run, text } = await call<WorkflowRunView>(projectRoot, "POST", "/workflows/view", {
+      id: Number(shownRun[1]),
+    });
+    console.log(`Run #${run.id} of "${run.name}": ${run.state} (started by ${run.startedBy})\n`);
+    console.log(diagramText(layoutDiagram(designView(text, run.name, run).input)).join("\n"));
+    console.log("\n○ waits   ● running   ✓ done   ✖ failed   ◆ needs you   – skipped   #N pass");
+    return 0;
+  }
   if (action && WORKFLOW_FILE_ACTIONS.includes(action)) {
     return workflowFileCommand(projectRoot, action, args.slice(1));
   }

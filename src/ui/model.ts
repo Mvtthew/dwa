@@ -197,6 +197,11 @@ const STEP: Record<WorkflowStepInfo["state"], ActivityStyle> = {
   rejected: { glyph: "◆", label: "needs you", tone: "attention" },
 };
 
+/** How a workflow step's state shows: a sign, a word and a colour. */
+export function stepStyle(state: WorkflowStepInfo["state"]): ActivityStyle {
+  return STEP[state];
+}
+
 const RUN_TONE: Record<WorkflowRunState, Tone> = {
   running: "good",
   done: "muted",

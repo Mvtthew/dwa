@@ -4,6 +4,7 @@
 import { CAPABILITY_KEYS, EFFORT_LEVELS } from "../shared/capabilities.ts";
 import { MARKS } from "../shared/diagram.ts";
 import { diffLines } from "../shared/history.ts";
+import type { WorkflowRunView } from "../shared/protocol.ts";
 import type { RoleFields } from "../shared/role-edit.ts";
 import { scopeLabel } from "../shared/scope.ts";
 import { DEFAULT_MAX_ROUNDS, validWorkflowName } from "../shared/workflow.ts";
@@ -44,8 +45,11 @@ export interface DesignerHandle {
 export interface DesignDeps {
   api: WizardApi;
   store: WorkflowStore;
-  /** Opens the designer on a piece of work; the view to hand the popup to. */
-  start(session: Session): View;
+  /**
+   * Opens the designer on a piece of work; the view to hand the popup to. For a run, `live`
+   * is the run as it is now.
+   */
+  start(session: Session, live?: WorkflowRunView): View;
   /** The list to return to when the designer is closed. */
   home(): Screen | Promise<Screen>;
 }
@@ -82,7 +86,7 @@ export function draftOf(session: Session, now: Date = new Date()): Draft {
   };
 }
 
-function diffNote(heading: string, from: string, to: string): Row {
+export function diffNote(heading: string, from: string, to: string): Row {
   const lines = diffLines(from, to);
   return {
     kind: "note",
@@ -96,10 +100,24 @@ function diffNote(heading: string, from: string, to: string): Row {
  */
 export function openDesign(deps: DesignDeps, target: DesignTarget & { kind: "file" }): Outcome {
   const text = target.fresh ? "" : deps.store.read(target);
+  return openWork(deps, target, text, (session) => deps.start(session));
+}
+
+/**
+ * Opens `text` in the designer through `start`, after offering unsaved work on the same thing
+ * when there is some. `text` is what the file, or the run, has now.
+ */
+export function openWork(
+  deps: DesignDeps,
+  target: DesignTarget,
+  text: string,
+  start: (session: Session) => View,
+): Outcome {
+  const run = target.kind === "run";
   const draft = deps.store.draft(target);
   if (!draft || draft.text === text) {
     if (draft) deps.store.clearDraft(target);
-    return { view: deps.start(newSession(target, text)) };
+    return { view: start(newSession(target, text)) };
   }
   const stale = draft.base !== text;
   const when = draft.savedAt.slice(0, 16).replace("T", " ");
@@ -116,9 +134,15 @@ export function openDesign(deps: DesignDeps, target: DesignTarget & { kind: "fil
               {
                 kind: "note" as const,
                 tone: "attention" as const,
-                text: "The file has changed since then. Continuing keeps your changes; saving them makes a\nnew version on top, and the file's own changes stay in its history.",
+                text: run
+                  ? "The run's steps have changed since then. Continuing keeps your changes; saving them\nreplaces what the run has now."
+                  : "The file has changed since then. Continuing keeps your changes; saving them makes a\nnew version on top, and the file's own changes stay in its history.",
               },
-              diffNote("What changed in the file:", draft.base, text),
+              diffNote(
+                run ? "What changed in the run:" : "What changed in the file:",
+                draft.base,
+                text,
+              ),
             ]
           : []),
         diffNote("Your unsaved changes:", draft.base, draft.text),
@@ -126,15 +150,15 @@ export function openDesign(deps: DesignDeps, target: DesignTarget & { kind: "fil
           kind: "button",
           label: "Continue where I left off",
           tone: "good",
-          run: () => ({ view: deps.start(sessionFrom(draft, text)) }),
+          run: () => ({ view: start(sessionFrom(draft, text)) }),
         },
         {
           kind: "button",
-          label: "Drop them and start from the file",
+          label: run ? "Drop them and show the run" : "Drop them and start from the file",
           tone: "bad",
           run: () => {
             deps.store.clearDraft(target);
-            return { view: deps.start(newSession(target, text)) };
+            return { view: start(newSession(target, text)) };
           },
         },
         back,
@@ -153,7 +177,37 @@ function checkNewName(store: WorkflowStore, name: string): void {
   }
 }
 
-/** Starting a new workflow: empty, from one that dwa ships, or as a copy. */
+/**
+ * A workflow written by an agent: the user says what it should do, and a session of the
+ * workflow-author role writes it. The session stays open, so the workflow is refined by
+ * talking to it, or on the picture, which opens when the agent has saved.
+ */
+export function describeScreen(deps: DesignDeps): Screen {
+  return {
+    title: "Describe the workflow",
+    rows: [
+      {
+        kind: "note",
+        text: "Say what the workflow is for and which steps you have in mind, in your own words.\nAn agent reads the project, writes the workflow and saves it; you are shown the picture\nthen. Its session stays open: ask it for changes, or make them on the picture.",
+      },
+      { kind: "text", key: "text", label: "What it should do", height: 6 },
+      {
+        kind: "button",
+        label: "Start the agent",
+        tone: "good",
+        run: async (values) => {
+          const description = values.text?.trim() ?? "";
+          if (!description) throw new Error("Say what the workflow should do first.");
+          await deps.api.call("POST", "/workflows/author", { description });
+          return { close: true };
+        },
+      },
+      back,
+    ],
+  };
+}
+
+/** Starting a new workflow: empty, from one that dwa ships, as a copy, or written by an agent. */
 export function newWorkflowScreen(deps: DesignDeps): Screen {
   const { store } = deps;
   const named = (values: Values) => {
@@ -188,6 +242,12 @@ export function newWorkflowScreen(deps: DesignDeps): Screen {
       },
     });
   }
+  rows.push({
+    kind: "button",
+    label: "Describe it to an agent…",
+    hint: "an agent writes it; no name is needed here",
+    run: () => ({ to: describeScreen(deps) }),
+  });
   const existing = store.list().filter((workflow) => !workflow.error);
   if (existing.length > 0) rows.push(gap, { kind: "heading", text: "OR A COPY OF" });
   for (const workflow of existing) {
@@ -456,6 +516,8 @@ export interface PanelActions {
   close(): Outcome | Promise<Outcome>;
   /** Takes the cursor off the picture, back to the workflow as a whole. */
   deselect(): Outcome;
+  /** For a run: ends the editing and shows the run as it goes again. */
+  watch?(): Outcome;
 }
 
 /** Keys of the panel's values the designer listens to while they are typed or switched. */
@@ -772,6 +834,7 @@ function workflowPanel(deps: DesignDeps, designer: DesignerHandle, actions: Pane
                 return { back: true };
               },
               target.source,
+              "workflow",
             ),
           };
         },
@@ -845,6 +908,15 @@ function workflowPanel(deps: DesignDeps, designer: DesignerHandle, actions: Pane
         }),
       },
     );
+  }
+  const { watch } = actions;
+  if (target.kind === "run" && watch) {
+    rows.push(gap, {
+      kind: "button",
+      label: "Stop editing",
+      hint: "e · back to watching the run",
+      run: () => watch(),
+    });
   }
   rows.push(gap, { kind: "button", label: "Close", hint: "q", run: () => actions.close() });
   return {
@@ -988,22 +1060,34 @@ export function saveScreen(deps: DesignDeps, designer: DesignerHandle): Screen {
   };
 }
 
-/** The file changed while it was open here: look, then keep the work or take the file's text. */
+/**
+ * The file, or the run, changed while it was open here: look, then keep the work or take the
+ * other text.
+ */
 export function staleScreen(designer: DesignerHandle, fileText: string): Screen {
   const session = designer.session();
+  const run = session.target.kind === "run";
   return {
-    title: "The file has changed",
+    title: run ? "The run has changed" : "The file has changed",
     rows: [
       {
         kind: "note",
         tone: "attention",
-        text: "Someone, or an agent, changed this workflow's file while you had it open here.",
+        text: run
+          ? "Someone, or an agent, changed this run's steps while you were editing them here."
+          : "Someone, or an agent, changed this workflow's file while you had it open here.",
       },
-      diffNote("What changed in the file:", session.base, fileText),
+      diffNote(
+        run ? "What changed in the run:" : "What changed in the file:",
+        session.base,
+        fileText,
+      ),
       {
         kind: "button",
         label: "Keep my changes",
-        hint: "saving makes a new version on top; the file's changes stay in its history",
+        hint: run
+          ? "saving replaces what the run has now"
+          : "saving makes a new version on top; the file's changes stay in its history",
         tone: "good",
         run: () => {
           designer.set({ ...session, base: fileText });
@@ -1012,7 +1096,7 @@ export function staleScreen(designer: DesignerHandle, fileText: string): Screen 
       },
       {
         kind: "button",
-        label: "Drop mine and load the file",
+        label: run ? "Drop mine and load the run's steps" : "Drop mine and load the file",
         tone: "bad",
         run: () => {
           designer.set(newSession(session.target, fileText));

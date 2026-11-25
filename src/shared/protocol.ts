@@ -186,6 +186,17 @@ export interface WorkflowRunInfo {
   steps: WorkflowStepInfo[];
 }
 
+/** A run with the text of its own copy of the definition, for the designer. */
+export interface WorkflowRunView {
+  run: WorkflowRunInfo;
+  /** The run's definition as TOML, without comments. */
+  text: string;
+  /** Names `text`; an edit that gives it as its base is refused when the run changed since. */
+  revision: string;
+  /** False when the run is over or ending: it can be looked at only. */
+  editable: boolean;
+}
+
 /** What an edit of a running workflow does (or, as a preview, would do). */
 export interface WorkflowEdit {
   run: WorkflowRunInfo;

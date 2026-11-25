@@ -5,7 +5,7 @@ import { Workspace } from "../src/daemon/workspace.ts";
 import { claudeProvider } from "../src/providers/claude/launch.ts";
 import { type Config, ConfigError } from "../src/shared/config.ts";
 import type { AgentInfo, WorkflowRunInfo } from "../src/shared/protocol.ts";
-import { parseWorkflow } from "../src/shared/workflow.ts";
+import { parseWorkflow, revisionOf } from "../src/shared/workflow.ts";
 import { FakeTmux } from "./fake-tmux.ts";
 import { testRoleFiles } from "./role-files.ts";
 
@@ -543,6 +543,35 @@ describe("editing a run in progress", () => {
     expect(text).toContain("# Now: explore running, build pending");
     expect(parseWorkflow(text, "chain")).toEqual(parseWorkflow(DEFINITIONS.chain ?? "", "chain"));
     expect(await workflows.edit(1, text, "user")).toMatchObject({ changes: [], applied: false });
+  });
+
+  test("the view of a run is its text and a revision, and an edit made from an old one is refused", async () => {
+    await workspace.up();
+    await workflows.start("chain", "x", "user");
+    const view = workflows.view(1);
+    expect(view.editable).toBe(true);
+    expect(view.text).not.toContain("#");
+    expect(parseWorkflow(view.text, "chain")).toEqual(
+      parseWorkflow(DEFINITIONS.chain ?? "", "chain"),
+    );
+    expect(view.revision).toBe(revisionOf(view.text));
+
+    const first = `${view.text}\n[steps.docs]\ndepends_on = ["build"]\nprompt = "Document it"\n`;
+    expect((await workflows.edit(1, first, "user", false, view.revision)).applied).toBe(true);
+    // Someone else still has the first text: their change must not undo this one.
+    const second = view.text.replace("Build", "Construct");
+    await expect(workflows.edit(1, second, "user", false, view.revision)).rejects.toThrow(
+      "was changed by someone else meanwhile",
+    );
+    await expect(workflows.edit(1, second, "user", true, view.revision)).rejects.toThrow(
+      "was changed by someone else meanwhile",
+    );
+    const now = workflows.view(1);
+    expect(now.revision).not.toBe(view.revision);
+    expect(Object.keys(parseWorkflow(now.text, "chain").steps)).toContain("docs");
+
+    await workflows.cancel(1);
+    expect(workflows.view(1).editable).toBe(false);
   });
 
   test("steps that have not started are changed, added and removed without a restart", async () => {

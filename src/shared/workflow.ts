@@ -293,6 +293,11 @@ export function sameWork(a: WorkflowStep, b: WorkflowStep): boolean {
   return key(a) === key(b);
 }
 
+/** A short name for a definition text: two texts with the same name are the same text. */
+export function revisionOf(text: string): string {
+  return Bun.hash(text).toString(36);
+}
+
 /**
  * A definition as TOML, the form a run's own copy is edited in. `header` lines become comments
  * at the top. Parsing the text again gives the same definition.

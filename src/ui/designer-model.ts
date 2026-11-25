@@ -8,6 +8,7 @@ import {
   type Region,
   type Slot,
 } from "../shared/diagram.ts";
+import type { WorkflowRunInfo, WorkflowStepInfo } from "../shared/protocol.ts";
 import type { Scope } from "../shared/scope.ts";
 import {
   checkWorkflow,
@@ -50,6 +51,11 @@ export interface Session {
   selected: Region | null;
   /** Steps renamed here, by the name they had in `base`, so a file can follow a run's renames. */
   renames: Record<string, string>;
+  /**
+   * Every rename made here, the ones taken back included, so that doing one again finds it.
+   * `renames` is the part of it that holds for `text`.
+   */
+  renamed?: Record<string, string>;
 }
 
 /** States kept to go back to. */
@@ -125,6 +131,19 @@ function stillThere(selected: Region | null, text: string): Region | null {
   return ids.includes(selected.from) && ids.includes(selected.to) ? selected : null;
 }
 
+/** The renames that hold for a text: the old name is gone from it and the new one is there. */
+function holding(renamed: Record<string, string>, text: string): Record<string, string> {
+  const ids = stepIds(text);
+  return Object.fromEntries(
+    Object.entries(renamed).filter(([from, to]) => ids.includes(to) && !ids.includes(from)),
+  );
+}
+
+/** The session started over from another text, with the cursor kept where it still can be. */
+export function rebase(session: Session, text: string): Session {
+  return { ...newSession(session.target, text), selected: stillThere(session.selected, text) };
+}
+
 /**
  * Makes one change. A change that cannot be made (a name that is taken, a dependency that
  * would go round in a loop) throws with the reason and leaves the session as it was.
@@ -132,7 +151,7 @@ function stillThere(selected: Region | null, text: string): Region | null {
 export function apply(session: Session, op: Op): Session {
   const text = edit(session.text, op);
   if (text === session.text) return session;
-  const renames = { ...session.renames };
+  const renames = { ...(session.renamed ?? session.renames) };
   let selected = session.selected;
   if (op.op === "renameStep") {
     const first = Object.keys(renames).find((name) => renames[name] === op.from) ?? op.from;
@@ -150,7 +169,9 @@ export function apply(session: Session, op: Op): Session {
     undo: [...session.undo, session.text].slice(-UNDO_LIMIT),
     redo: [],
     selected: stillThere(selected, text),
-    renames,
+    // A whole new text, or a step removed, may have ended a rename as well.
+    renames: holding(renames, text),
+    renamed: renames,
   };
 }
 
@@ -172,6 +193,7 @@ export function undo(session: Session): Session {
     undo: session.undo.slice(0, -1),
     redo: [...session.redo, session.text],
     selected: stillThere(session.selected, text),
+    renames: holding(session.renamed ?? session.renames, text),
   };
 }
 
@@ -184,6 +206,7 @@ export function redo(session: Session): Session {
     undo: [...session.undo, session.text],
     redo: session.redo.slice(0, -1),
     selected: stillThere(session.selected, text),
+    renames: holding(session.renamed ?? session.renames, text),
   };
 }
 
@@ -231,8 +254,21 @@ const OWN_SETTINGS = [
   "memory",
 ];
 
-/** What a text shows as. A text with mistakes is still drawn, as far as it can be read. */
-export function view(text: string, name: string): DesignView {
+/** How a step's state in a run shows on the picture. */
+const STATE: Record<WorkflowStepInfo["state"], { lead: string; tone: DiagramStep["tone"] }> = {
+  pending: { lead: "○", tone: "muted" },
+  running: { lead: "●", tone: "good" },
+  done: { lead: "✓", tone: "good" },
+  failed: { lead: "✖", tone: "bad" },
+  skipped: { lead: "–", tone: "muted" },
+  rejected: { lead: "◆", tone: "attention" },
+};
+
+/**
+ * What a text shows as. A text with mistakes is still drawn, as far as it can be read. With
+ * `run`, every step also shows how far it is: its state, the pass it is on and its agent.
+ */
+export function view(text: string, name: string, run?: WorkflowRunInfo): DesignView {
   const { definition, problems } = checkWorkflow(text, name);
   let loose: ReturnType<typeof looseSteps> = {};
   let description = "";
@@ -268,17 +304,23 @@ export function view(text: string, name: string): DesignView {
       const { fields } = step;
       const own = OWN_SETTINGS.some((key) => fields[key] !== undefined);
       const wrong = step.problems.length > 0;
+      const live = run?.steps.find((other) => other.id === step.id);
+      const state = live ? STATE[live.state] : undefined;
+      // A step added while editing has no state yet; it shows as one that waits.
+      const lead = run ? (state ?? STATE.pending).lead : undefined;
+      const role = typeof fields.role === "string" && fields.role ? fields.role : "no role";
       return {
         id: step.id,
         dependsOn: step.dependsOn,
         reviews: step.reviews,
         rounds: typeof fields.max_rounds === "number" ? fields.max_rounds : undefined,
-        detail: typeof fields.role === "string" && fields.role ? fields.role : "no role",
-        mark: wrong ? MARKS.problem : undefined,
+        detail: live?.agent ?? role,
+        lead,
+        mark: wrong ? MARKS.problem : live && live.attempt > 1 ? `#${live.attempt}` : undefined,
         note:
           `${fields.keep_agent === true ? MARKS.keepsAgent : ""}${own ? MARKS.ownSettings : ""}` ||
           undefined,
-        tone: wrong ? "bad" : undefined,
+        tone: wrong ? "bad" : run ? (state ?? STATE.pending).tone : undefined,
       };
     }),
   };

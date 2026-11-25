@@ -14,6 +14,7 @@ import { createAgentsView } from "./agents.ts";
 import { createDesigner } from "./designer.ts";
 import { roleScreen, rolesScreen } from "./role-screens.ts";
 import { diskRoleStore } from "./role-store.ts";
+import { openRun } from "./run-screens.ts";
 import { createStatusView } from "./status.ts";
 import { toolsPickScreen, toolsScreen } from "./tool-screens.ts";
 import { createWizard, type Outcome, type Screen } from "./wizard.ts";
@@ -143,7 +144,7 @@ export async function runWizard(
   const design: DesignDeps = {
     api,
     store: diskWorkflowStore(projectRoot, config),
-    start: (session) =>
+    start: (session, live) =>
       createDesigner(
         {
           ...design,
@@ -161,8 +162,10 @@ export async function runWizard(
           },
         },
         session,
+        live,
       ).view,
-    home: () => designListScreen(design),
+    // Closing the designer goes back to the list the popup is for.
+    home: () => (kind === "workflows" ? workflowsScreen(api, design) : designListScreen(design)),
   };
   let first: Screen;
   let then: Outcome | undefined;
@@ -170,7 +173,10 @@ export async function runWizard(
     const store = () => diskRoleStore(projectRoot, config);
     if (kind === "design") {
       first = designListScreen(design);
-      if (subject) {
+      const run = /^run:(\d+)$/.exec(subject ?? "");
+      if (run) {
+        then = await openRun(design, Number(run[1]));
+      } else if (subject) {
         // One workflow straight away; the list is what closing the designer returns to.
         const named = parseRef(subject);
         const found = design.store
