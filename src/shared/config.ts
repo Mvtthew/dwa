@@ -1,6 +1,7 @@
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
 import {
+  type Capabilities,
   ConfigError,
   capabilityFields,
   EffortSchema,
@@ -121,7 +122,15 @@ const ConfigSchema = z.strictObject({
 });
 
 export type Profile = z.infer<typeof ProfileSchema>;
-export type Config = z.infer<typeof ConfigSchema>;
+export type Config = z.infer<typeof ConfigSchema> & {
+  /**
+   * `[defaults]` of the personal config alone, kept when the two files are merged so a value
+   * can be traced to the file it is written in. Not a key of either file.
+   */
+  userDefaults?: Capabilities;
+  /** `[defaults]` of the project's config alone, for the same reason. */
+  projectDefaults?: Capabilities;
+};
 export type AgentConfig = z.infer<typeof AgentSchema>;
 export type LayoutConfig = z.infer<typeof LayoutSchema>;
 export type McpServerConfig = z.infer<typeof McpServerSchema>;
@@ -188,6 +197,8 @@ export function mergeConfig(user: Config, project: Config): Config {
     // Layered like roles are, so one file's allow list and the other's deny list of tools
     // do not both survive.
     defaults: layerCapabilities(user.defaults, project.defaults),
+    userDefaults: user.defaults,
+    projectDefaults: project.defaults,
     main: { ...user.main, ...project.main },
     mcp: { ...user.mcp, ...project.mcp },
     plugins: { ...user.plugins, ...project.plugins },

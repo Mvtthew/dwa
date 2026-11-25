@@ -8,73 +8,133 @@ import { claudeProvider } from "../providers/claude/launch.ts";
 import { ConfigError } from "../shared/capabilities.ts";
 import { type Config, loadConfig, resolveProfile } from "../shared/config.ts";
 import { APP_NAME } from "../shared/constants.ts";
-import { diffLines, formatTime, readHistory, switchTo, versionText } from "../shared/history.ts";
+import { switchTo, versionText } from "../shared/history.ts";
 import { runDir } from "../shared/paths.ts";
 import type { WorkspaceState } from "../shared/protocol.ts";
 import {
   createRole,
   deleteRole,
   duplicateRole,
+  moveRole,
   noticeEdits,
   renameRole,
+  requireRole,
   roleHistory,
   roleTemplate,
   saveValues,
+  scopeWarnings,
 } from "../shared/role-edit.ts";
 import {
   capabilityLines,
   checkSessions,
   findRole,
+  findRoleIn,
+  listAllRoles,
   listRoles,
   parseRole,
   type ResolvedSession,
   type RoleContext,
   resolveSession,
+  scopeNotes,
   summarizeSession,
 } from "../shared/roles.ts";
+import { parseRef, type Scope, scopeLabel } from "../shared/scope.ts";
 import { listWorkflows, loadWorkflow } from "../shared/workflow.ts";
 import { call } from "./client.ts";
 import { openEditor } from "./editor.ts";
+import { printDiff, printHistory, versionNumber } from "./versions.ts";
 
 const ROLE_USAGE = `Usage:
   ${APP_NAME} role list [--json]            Roles of this project and your personal ones
   ${APP_NAME} role show <role> [--json]     What a session of this role is started with
   ${APP_NAME} role show --main [--json]     The same for the main session
   ${APP_NAME} role new <name> [--description <text>] [--personal]
-  ${APP_NAME} role copy <role> <new name>
+  ${APP_NAME} role copy <role> <new name> [--to personal|project]
+  ${APP_NAME} role move <role> --to personal|project   With its history; the name stays
   ${APP_NAME} role rename <role> <new name> Also changes every file that names the role
   ${APP_NAME} role delete <role>            Refused while something uses the role
   ${APP_NAME} role edit-prompt <role>       The role's prompt in $EDITOR
   ${APP_NAME} role history <role> [--json]  Versions of the role file
   ${APP_NAME} role diff <role> [vA] [vB]    What changed (the current version against the one before)
-  ${APP_NAME} role switch <role> <vN>       Give the file the content of that version`;
+  ${APP_NAME} role switch <role> <vN>       Give the file the content of that version
 
-/** "v3" or "3" as a number. */
-function versionNumber(text: string | undefined): number | undefined {
-  const match = /^v?(\d+)$/.exec(text ?? "");
-  return match ? Number(match[1]) : undefined;
+A role name means the role sessions here use: the project's before a personal one of the same
+name. --personal or --project (or personal:<role>, project:<role>) names one file exactly.`;
+
+/** "personal" or "project" as a place; undefined for anything else. */
+function placeOf(text: string | undefined): Scope | undefined {
+  return text === "personal" ? "user" : text === "project" ? "project" : undefined;
+}
+
+function printWarnings(lines: string[]): void {
+  for (const line of lines) console.log(`Note: ${line}`);
 }
 
 /** The commands that change role files or look at their history. Null when it is none of them. */
 async function roleFileCommand(
   action: string | undefined,
   words: string[],
-  values: { json?: boolean; personal?: boolean; description?: string },
+  values: {
+    json?: boolean;
+    personal?: boolean;
+    project?: boolean;
+    description?: string;
+    to?: string;
+  },
   ctx: RoleContext,
 ): Promise<number | null> {
-  const [name, second, third] = words;
-  if (action === "new" && name) {
+  const [word, second, third] = words;
+  if (action === "new" && word) {
+    const name = word;
     const entry = createRole(name, roleTemplate(values.description ?? ""), "role new", ctx, {
       personal: values.personal,
     });
     console.log(`Created ${entry.path}`);
     return 0;
   }
-  if (action === "copy" && name && second) {
-    console.log(`Created ${duplicateRole(name, second, ctx).path}`);
+  const FILE_ACTIONS = [
+    "copy",
+    "move",
+    "rename",
+    "delete",
+    "edit-prompt",
+    "history",
+    "diff",
+    "switch",
+  ];
+  if (!word || !action || !FILE_ACTIONS.includes(action)) return null;
+  // One file exactly when a place is given, otherwise the role that is used.
+  const named = parseRef(word);
+  const role = requireRole(
+    {
+      name: named.name,
+      source: values.personal ? "user" : values.project ? "project" : named.source,
+    },
+    ctx,
+  );
+  const { name } = role;
+  if (action === "copy" && second) {
+    const to = placeOf(values.to);
+    if (values.to !== undefined && !to) {
+      console.error(ROLE_USAGE);
+      return 1;
+    }
+    const copy = duplicateRole(role, second, ctx, to ? { personal: to === "user" } : {});
+    console.log(`Created ${copy.path}`);
     return 0;
   }
-  if ((action === "rename" || action === "delete") && name) {
+  if (action === "move") {
+    const to = placeOf(values.to);
+    if (!to) {
+      console.error(ROLE_USAGE);
+      return 1;
+    }
+    const warnings = scopeWarnings("move", role, ctx);
+    console.log(`Moved to ${moveRole(role, to, ctx).path}`);
+    printWarnings(warnings);
+    return 0;
+  }
+  if ((action === "rename" || action === "delete") && !role.hidden) {
     // A running session is started again by its role's name, so that name has to stay.
     const state = await call<WorkspaceState>(ctx.projectRoot, "GET", "/state").catch(() => null);
     const running = [...(state?.main ? [state.main] : []), ...(state?.agents ?? [])]
@@ -85,17 +145,21 @@ async function roleFileCommand(
       return 1;
     }
   }
-  if (action === "rename" && name && second) {
-    console.log(`Renamed to ${renameRole(name, second, ctx).path}`);
+  if (action === "rename" && second) {
+    const warnings = scopeWarnings("rename", role, ctx);
+    console.log(`Renamed to ${renameRole(role, second, ctx).path}`);
+    printWarnings(warnings);
     return 0;
   }
-  if (action === "delete" && name) {
-    deleteRole(name, ctx);
+  if (action === "delete") {
+    const warnings = scopeWarnings("delete", role, ctx);
+    deleteRole(role, ctx);
     console.log(`Deleted role ${name}. Its history is kept.`);
+    printWarnings(warnings);
     return 0;
   }
-  if (action === "edit-prompt" && name) {
-    const loaded = findRole(name, ctx);
+  if (action === "edit-prompt") {
+    const loaded = findRoleIn(role, ctx);
     if (!loaded) throw new ConfigError(`Unknown role "${name}".`);
     mkdirSync(runDir(ctx.projectRoot), { recursive: true });
     const path = join(runDir(ctx.projectRoot), `role-${name}-prompt.md`);
@@ -112,50 +176,33 @@ async function roleFileCommand(
     }
     // A prompt always ends its last line, so the closing quotes stand on their own.
     const prompt = after === "" || after.endsWith("\n") ? after : `${after}\n`;
-    const version = saveValues({ kind: "role", name }, { prompt }, "prompt edited", ctx);
+    const version = saveValues(
+      { kind: "role", name, source: role.source },
+      { prompt },
+      "prompt edited",
+      ctx,
+    );
     console.log(`Saved the prompt of role ${name} (v${version.n}).`);
     return 0;
   }
-  if (action === "history" && name) {
-    const history = readHistory(roleHistory(name, ctx));
-    if (values.json) {
-      console.log(JSON.stringify(history, null, 2));
-      return 0;
-    }
-    for (const version of [...history.versions].reverse()) {
-      const mark = version.n === history.current ? "*" : " ";
-      console.log(
-        `${mark} v${String(version.n).padEnd(4)}${formatTime(version.time)}  ${version.source}`,
-      );
-    }
+  if (action === "history") {
+    printHistory(roleHistory(role, ctx), values.json);
     return 0;
   }
-  if (action === "diff" && name) {
-    const tracked = roleHistory(name, ctx);
-    const history = readHistory(tracked);
-    const to = versionNumber(third) ?? (third ? undefined : (history.current ?? undefined));
-    const numbers = history.versions.map((version) => version.n).filter((n) => n < (to ?? 0));
-    const from = second ? versionNumber(second) : numbers.at(-1);
-    if (to === undefined || (second && from === undefined)) {
+  if (action === "diff") {
+    if (!printDiff(roleHistory(role, ctx), second, third)) {
       console.error(ROLE_USAGE);
       return 1;
     }
-    if (from === undefined) {
-      console.log(`v${to} is the first version; there is nothing to compare it with.`);
-      return 0;
-    }
-    const lines = diffLines(versionText(tracked, from), versionText(tracked, to));
-    console.log(`v${from} → v${to}`);
-    console.log(lines.length > 0 ? lines.join("\n") : "No differences.");
     return 0;
   }
-  if (action === "switch" && name) {
+  if (action === "switch") {
     const n = versionNumber(second);
     if (n === undefined) {
       console.error(ROLE_USAGE);
       return 1;
     }
-    const tracked = roleHistory(name, ctx);
+    const tracked = roleHistory(role, ctx);
     const text = versionText(tracked, n);
     parseRole(text, `v${n}`);
     switchTo(tracked, n);
@@ -215,6 +262,8 @@ export async function roleCommand(projectRoot: string, args: string[]): Promise<
       json: { type: "boolean" },
       main: { type: "boolean" },
       personal: { type: "boolean" },
+      project: { type: "boolean" },
+      to: { type: "string" },
       description: { type: "string" },
     },
   });
@@ -231,9 +280,9 @@ export async function roleCommand(projectRoot: string, args: string[]): Promise<
   }
 
   if (action === "list") {
-    const roles = listRoles(ctx).map((entry) => {
+    const roles = listAllRoles(ctx).map((entry) => {
       try {
-        const role = findRole(entry.name, ctx)?.role;
+        const role = findRoleIn(entry, ctx)?.role;
         return {
           ...entry,
           description: role?.description ?? null,
@@ -254,9 +303,11 @@ export async function roleCommand(projectRoot: string, args: string[]): Promise<
     }
     const width = Math.max(...roles.map((role) => role.name.length));
     for (const role of roles) {
-      const where = role.source === "user" ? " (personal)" : "";
+      const where = role.hidden
+        ? "personal, hidden by the project's role"
+        : scopeLabel(role.source);
       const text = role.error ? `BROKEN: ${role.error}` : (role.description ?? "");
-      console.log(`${role.name.padEnd(width)}  ${text}${where}`);
+      console.log(`${role.name.padEnd(width)}  ${where.padEnd(8)}  ${text}`.trimEnd());
     }
     return 0;
   }
@@ -318,11 +369,13 @@ export async function configCommand(projectRoot: string, args: string[]): Promis
     return 1;
   }
   const problems = await configProblems(projectRoot);
+  // Worth knowing, but nothing is broken by them: they never change the result.
+  const notes = scopeNotes({ projectRoot });
   if (problems.length === 0) {
     const count = listRoles({ projectRoot }).length;
     console.log(`Configuration is fine: ${count} role${count === 1 ? "" : "s"} checked.`);
-    return 0;
   }
   for (const problem of problems) console.error(problem);
-  return 1;
+  if (notes.length > 0) console.log(`\nNotes:\n${notes.map((note) => `  ${note}`).join("\n")}`);
+  return problems.length === 0 ? 0 : 1;
 }

@@ -9,6 +9,7 @@ import { describeRun, type WorkflowSummary } from "../shared/workflow.ts";
 import { type RoleStore, rolesScreen } from "./role-screens.ts";
 import { toolsScreen } from "./tool-screens.ts";
 import type { Row, Screen } from "./wizard.ts";
+import { type DesignDeps, designListScreen, newWorkflowScreen } from "./workflow-screens.ts";
 
 export interface WizardApi {
   /** One request to the daemon; throws with the daemon's message when it refuses. */
@@ -250,7 +251,7 @@ export function runScreen(api: WizardApi, run: WorkflowRunInfo): Screen {
   return { title: `Run #${run.id} of "${run.name}": ${run.state}`, rows };
 }
 
-export async function workflowsScreen(api: WizardApi): Promise<Screen> {
+export async function workflowsScreen(api: WizardApi, design?: DesignDeps): Promise<Screen> {
   const { workflows, runs } = await api.call<{
     workflows: WorkflowSummary[];
     runs: WorkflowRunInfo[];
@@ -259,7 +260,7 @@ export async function workflowsScreen(api: WizardApi): Promise<Screen> {
   if (workflows.length === 0) {
     rows.push({
       kind: "note",
-      text: `No workflows defined. Add one as .${APP_NAME}/workflows/<name>.toml.`,
+      text: `No workflows defined. Add one with: ${APP_NAME} workflow new <name>`,
     });
   }
   for (const workflow of workflows) {
@@ -291,6 +292,23 @@ export async function workflowsScreen(api: WizardApi): Promise<Screen> {
         ),
       }),
     });
+  }
+  if (design) {
+    rows.push(
+      { kind: "note", text: "" },
+      { kind: "heading", text: "THE WORKFLOWS THEMSELVES" },
+      {
+        kind: "button",
+        label: "Design a workflow…",
+        hint: "the steps as a picture, to change them",
+        run: () => ({ to: designListScreen(design) }),
+      },
+      {
+        kind: "button",
+        label: "New workflow…",
+        run: () => ({ to: newWorkflowScreen(design) }),
+      },
+    );
   }
   rows.push({ kind: "note", text: "" }, close);
   return { title: "Workflows", rows };
@@ -354,7 +372,11 @@ function sessionScreen(api: WizardApi, agent: AgentInfo): Screen {
 }
 
 /** The menu: everything the workspace can do, from one list. */
-export async function menuScreen(api: WizardApi, roles?: RoleStore): Promise<Screen> {
+export async function menuScreen(
+  api: WizardApi,
+  roles?: RoleStore,
+  design?: DesignDeps,
+): Promise<Screen> {
   const state = await api.call<WorkspaceState>("GET", "/state");
   const post = (path: string, body?: unknown) => async () => {
     await api.call("POST", path, body);
@@ -388,7 +410,7 @@ export async function menuScreen(api: WizardApi, roles?: RoleStore): Promise<Scr
     {
       kind: "button",
       label: "Workflows…",
-      run: async () => ({ to: await workflowsScreen(api) }),
+      run: async () => ({ to: await workflowsScreen(api, design) }),
     },
     ...(roles
       ? [

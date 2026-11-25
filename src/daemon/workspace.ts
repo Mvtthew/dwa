@@ -25,7 +25,7 @@ import {
   resolveProfile,
 } from "../shared/config.ts";
 import { APP_NAME, DEFAULT_KEY_PREFIX } from "../shared/constants.ts";
-import { expandPath, projectConfigPath } from "../shared/paths.ts";
+import { expandPath, projectConfigPath, userConfigPath } from "../shared/paths.ts";
 import type {
   AgentInfo,
   AgentKind,
@@ -58,6 +58,7 @@ import {
   type SessionSummary,
   summarizeSession,
 } from "../shared/roles.ts";
+import { type Scope, scopeLabel } from "../shared/scope.ts";
 import {
   applyToolChanges,
   BLOCKED_FILE,
@@ -769,12 +770,15 @@ export class Workspace {
   }
 
   /**
-   * `[defaults]` as the project's own config file has them, without the personal layer: what
-   * is saved into that file must not carry the user's personal defaults into the repository.
+   * `[defaults]` as one config file has them, without the other layer: what is saved into the
+   * project's file must not carry the user's personal defaults into the repository, and the
+   * personal file must not take the project's.
    */
-  private projectDefaults(): Capabilities {
+  private ownDefaults(source: Scope = "project"): Capabilities {
     const files = this.deps.roleFiles ?? diskFiles;
-    const text = files.read(projectConfigPath(this.deps.projectRoot));
+    const text = files.read(
+      source === "user" ? userConfigPath(this.env) : projectConfigPath(this.deps.projectRoot),
+    );
     if (text === null) return {};
     try {
       const parsed = Bun.TOML.parse(text) as { defaults?: Partial<Capabilities> };
@@ -914,15 +918,21 @@ export class Workspace {
       this.sessionRequest(config, stored, this.agentOverrides(agent.id)),
       this.roleContext(),
     );
-    const chain = layers.chain.map((loaded) => loaded.name).reverse();
-    const files: ToolsInfo["files"] = chain.map((name, index) => ({
+    const chain = [...layers.chain].reverse();
+    // Every target says where its file is: one is in the repository, the other is the user's own.
+    const files: ToolsInfo["files"] = chain.map(({ name, source }, index) => ({
       label:
-        index === 0 ? `Role ${name}` : `Role ${name}  (${chain[0]} starts from it; changes both)`,
-      file: { kind: "role", name },
+        `Role ${name}  (${scopeLabel(source)}` +
+        (index === 0 ? ")" : `; ${chain[0]?.name} starts from it; changes both)`),
+      file: { kind: "role", name, source },
     }));
     files.push({
-      label: "[defaults] in config.toml  (every role without its own value)",
+      label: "[defaults] in the project's config.toml  (every role without its own value)",
       file: { kind: "defaults" },
+    });
+    files.push({
+      label: "Personal defaults  (your config.toml, for every project; the project's values win)",
+      file: { kind: "defaults", source: "user" },
     });
     const view = toolView(layers.caps, layers.origins, await this.toolSources(config, agent.id));
     // An allow list gets the Skill tool by itself when the role lists skills.
@@ -986,7 +996,7 @@ export class Workspace {
         const file = request.file ?? { kind: "defaults" as const };
         const base =
           file.kind === "defaults"
-            ? this.projectDefaults()
+            ? this.ownDefaults(file.source)
             : resolveLayers({ config, role: file.name }, ctx).caps;
         const delta = applyToolChanges(base, request.changes, sources);
         if (Object.keys(delta).length === 0) {

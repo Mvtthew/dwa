@@ -379,8 +379,9 @@ describe("panes", () => {
     view.update(workspace([agent("dev")]), NOW);
     await harness.renderOnce();
     let lines = harness.captureCharFrame().split("\n");
-    expect(lines.slice(22, 38).map((line) => line.trim())).toEqual([
+    expect(lines.slice(21, 38).map((line) => line.trim())).toEqual([
       "▸ Workflows  w",
+      "▸ Workflow designer  g",
       "▸ New agent  a",
       "▸ Agent tools  t",
       "▸ Role settings  r",
@@ -398,7 +399,7 @@ describe("panes", () => {
       "dwa 1.2.3",
     ]);
 
-    for (const row of [22, 23, 24, 25, 26, 29, 30, 31, 32, 33, 34, 35]) {
+    for (const row of [21, 22, 23, 24, 25, 26, 29, 30, 31, 32, 33, 34, 35]) {
       await harness.mockMouse.click(4, row);
     }
     harness.mockInput.pressKey("w");
@@ -407,6 +408,7 @@ describe("panes", () => {
     await harness.renderOnce();
     expect(pressed).toEqual([
       "workflows",
+      "design",
       "agent",
       "tools",
       "roles",
@@ -438,8 +440,9 @@ describe("panes", () => {
     const lines = harness.captureCharFrame().split("\n");
     expect(lines.join("\n")).toContain("NEEDS YOU");
     expect(lines.join("\n")).not.toContain("KEYS");
-    expect(lines.slice(21, 28).map((line) => line.trim())).toEqual([
+    expect(lines.slice(20, 28).map((line) => line.trim())).toEqual([
       "▸ Workflows  w",
+      "▸ Workflow designer  g",
       "▸ New agent  a",
       "▸ Agent tools  t",
       "▸ Role settings  r",

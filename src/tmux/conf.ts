@@ -13,10 +13,12 @@ export function selfCommand(selfArgv: string[], projectRoot: string): string {
 
 const POPUPS: Record<PopupKind, { title: string; command: string; width: number; height: number }> =
   {
-    workflows: { title: "Workflows", command: "wizard workflows", width: 70, height: 80 },
+    // As large as the designer's, which can be opened from this one: a popup keeps its size.
+    workflows: { title: "Workflows", command: "wizard workflows", width: 90, height: 90 },
     agent: { title: "New agent", command: "wizard agent", width: 70, height: 80 },
     tools: { title: "Agent tools", command: "wizard tools", width: 70, height: 90 },
     roles: { title: "Role settings", command: "wizard roles", width: 70, height: 90 },
+    design: { title: "Workflow designer", command: "wizard design", width: 90, height: 90 },
     questions: { title: "Questions", command: "answer", width: 80, height: 60 },
     palette: { title: APP_NAME, command: "palette", width: 60, height: 70 },
   };
@@ -72,6 +74,7 @@ export function buildTmuxConf(options: ConfOptions): string {
     ["a", popup("agent")],
     ["t", popup("tools")],
     ["r", popup("roles")],
+    ["g", popup("design")],
     ["0", run("key focus")],
     ["z", "resize-pane -Z"],
     ["p", popup("palette")],
@@ -95,7 +98,7 @@ export function buildTmuxConf(options: ConfOptions): string {
     "",
     "# Shortcuts: <prefix> then 1..9 opens that agent under main, x closes it, 0 focuses main,",
     "# s shows or hides the shell, w opens the workflows wizard, a the new-agent wizard,",
-    "# t the tools of a session, r the role settings,",
+    "# t the tools of a session, r the role settings, g the workflow designer,",
     "# p opens the command menu, q answers open questions, z zooms the focused pane, d detaches. Pressing the prefix twice sends it to the program.",
     "unbind -a -T prefix",
     "unbind -a -T root",

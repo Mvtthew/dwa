@@ -111,9 +111,17 @@ describe("what the dialog shows", () => {
       },
     ]);
     expect(info.files.map((entry) => entry.file)).toEqual([
-      { kind: "role", name: "reviewer" },
-      { kind: "role", name: "explore" },
+      { kind: "role", name: "reviewer", source: "project" },
+      { kind: "role", name: "explore", source: "project" },
       { kind: "defaults" },
+      { kind: "defaults", source: "user" },
+    ]);
+    // Every target says which place its file is in.
+    expect(info.files.map((entry) => entry.label)).toEqual([
+      "Role reviewer  (project)",
+      "Role explore  (project; reviewer starts from it; changes both)",
+      "[defaults] in the project's config.toml  (every role without its own value)",
+      "Personal defaults  (your config.toml, for every project; the project's values win)",
     ]);
     expect(info.outOfDate).toBe(false);
     expect((await workspace.toolsInfo("main")).agent.kind).toBe("main");

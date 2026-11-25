@@ -43,6 +43,11 @@ export function workflowsDir(projectRoot: string): string {
   return join(projectDir(projectRoot), "workflows");
 }
 
+/** Personal workflows, used when the project has none of that name: `~/.config/dwa/workflows`. */
+export function userWorkflowsDir(env: Env = process.env): string {
+  return join(userDir(env), "workflows");
+}
+
 /** Role files, one TOML file each: `<project>/.dwa/roles`. */
 export function rolesDir(projectRoot: string): string {
   return join(projectDir(projectRoot), "roles");
@@ -69,14 +74,14 @@ export function projectSkillsDir(projectRoot: string): string {
 }
 
 /**
- * Earlier versions of role files and of the config, numbered, so a change can be looked at
+ * Earlier versions of role files, workflow files and of the config, numbered, so a change can be looked at
  * and taken back: `<project>/.dwa/history`. Meant to be committed with the files it follows.
  */
 export function historyDir(projectRoot: string): string {
   return join(projectDir(projectRoot), "history");
 }
 
-/** History of the personal roles and config: `~/.config/dwa/history`. */
+/** History of the personal roles, workflows and config: `~/.config/dwa/history`. */
 export function userHistoryDir(env: Env = process.env): string {
   return join(userDir(env), "history");
 }

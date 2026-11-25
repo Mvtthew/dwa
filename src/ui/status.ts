@@ -11,6 +11,7 @@ export type StatusAction =
   | "agent"
   | "tools"
   | "roles"
+  | "design"
   | "shell"
   | "close"
   | "focus"
@@ -35,6 +36,7 @@ interface Button {
 /** The actions: things that open or show something. */
 const ACTIONS: Button[] = [
   { key: "w", label: () => "Workflows", action: "workflows" },
+  { key: "g", label: () => "Workflow designer", action: "design" },
   { key: "a", label: () => "New agent", action: "agent" },
   { key: "t", label: () => "Agent tools", action: "tools" },
   { key: "r", label: () => "Role settings", action: "roles" },

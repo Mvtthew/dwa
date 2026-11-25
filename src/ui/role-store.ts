@@ -8,14 +8,17 @@ import {
   createRole,
   deleteRole,
   duplicateRole,
+  moveRole,
   noticeEdits,
   renameRole,
+  requireRole,
   roleHistory,
   roleTemplate,
   roleUsers,
   saveValues,
+  scopeWarnings,
 } from "../shared/role-edit.ts";
-import { findRole, listRoles, parseRole, type RoleContext } from "../shared/roles.ts";
+import { findRoleIn, listAllRoles, parseRole, type RoleContext } from "../shared/roles.ts";
 import type { RoleStore } from "./role-screens.ts";
 
 function skillNames(dir: string): string[] {
@@ -32,56 +35,58 @@ function projectServers(projectRoot: string): string[] {
   }
 }
 
-export function diskRoleStore(projectRoot: string, config: Config | null): RoleStore {
-  const ctx: RoleContext = { projectRoot };
+export function diskRoleStore(
+  projectRoot: string,
+  config: Config | null,
+  env?: Record<string, string | undefined>,
+): RoleStore {
+  const ctx: RoleContext = { projectRoot, env };
   // Whatever was changed in an editor since the last look gets its version first.
   noticeEdits(ctx);
   const SOURCE = "role settings";
   return {
     list: () =>
-      listRoles(ctx).map((entry) => {
+      listAllRoles(ctx).map((entry) => {
+        const { name, source, hidden } = entry;
         try {
-          const role = findRole(entry.name, ctx)?.role;
-          return {
-            name: entry.name,
-            personal: entry.source === "user",
-            description: role?.description ?? null,
-            error: null,
-          };
+          const description = findRoleIn(entry, ctx)?.role.description ?? null;
+          return { name, source, hidden, description, error: null };
         } catch (error) {
-          return {
-            name: entry.name,
-            personal: entry.source === "user",
-            description: null,
-            error: (error as Error).message,
-          };
+          return { name, source, hidden, description: null, error: (error as Error).message };
         }
       }),
-    load: (name) => {
-      const loaded = findRole(name, ctx);
-      if (!loaded) throw new Error(`Unknown role "${name}".`);
+    load: (role) => {
+      const loaded = findRoleIn(requireRole(role, ctx), ctx);
+      if (!loaded) throw new Error("The role file is gone.");
       return loaded.role;
     },
-    save: (name, changes) => saveValues({ kind: "role", name }, changes, SOURCE, ctx).n,
-    create: (name, description) => {
-      createRole(name, roleTemplate(description), SOURCE, ctx);
+    save: (role, changes) => {
+      const { name, source } = requireRole(role, ctx);
+      return saveValues({ kind: "role", name, source }, changes, SOURCE, ctx).n;
     },
-    duplicate: (from, to) => {
-      duplicateRole(from, to, ctx);
+    create: (name, description, where) => {
+      createRole(name, roleTemplate(description), SOURCE, ctx, { personal: where === "user" });
+    },
+    duplicate: (from, to, where) => {
+      duplicateRole(from, to, ctx, where ? { personal: where === "user" } : {});
     },
     rename: (from, to) => {
       renameRole(from, to, ctx);
     },
-    remove: (name) => deleteRole(name, ctx),
-    users: (name) => roleUsers(name, ctx),
-    history: (name) => readHistory(roleHistory(name, ctx)),
-    diff: (name, from, to) => {
-      const tracked = roleHistory(name, ctx);
+    move: (role, to) => {
+      moveRole(role, to, ctx);
+    },
+    remove: (role) => deleteRole(role, ctx),
+    users: (role) => roleUsers(role, ctx),
+    warnings: (action, role) => scopeWarnings(action, role, ctx),
+    history: (role) => readHistory(roleHistory(role, ctx)),
+    diff: (role, from, to) => {
+      const tracked = roleHistory(role, ctx);
       const lines = diffLines(versionText(tracked, from), versionText(tracked, to));
       return lines.length > 0 ? lines : ["No differences."];
     },
-    switchTo: (name, n) => {
-      const tracked = roleHistory(name, ctx);
+    switchTo: (role, n) => {
+      const tracked = roleHistory(role, ctx);
       // A version that is no longer a valid role is not brought back.
       parseRole(versionText(tracked, n), `v${n}`);
       switchTo(tracked, n);
@@ -93,7 +98,7 @@ export function diskRoleStore(projectRoot: string, config: Config | null): RoleS
         ...new Set([
           ...skillNames(projectSkillsDir(projectRoot)),
           ...skillNames(skillsDir(projectRoot)),
-          ...skillNames(userSkillsDir()),
+          ...skillNames(userSkillsDir(env)),
         ]),
       ],
       projectMcp: projectServers(projectRoot),

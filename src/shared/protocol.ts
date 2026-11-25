@@ -215,7 +215,7 @@ export interface WorkspaceState {
 }
 
 /** The wizards that open in a popup over the workspace. */
-export type WizardKind = "workflows" | "agent" | "tools" | "roles";
+export type WizardKind = "workflows" | "agent" | "tools" | "roles" | "design";
 
 /** Everything the daemon can show in a popup: the wizards, the question queue, the command menu. */
 export type PopupKind = WizardKind | "questions" | "palette";
@@ -225,6 +225,7 @@ export const POPUP_KINDS: readonly PopupKind[] = [
   "agent",
   "tools",
   "roles",
+  "design",
   "questions",
   "palette",
 ];

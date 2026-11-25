@@ -4,10 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigError } from "../src/shared/config.ts";
 import type { WorkflowRunInfo } from "../src/shared/protocol.ts";
+import type { ScopeContext } from "../src/shared/scope.ts";
 import {
+  checkWorkflow,
   dependents,
   describeRun,
+  findWorkflow,
   formatWorkflow,
+  listAllWorkflows,
   listWorkflows,
   loadWorkflow,
   parseWorkflow,
@@ -15,6 +19,9 @@ import {
   renderPrompt,
   reworkSteps,
   sameWork,
+  summarizeWorkflow,
+  WorkflowError,
+  workflowKind,
 } from "../src/shared/workflow.ts";
 
 const FEATURE = `
@@ -35,6 +42,29 @@ keep_agent = true
 prompt = "Review. Explorer said: {{steps.explore.result}}"
 `;
 
+/** Texts that are not a workflow, and what the error says. */
+const invalid: [string, string, RegExp][] = [
+  ["broken TOML", "[steps", /invalid TOML/],
+  ["no steps", 'description = "x"', /steps/],
+  ["an empty step table", "[steps]", /at least one step/],
+  ["an unknown key", '[steps.a]\nprompt = "x"\nrole_name = "y"', /role_name|Unrecognized/],
+  ["a step without a prompt", '[steps.a]\nrole = "x"', /prompt/],
+  ["an unknown dependency", '[steps.a]\nprompt = "x"\ndepends_on = ["b"]', /unknown step "b"/],
+  ["a bad step name", '[steps."a b"]\nprompt = "x"', /step name "a b"/],
+  [
+    "a cycle",
+    '[steps.a]\nprompt = "x"\ndepends_on = ["b"]\n[steps.b]\nprompt = "y"\ndepends_on = ["a"]',
+    /cycle \(a -> b -> a\)/,
+  ],
+  ["a step that depends on itself", '[steps.a]\nprompt = "x"\ndepends_on = ["a"]', /cycle/],
+  ["an unknown placeholder", '[steps.a]\nprompt = "{{inptu}}"', /unknown placeholder/],
+  [
+    "a result of a step it does not depend on",
+    '[steps.a]\nprompt = "x"\n[steps.b]\nprompt = "{{steps.a.result}}"',
+    /does not depend on it/,
+  ],
+];
+
 describe("parseWorkflow", () => {
   test("reads steps in file order with defaults", () => {
     const workflow = parseWorkflow(FEATURE, "feature");
@@ -50,33 +80,152 @@ describe("parseWorkflow", () => {
     expect(workflow.steps.review?.keep_agent).toBe(true);
   });
 
-  const invalid: [string, string, RegExp][] = [
-    ["broken TOML", "[steps", /invalid TOML/],
-    ["no steps", 'description = "x"', /steps/],
-    ["an empty step table", "[steps]", /at least one step/],
-    ["an unknown key", '[steps.a]\nprompt = "x"\nrole_name = "y"', /role_name|Unrecognized/],
-    ["a step without a prompt", '[steps.a]\nrole = "x"', /prompt/],
-    ["an unknown dependency", '[steps.a]\nprompt = "x"\ndepends_on = ["b"]', /unknown step "b"/],
-    ["a bad step name", '[steps."a b"]\nprompt = "x"', /step name "a b"/],
-    [
-      "a cycle",
-      '[steps.a]\nprompt = "x"\ndepends_on = ["b"]\n[steps.b]\nprompt = "y"\ndepends_on = ["a"]',
-      /cycle \(a -> b -> a\)/,
-    ],
-    ["a step that depends on itself", '[steps.a]\nprompt = "x"\ndepends_on = ["a"]', /cycle/],
-    ["an unknown placeholder", '[steps.a]\nprompt = "{{inptu}}"', /unknown placeholder/],
-    [
-      "a result of a step it does not depend on",
-      '[steps.a]\nprompt = "x"\n[steps.b]\nprompt = "{{steps.a.result}}"',
-      /does not depend on it/,
-    ],
-  ];
   for (const [what, text, message] of invalid) {
     test(`rejects ${what}`, () => {
       expect(() => parseWorkflow(text, "w")).toThrow(ConfigError);
       expect(() => parseWorkflow(text, "w")).toThrow(message);
     });
   }
+});
+
+describe("checkWorkflow", () => {
+  /** Where each problem of the table above is reported, and whether the text has the wrong shape. */
+  const where: Record<string, { step?: string; key?: string; shape?: boolean }> = {
+    "broken TOML": { shape: true },
+    "no steps": { shape: true },
+    "an empty step table": {},
+    "an unknown key": { step: "a", shape: true },
+    "a step without a prompt": { step: "a", key: "prompt", shape: true },
+    "an unknown dependency": { step: "a", key: "depends_on" },
+    "a bad step name": { step: "a b" },
+    "a cycle": {},
+    "a step that depends on itself": {},
+    "an unknown placeholder": { step: "a", key: "prompt" },
+    "a result of a step it does not depend on": { step: "b", key: "prompt" },
+  };
+
+  test("the table of places covers every kind of error", () => {
+    expect(Object.keys(where).sort()).toEqual(invalid.map(([what]) => what).sort());
+  });
+
+  for (const [what, text, message] of invalid) {
+    test(`says where ${what} is`, () => {
+      const { step, key, shape = false } = where[what] ?? {};
+      const check = checkWorkflow(text, "w");
+      expect(check.definition).toBeNull();
+      expect(check.shape).toBe(shape);
+      expect(check.problems).toHaveLength(1);
+      const [problem] = check.problems;
+      expect(problem?.message).toMatch(message);
+      expect(problem?.step).toBe(step);
+      expect(problem?.key).toBe(key);
+      // The message is the one parseWorkflow throws, after the source.
+      expect(() => parseWorkflow(text, "w", "file.toml")).toThrow(`file.toml: ${problem?.message}`);
+    });
+  }
+
+  test("says where the other schema errors and the review errors are", () => {
+    const one = (text: string) => {
+      const check = checkWorkflow(text, "w");
+      expect(check.problems).toHaveLength(1);
+      const [problem] = check.problems;
+      return { step: problem?.step, key: problem?.key, shape: check.shape };
+    };
+    expect(one('[steps.a]\nprompt = ""')).toEqual({ step: "a", key: "prompt", shape: true });
+    expect(one('[steps.a]\nprompt = "x"\ntools = ["Read"]\ndeny_tools = ["Edit"]')).toEqual({
+      step: "a",
+      key: "deny_tools",
+      shape: true,
+    });
+    expect(one('[steps.a]\nprompt = "x"\npermission_mode = "yolo"')).toEqual({
+      step: "a",
+      key: "permission_mode",
+      shape: true,
+    });
+    expect(one('[steps.a]\nprompt = "a"\nreviews = "nope"')).toEqual({
+      step: "a",
+      key: "reviews",
+      shape: false,
+    });
+    expect(one('[steps.a]\nprompt = "a"\n[steps.b]\nprompt = "b"\nreviews = "a"')).toEqual({
+      step: "b",
+      key: "reviews",
+      shape: false,
+    });
+    expect(one('[steps.a]\nprompt = "a"\nmax_rounds = 2')).toEqual({
+      step: "a",
+      key: "max_rounds",
+      shape: false,
+    });
+    // The step that uses work a review may send back is the one to change.
+    const ungated =
+      '[steps.build]\nprompt = "b"\n' +
+      '[steps.review]\ndepends_on = ["build"]\nreviews = "build"\nprompt = "r"\n' +
+      '[steps.docs]\ndepends_on = ["build"]\nprompt = "d"';
+    expect(one(ungated)).toEqual({ step: "docs", key: "depends_on", shape: false });
+  });
+
+  test("collects the problems of several steps at once", () => {
+    const text =
+      '[steps.a]\nprompt = "{{inptu}}"\n' +
+      '[steps.b]\nprompt = "b"\nmax_rounds = 2\n' +
+      '[steps.c]\nprompt = "c"\ndepends_on = ["zz"]\nreviews = "nope"';
+    const check = checkWorkflow(text, "w");
+    expect(check.definition).toBeNull();
+    expect(check.shape).toBe(false);
+    expect(check.problems).toEqual([
+      { message: 'step "c" depends on unknown step "zz"', step: "c", key: "depends_on" },
+      {
+        message:
+          'step "a" uses unknown placeholder {{inptu}}; use {{input}} or {{steps.<name>.result}}',
+        step: "a",
+        key: "prompt",
+      },
+      { message: 'step "b" sets max_rounds but reviews nothing', step: "b", key: "max_rounds" },
+      { message: 'step "c" reviews unknown step "nope"', step: "c", key: "reviews" },
+    ]);
+    // parseWorkflow reports the first of them, as it always did.
+    expect(() => parseWorkflow(text, "w")).toThrow('w: step "c" depends on unknown step "zz"');
+  });
+
+  test("collects schema errors of several steps, and parseWorkflow reports them all", () => {
+    const text = '[steps.a]\nrole = "x"\n[steps.b]\nprompt = "b"\nbogus = 1';
+    const check = checkWorkflow(text, "w");
+    expect(check.shape).toBe(true);
+    expect(check.problems.map(({ step, key }) => [step, key])).toEqual([
+      ["a", "prompt"],
+      ["b", undefined],
+    ]);
+    expect(check.problems[1]?.message).toContain("bogus");
+    expect(() => parseWorkflow(text, "w")).toThrow(
+      `w: ${check.problems.map((problem) => problem.message).join("; ")}`,
+    );
+  });
+
+  test("gives the definition of a valid text, the same as parseWorkflow", () => {
+    const check = checkWorkflow(FEATURE, "feature");
+    expect(check).toEqual({
+      definition: parseWorkflow(FEATURE, "feature"),
+      problems: [],
+      shape: false,
+    });
+  });
+
+  test("parseWorkflow throws a WorkflowError that carries the problems", () => {
+    const text = '[steps.a]\nprompt = "{{inptu}}"\n[steps.b]\nprompt = "b"\nmax_rounds = 2';
+    let thrown: unknown;
+    try {
+      parseWorkflow(text, "w", "w.toml");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(WorkflowError);
+    expect(thrown).toBeInstanceOf(ConfigError);
+    const error = thrown as WorkflowError;
+    expect(error.message).toStartWith('w.toml: step "a" uses unknown placeholder');
+    expect(error.problems).toEqual(checkWorkflow(text, "w").problems);
+    expect(error.problems.map((problem) => problem.step)).toEqual(["a", "b"]);
+  });
 });
 
 describe("review steps", () => {
@@ -256,6 +405,7 @@ describe("workflow files", () => {
     expect(broken?.error).toContain("invalid TOML");
     expect(feature).toEqual({
       name: "feature",
+      personal: false,
       description: "Explore, build, review",
       steps: ["explore", "build", "review"],
       error: null,
@@ -276,6 +426,99 @@ describe("workflow files", () => {
       "build",
       "review",
     ]);
+  });
+});
+
+describe("personal workflows", () => {
+  let dir: string;
+  let ctx: ScopeContext;
+  const ONE = '[steps.a]\nprompt = "a"\n';
+  const project = (name: string) => join(dir, ".dwa", "workflows", `${name}.toml`);
+  const personal = (name: string) => join(dir, "home", "dwa", "workflows", `${name}.toml`);
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dwa-test-"));
+    // A personal folder of its own: the real one is never read or written.
+    ctx = { projectRoot: dir, env: { XDG_CONFIG_HOME: join(dir, "home") } };
+    mkdirSync(join(dir, ".dwa", "workflows"), { recursive: true });
+    mkdirSync(join(dir, "home", "dwa", "workflows"), { recursive: true });
+    writeFileSync(project("feature"), FEATURE);
+    writeFileSync(personal("feature"), `description = "Mine"\n\n${ONE}`);
+    writeFileSync(personal("mine"), `description = "Only mine"\n\n${ONE}`);
+    writeFileSync(personal("broken"), "[steps");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("listAllWorkflows has both files of a name and marks the personal one hidden", () => {
+    expect(listAllWorkflows(ctx)).toEqual([
+      { name: "broken", source: "user", path: personal("broken"), hidden: false },
+      { name: "feature", source: "project", path: project("feature"), hidden: false },
+      { name: "feature", source: "user", path: personal("feature"), hidden: true },
+      { name: "mine", source: "user", path: personal("mine"), hidden: false },
+    ]);
+  });
+
+  test("findWorkflow picks the project's file, and the personal one when the project has none", () => {
+    expect(findWorkflow("feature", ctx)).toEqual({
+      name: "feature",
+      source: "project",
+      path: project("feature"),
+      hidden: false,
+    });
+    expect(findWorkflow("mine", ctx)?.path).toBe(personal("mine"));
+    expect(findWorkflow("nope", ctx)).toBeNull();
+    expect(findWorkflow("../feature", ctx)).toBeNull();
+    rmSync(project("feature"));
+    expect(findWorkflow("feature", ctx)).toMatchObject({ source: "user", hidden: false });
+  });
+
+  test("listWorkflows marks the personal ones and leaves out a hidden one", () => {
+    expect(listWorkflows(dir, ctx.env)).toEqual([
+      {
+        name: "broken",
+        personal: true,
+        description: null,
+        steps: [],
+        error: expect.stringContaining("broken.toml: invalid TOML"),
+      },
+      {
+        name: "feature",
+        personal: false,
+        description: "Explore, build, review",
+        steps: ["explore", "build", "review"],
+        error: null,
+      },
+      { name: "mine", personal: true, description: "Only mine", steps: ["a"], error: null },
+    ]);
+  });
+
+  test("summarizeWorkflow describes one file, the hidden one included", () => {
+    const hidden = listAllWorkflows(ctx).find((entry) => entry.hidden);
+    if (!hidden) throw new Error("no hidden workflow");
+    expect(summarizeWorkflow(hidden)).toEqual({
+      name: "feature",
+      personal: true,
+      description: "Mine",
+      steps: ["a"],
+      error: null,
+    });
+  });
+
+  test("loadWorkflow loads a personal workflow, and the project's of a name both have", () => {
+    const mine = loadWorkflow(dir, "mine", ctx.env);
+    expect(mine.name).toBe("mine");
+    expect(mine.description).toBe("Only mine");
+    expect(loadWorkflow(dir, "feature", ctx.env).description).toBe("Explore, build, review");
+    expect(() => loadWorkflow(dir, "nope", ctx.env)).toThrow(
+      'Unknown workflow "nope" (available: broken, feature, mine)',
+    );
+    expect(() => loadWorkflow(dir, "broken", ctx.env)).toThrow(WorkflowError);
+  });
+
+  test("workflowKind names the two folders", () => {
+    expect(workflowKind.dir("project", ctx)).toBe(join(dir, ".dwa", "workflows"));
+    expect(workflowKind.dir("user", ctx)).toBe(join(dir, "home", "dwa", "workflows"));
+    expect(workflowKind.valid("feature-2")).toBe(true);
+    expect(workflowKind.valid("a b")).toBe(false);
   });
 });
 

@@ -6,6 +6,7 @@ import type { WorkflowEdit, WorkflowRunInfo } from "../shared/protocol.ts";
 import { describeRun, type WorkflowSummary } from "../shared/workflow.ts";
 import { call } from "./client.ts";
 import { openEditor } from "./editor.ts";
+import { WORKFLOW_FILE_ACTIONS, workflowFileCommand } from "./workflow-files.ts";
 
 interface Listing {
   workflows: WorkflowSummary[];
@@ -88,18 +89,21 @@ async function editInEditor(projectRoot: string, id: number, yes: boolean): Prom
 /** `dwa workflow list | run | status | cancel | complete | fail | definition | edit`. */
 export async function workflowCommand(projectRoot: string, args: string[]): Promise<number> {
   const [action, target, ...words] = args;
+  if (action && WORKFLOW_FILE_ACTIONS.includes(action)) {
+    return workflowFileCommand(projectRoot, action, args.slice(1));
+  }
   switch (action) {
     case "list":
     case undefined: {
       const { workflows, runs } = await call<Listing>(projectRoot, "GET", "/workflows");
       if (workflows.length === 0) {
-        console.log(`No workflows defined. Add one as .${APP_NAME}/workflows/<name>.toml.`);
+        console.log(`No workflows defined. Add one with: ${APP_NAME} workflow new <name>`);
       }
       for (const workflow of workflows) {
         console.log(
           workflow.error
             ? `${workflow.name}\tinvalid: ${workflow.error}`
-            : `${workflow.name}\t${workflow.description ?? workflow.steps.join(" -> ")}`,
+            : `${workflow.name}\t${workflow.description ?? workflow.steps.join(" -> ")}${workflow.personal ? "  (personal)" : ""}`,
         );
       }
       for (const run of runs) console.log(`\n${describeRun(run)}`);

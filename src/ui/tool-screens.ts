@@ -83,6 +83,7 @@ export function changesFrom(info: ToolsInfo, local: Local, values: Values): Tool
 function from(origin: string | undefined): string {
   if (!origin) return "";
   if (origin === "defaults") return "from [defaults]";
+  if (origin === "personal defaults") return "from your personal [defaults]";
   if (origin === "run") return "saved for this role until the workspace stops";
   if (origin === "session") return "set when this session was started";
   if (origin === "agent") return "changed for this session";

@@ -6,6 +6,7 @@ import type {
   ToolsSaveRequest,
   ToolsSaveResult,
 } from "../shared/protocol.ts";
+import { parseRef } from "../shared/scope.ts";
 import type { ToolChange } from "../shared/tools.ts";
 import { call } from "./client.ts";
 
@@ -84,7 +85,9 @@ export async function toolsCommand(
         ? undefined
         : options.file === "defaults"
           ? { kind: "defaults" }
-          : { kind: "role", name: options.file ?? info.agent.role ?? "" },
+          : options.file === "personal-defaults"
+            ? { kind: "defaults", source: "user" }
+            : { kind: "role", ...parseRef(options.file ?? info.agent.role ?? "") },
   };
   const result = await call<ToolsSaveResult>(projectRoot, "POST", "/tools", request);
   if (options.json) {

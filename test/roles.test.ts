@@ -1,14 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { dirname } from "node:path";
+import { layerCapabilities } from "../src/shared/capabilities.ts";
 import { ConfigError, EMPTY_CONFIG, mergeConfig, parseConfig } from "../src/shared/config.ts";
 import {
   findRole,
+  listAllRoles,
   listRoles,
   missingOnThisMachine,
+  PERSONAL_DEFAULTS,
   parseRole,
   type RoleContext,
   type RoleFiles,
+  resolveLayers,
   resolveSession,
+  scopeNotes,
 } from "../src/shared/roles.ts";
 
 const ROOT = "/p";
@@ -384,5 +389,119 @@ describe("the catalogues in config.toml", () => {
     expect(() => parseConfig('[defaults]\ntools = ["Read"]\ndeny_tools = ["Edit"]', "c")).toThrow(
       /defaults\.deny_tools: set either/,
     );
+  });
+});
+
+describe("personal and project defaults", () => {
+  const user = parseConfig(
+    `
+[defaults]
+model = "haiku"
+effort = "low"
+tools = ["Read"]
+allow = ["Bash(git log *)"]
+memory = true
+`,
+    "user",
+  );
+  // The catalogues of CONFIG, which the roles name, with defaults of its own.
+  const project = {
+    ...CONFIG,
+    defaults: parseConfig(
+      '[defaults]\nmodel = "sonnet"\ndeny_tools = ["WebFetch"]\ndeny = ["Bash(rm *)"]',
+      "project",
+    ).defaults,
+  };
+  const merged = mergeConfig(user, project);
+  /** The same config as it was before the personal values were kept apart. */
+  const before = { ...merged, userDefaults: undefined };
+
+  test("the two files resolve to what they did as one layer", () => {
+    const expected = layerCapabilities(user.defaults, project.defaults);
+    expect(expected).toEqual({
+      model: "sonnet",
+      effort: "low",
+      deny_tools: ["WebFetch"],
+      allow: ["Bash(git log *)"],
+      deny: ["Bash(rm *)"],
+      memory: true,
+    });
+    expect(resolveLayers({ config: merged }, context(FILES)).caps).toEqual(expected);
+    for (const request of [{}, { role: "reviewer" }, { role: "tight" }, { main: true }]) {
+      const now = resolveLayers({ config: merged, ...request }, context(FILES));
+      const then = resolveLayers({ config: before, ...request }, context(FILES));
+      expect(now.caps).toEqual(then.caps);
+      expect(resolveSession({ config: merged, ...request }, context(FILES))).toEqual(
+        resolveSession({ config: before, ...request }, context(FILES)),
+      );
+    }
+  });
+
+  test("origins tell the personal file from the project's", () => {
+    const { origins } = resolveLayers({ config: merged }, context(FILES));
+    expect(origins).toEqual({
+      model: "defaults",
+      deny_tools: "defaults",
+      deny: "defaults",
+      effort: PERSONAL_DEFAULTS,
+      allow: PERSONAL_DEFAULTS,
+      memory: PERSONAL_DEFAULTS,
+    });
+    expect(PERSONAL_DEFAULTS).toBe("personal defaults");
+    // The personal allow list of tools went when the project set a deny list: no origin is left.
+    expect(origins.tools).toBeUndefined();
+
+    // A role's values are the role's, whichever file had them below.
+    const reviewer = resolveLayers({ config: merged, role: "reviewer" }, context(FILES)).origins;
+    expect(reviewer).toMatchObject({
+      model: "role reviewer",
+      effort: "role reviewer",
+      deny_tools: "role explore",
+      allow: PERSONAL_DEFAULTS,
+      deny: "defaults",
+    });
+    // Without a personal file nothing is called personal.
+    const alone = resolveLayers({ config: mergeConfig(EMPTY_CONFIG, project) }, context(FILES));
+    expect(Object.values(alone.origins)).toEqual(["defaults", "defaults", "defaults"]);
+    const only = resolveLayers({ config: mergeConfig(user, EMPTY_CONFIG) }, context(FILES));
+    expect(new Set(Object.values(only.origins))).toEqual(new Set([PERSONAL_DEFAULTS]));
+    expect(only.caps).toEqual(user.defaults);
+  });
+});
+
+describe("notes about the two places", () => {
+  test("every role file is listed, the personal one the project hides included", () => {
+    expect(
+      listAllRoles(context(FILES)).map((role) => [role.name, role.source, role.hidden]),
+    ).toEqual([
+      ["explore", "project", false],
+      ["explore", "user", true],
+      ["personal", "user", false],
+      ["reviewer", "project", false],
+      ["tight", "project", false],
+    ]);
+  });
+
+  test("reports a hidden personal role and a project role that starts from a personal one", () => {
+    const hidden =
+      'Your personal role "explore" is not used here: the project has a role of the same name.';
+    expect(scopeNotes(context(FILES))).toEqual([hidden]);
+    const files = {
+      ...FILES,
+      [`${ROOT}/.dwa/roles/child.toml`]: 'extends = "personal"',
+      // Starts from the project's explore, not from the hidden personal one.
+      [`${ROOT}/.dwa/roles/reader.toml`]: 'extends = "explore"',
+      // A personal role may start from a personal one.
+      [`${USER}/roles/mine.toml`]: 'extends = "personal"',
+      // A role that does not parse is not a note.
+      [`${ROOT}/.dwa/roles/broken.toml`]: "tools = 1",
+    };
+    expect(scopeNotes(context(files))).toEqual([
+      'Role "child" is in the project but starts from your personal role "personal", ' +
+        "which others who use this project do not have.",
+      hidden,
+    ]);
+    const { [`${USER}/roles/explore.toml`]: _twin, ...rest } = FILES;
+    expect(scopeNotes(context(rest))).toEqual([]);
   });
 });

@@ -1,5 +1,6 @@
 // A small form engine for the wizards that open in a popup: a stack of screens, each a list of
 // notes, buttons, text inputs, choices and switches. Everything can be clicked; the keyboard works too.
+// The rows are a `Form`, which a larger view (the workflow designer) also uses for its own panel.
 import {
   BoxRenderable,
   bold,
@@ -7,9 +8,12 @@ import {
   dim,
   InputRenderable,
   InputRenderableEvents,
+  type KeyEvent,
+  type Renderable,
   RGBA,
   reverse,
   ScrollBoxRenderable,
+  TextareaRenderable,
   type TextRenderable,
 } from "@opentui/core";
 import { fit, moveCursor, type Tone } from "./model.ts";
@@ -30,7 +34,29 @@ export type Outcome =
   | { back: true }
   | { close: true }
   /** Ends the wizard and runs this dwa command in the same terminal (for `$EDITOR`). */
-  | { exec: string[] };
+  | { exec: string[] }
+  /**
+   * Hands the whole popup to something that is not a list of rows. The wizard's screens stay
+   * where they are and what the view resolves with is carried out as if a button had returned it,
+   * with one difference: a screen a view goes `to` belongs to that view. Going back from it, or
+   * leaving it with esc, shows the view again, and a view started from it takes its place. A
+   * view that is done resolves with `home`.
+   */
+  | { view: View }
+  /**
+   * Ends a view for good: its screens go, and this screen is shown in place of the one the
+   * view was opened from (a list that the view may have changed).
+   */
+  | { home: Screen };
+
+/** A full-screen part of a wizard that draws itself and takes the keys until it resolves. */
+export type View = (host: ViewHost) => Promise<Outcome>;
+
+export interface ViewHost {
+  renderer: CliRenderer;
+  /** Where the view adds what it draws; it removes it again before it resolves. */
+  parent: Renderable;
+}
 
 export type Row =
   | { kind: "heading"; text: string }
@@ -65,6 +91,16 @@ export type Row =
       more?: (values: Values) => Outcome | Promise<Outcome>;
     }
   | { kind: "input"; key: string; label: string; placeholder?: string }
+  | {
+      /** Text of several lines, typed in place. Tab leaves it; enter is a new line. */
+      kind: "text";
+      key: string;
+      label: string;
+      /** Lines of the field. */
+      height: number;
+      /** Pieces of text put in at the cursor by a click, or by alt and the piece's number. */
+      inserts?: { label: string; text: string }[];
+    }
   | { kind: "choice"; key: string; label: string; options: { value: string; label: string }[] };
 
 export interface Screen {
@@ -79,65 +115,74 @@ interface RowNode {
   box: BoxRenderable;
   text?: TextRenderable;
   input?: InputRenderable;
+  area?: TextareaRenderable;
   chips?: TextRenderable[];
   /** The hint of a check row, which is clicked on its own. */
   aside?: TextRenderable;
 }
 
-const FOCUSABLE = new Set(["button", "input", "choice", "check"]);
+const FOCUSABLE = new Set(["button", "input", "text", "choice", "check"]);
 
 export const ON = "on";
 export const OFF = "off";
 
-/**
- * Shows `first` and runs until the user closes the wizard. Resolves with the dwa command to run
- * afterwards, or null when there is none.
- */
-export function createWizard(renderer: CliRenderer, first: Screen): Promise<string[] | null> {
-  const root = new BoxRenderable(renderer, {
-    id: "wizard-root",
-    flexDirection: "column",
-    width: "100%",
-    height: "100%",
-    paddingX: 2,
-    paddingY: 1,
-  });
-  const title = createText(renderer, "wizard-title", 2);
+export interface FormOptions {
+  /** Start of the ids of what the form draws; two forms on one screen need different ones. */
+  id: string;
+  /** Columns a row may use. */
+  width: () => number;
+  /** After every repaint: what a footer shows, a message or null and the keys that work now. */
+  status: (message: { text: string; tone: Tone } | null, hints: string) => void;
+  /** What a button returned. */
+  outcome: (outcome: Outcome) => void;
+  /** A value was typed, switched or chosen. */
+  changed?: (values: Values) => void;
+}
+
+/** The rows of one screen, with the keyboard and the mouse on them. */
+export interface Form {
+  /** The scrolling list the rows are in, to be added where they should show. */
+  list: ScrollBoxRenderable;
+  /** Builds a screen's rows. `keep` is for a redraw: values, position and focus stay. */
+  show(screen: Screen, keep?: boolean): void;
+  values(): Values;
+  /** Gives the form a key. False when the key is not one of the form's. */
+  key(key: KeyEvent): boolean;
+  /** Without the keyboard no row is marked and no field takes typing. */
+  setActive(active: boolean): void;
+  /** Shows a message where the form's status goes, until the next action. */
+  say(text: string, tone: Tone): void;
+  busy(): boolean;
+  destroy(): void;
+}
+
+export function createForm(renderer: CliRenderer, options: FormOptions): Form {
   const list = new ScrollBoxRenderable(renderer, {
-    id: "wizard-list",
+    id: `${options.id}-list`,
     flexGrow: 1,
     flexShrink: 1,
     verticalScrollbarOptions: { visible: false },
     horizontalScrollbarOptions: { visible: false },
   });
-  const footer = createText(renderer, "wizard-footer", 2);
-  root.add(title);
-  root.add(list);
-  root.add(footer);
-  renderer.root.add(root);
 
-  const stack: Screen[] = [];
   let nodes: RowNode[] = [];
   let values: Values = {};
   /** Index into `nodes` of the row that has the keyboard. */
   let focus = -1;
+  let active = true;
   let busy = false;
+  /** Counts the screens built, so every row ever drawn has its own id. */
+  let built = 0;
   let message: { text: string; tone: Tone } | null = null;
-  let finish: (exec: string[] | null) => void = () => undefined;
-  const done = new Promise<string[] | null>((resolve) => {
-    finish = resolve;
-  });
 
   const focusable = () =>
     nodes.flatMap((node, index) => (FOCUSABLE.has(node.row.kind) ? [index] : []));
 
   const paint = () => {
-    const screen = stack.at(-1);
-    title.content = styled([[bold(screen?.title ?? "")]]);
-    const width = Math.max(10, renderer.width - 4);
+    const width = Math.max(10, options.width());
     nodes.forEach((node, index) => {
       const { row } = node;
-      const here = index === focus;
+      const here = active && index === focus;
       const mark = here ? accent("▌ ") : "  ";
       if (row.kind === "button" && node.text) {
         // The row with the keyboard is shown in inverse video, which contrasts on any theme;
@@ -170,8 +215,14 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
             return [row.tone ? tone(row.tone, line) : dim(line)];
           }),
         );
-      } else if (row.kind === "input" && node.text) {
+      } else if ((row.kind === "input" || row.kind === "text") && node.text) {
         node.text.content = styled([[mark, " ", here ? bold(row.label) : row.label]]);
+        if (row.kind === "text") {
+          row.inserts?.forEach((insert, at) => {
+            const chip = node.chips?.[at];
+            if (chip) chip.content = styled([[dim(` ${at + 1} ${insert.label} `)]]);
+          });
+        }
       } else if (row.kind === "choice" && node.text) {
         node.text.content = styled([[mark, " ", here ? bold(row.label) : row.label]]);
         row.options.forEach((option, at) => {
@@ -184,20 +235,20 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
           ]);
         });
       }
-      if (node.input) {
-        if (here && !busy) node.input.focus();
-        else node.input.blur();
+      const field = node.input ?? node.area;
+      if (field) {
+        if (here && !busy) field.focus();
+        else field.blur();
       }
     });
     const focused = nodes[focus]?.row;
     const hints =
       focused?.kind === "check"
         ? `click, or ↑↓ · space switches${focused.more ? " · → shows more" : ""} · esc goes back`
-        : "click, or ↑↓ and enter · ←→ changes a choice · esc goes back";
-    footer.content = styled([
-      message ? [tone(message.tone, fit(message.text, width))] : [],
-      [dim(fit(hints, width))],
-    ]);
+        : focused?.kind === "text"
+          ? `type here · tab moves on${focused.inserts?.length ? " · alt and a number puts a piece in" : ""} · esc goes back`
+          : "click, or ↑↓ and enter · ←→ changes a choice · esc goes back";
+    options.status(message, hints);
   };
 
   const setFocus = (index: number) => {
@@ -223,12 +274,6 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
     if (next !== undefined) setFocus(next);
   };
 
-  const leave = () => {
-    if (stack.length <= 1) return finish(null);
-    stack.pop();
-    show();
-  };
-
   const activate = async (index: number) => {
     const row = nodes[index]?.row;
     if (busy) return;
@@ -241,17 +286,7 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
       const outcome = await run({ ...values });
       message = null;
       busy = false;
-      if ("to" in outcome) {
-        stack.push(outcome.to);
-        show();
-      } else if ("replace" in outcome) {
-        stack[stack.length - 1] = outcome.replace;
-        show(true);
-      } else if ("back" in outcome) {
-        leave();
-      } else {
-        finish("exec" in outcome ? outcome.exec : null);
-      }
+      options.outcome(outcome);
     } catch (error) {
       busy = false;
       message = { text: (error as Error).message, tone: "bad" };
@@ -262,12 +297,15 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
   const toggle = (index: number) => {
     const row = nodes[index]?.row;
     if (busy || row?.kind !== "check") return;
-    if (!row.fixed) values[row.key] = values[row.key] === ON ? OFF : ON;
+    if (!row.fixed) {
+      values[row.key] = values[row.key] === ON ? OFF : ON;
+      options.changed?.({ ...values });
+    }
     clickFocus(index);
   };
 
   const build = (row: Row, index: number): RowNode => {
-    const id = `wizard-row-${stack.length}-${index}`;
+    const id = `${options.id}-row-${built}-${index}`;
     if (row.kind === "heading" || row.kind === "note") {
       const lines = row.text.split("\n");
       const box = new BoxRenderable(renderer, { id, height: lines.length, flexShrink: 0 });
@@ -306,6 +344,65 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
       box.add(aside);
       return { row, box, text, aside };
     }
+    if (row.kind === "text") {
+      const inserts = row.inserts ?? [];
+      const box = new BoxRenderable(renderer, {
+        id,
+        // The label, the frame around the lines, and a line of pieces to put in.
+        height: 1 + row.height + 2 + (inserts.length > 0 ? 1 : 0),
+        flexShrink: 0,
+        flexDirection: "column",
+        onMouseDown: () => clickFocus(index),
+      });
+      const text = createText(renderer, `${id}-text`, 1);
+      box.add(text);
+      const frame = new BoxRenderable(renderer, {
+        id: `${id}-frame`,
+        height: row.height + 2,
+        marginLeft: 3,
+        paddingX: 1,
+        border: true,
+        borderStyle: "rounded",
+        borderColor: RGBA.defaultForeground(),
+        focusedBorderColor: RGBA.defaultForeground(),
+      });
+      const area = new TextareaRenderable(renderer, {
+        id: `${id}-area`,
+        width: "100%",
+        height: row.height,
+        initialValue: values[row.key] ?? "",
+        wrapMode: "word",
+        textColor: RGBA.defaultForeground(),
+        focusedTextColor: RGBA.defaultForeground(),
+        backgroundColor: RGBA.defaultBackground(),
+        focusedBackgroundColor: RGBA.defaultBackground(),
+      });
+      area.onContentChange = () => {
+        if (values[row.key] === area.plainText) return;
+        values[row.key] = area.plainText;
+        options.changed?.({ ...values });
+        paint();
+      };
+      frame.add(area);
+      box.add(frame);
+      const line = new BoxRenderable(renderer, {
+        id: `${id}-chips`,
+        height: 1,
+        flexDirection: "row",
+        marginLeft: 3,
+      });
+      const chips = inserts.map((insert, at) => {
+        const chip = createText(renderer, `${id}-chip-${at}`, 1);
+        chip.onMouseDown = () => {
+          area.insertText(insert.text);
+          clickFocus(index);
+        };
+        line.add(chip);
+        return chip;
+      });
+      if (inserts.length > 0) box.add(line);
+      return { row, box, text, area, chips };
+    }
     const box = new BoxRenderable(renderer, {
       id,
       // An input is its label and a three-row frame; a choice its label, the chips and a gap.
@@ -343,6 +440,7 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
       });
       input.on(InputRenderableEvents.INPUT, () => {
         values[row.key] = input.value;
+        options.changed?.({ ...values });
         // Notes that follow the form follow the typing too.
         paint();
       });
@@ -360,6 +458,7 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
       const chip = createText(renderer, `${id}-chip-${at}`, 1);
       chip.onMouseDown = () => {
         values[row.key] = option.value;
+        options.changed?.({ ...values });
         clickFocus(index);
       };
       line.add(chip);
@@ -369,14 +468,12 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
     return { row, box, text, chips };
   };
 
-  /** Builds the top screen. `keep` is for a redraw: values, position and focus stay. */
-  function show(keep = false): void {
-    const screen = stack.at(-1);
-    if (!screen) return;
+  function show(screen: Screen, keep = false): void {
     for (const node of nodes) {
       list.remove(node.box);
       node.box.destroyRecursively();
     }
+    built += 1;
     const scrolled = list.scrollTop;
     // On a redraw the form keeps what it holds; the new screen's values are changes to that.
     values = keep ? { ...values, ...screen.values } : { ...screen.values };
@@ -384,7 +481,7 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
       if (row.kind === "choice" && values[row.key] === undefined) {
         values[row.key] = row.options[0]?.value ?? "";
       }
-      if (row.kind === "input") values[row.key] ??= "";
+      if (row.kind === "input" || row.kind === "text") values[row.key] ??= "";
       if (row.kind === "check") values[row.key] ??= OFF;
     }
     nodes = screen.rows.map(build);
@@ -401,31 +498,195 @@ export function createWizard(renderer: CliRenderer, first: Screen): Promise<stri
     paint();
   }
 
-  renderer.keyInput.on("keypress", (key) => {
-    if (busy) return;
-    if (key.name === "escape") return leave();
-    if (key.name === "tab") return move(key.shift ? -1 : 1);
-    if (key.name === "down") return move(1);
-    if (key.name === "up") return move(-1);
+  const key = (event: KeyEvent): boolean => {
+    if (busy) return true;
     const row = nodes[focus]?.row;
-    if (row?.kind === "choice" && (key.name === "left" || key.name === "right")) {
+    if (event.name === "tab") {
+      // The field itself must not get the tab it is left with.
+      if (row?.kind === "text") event.preventDefault();
+      move(event.shift ? -1 : 1);
+      return true;
+    }
+    if (row?.kind === "text") {
+      // Every other key is typing, except alt and a number, which puts a piece in.
+      const insert = event.meta ? row.inserts?.[Number(event.name) - 1] : undefined;
+      if (!insert) return false;
+      event.preventDefault();
+      nodes[focus]?.area?.insertText(insert.text);
+      return true;
+    }
+    if (event.name === "down") {
+      move(1);
+      return true;
+    }
+    if (event.name === "up") {
+      move(-1);
+      return true;
+    }
+    if (row?.kind === "choice" && (event.name === "left" || event.name === "right")) {
       const at = row.options.findIndex((option) => option.value === values[row.key]);
-      const next = row.options[moveCursor(at, key.name === "left" ? -1 : 1, row.options.length)];
+      const next = row.options[moveCursor(at, event.name === "left" ? -1 : 1, row.options.length)];
       if (next) values[row.key] = next.value;
-      return paint();
+      options.changed?.({ ...values });
+      paint();
+      return true;
     }
     if (row?.kind === "check") {
-      if (key.name === "space") return toggle(focus);
-      if (key.name === "right" && row.more) return void activate(focus);
+      if (event.name === "space") {
+        toggle(focus);
+        return true;
+      }
+      if (event.name === "right" && row.more) {
+        void activate(focus);
+        return true;
+      }
     }
-    if (key.name === "return" || key.name === "enter" || key.name === "linefeed") {
-      if (row?.kind === "button") return void activate(focus);
-      if (row?.kind === "check") return toggle(focus);
-      return move(1);
+    if (event.name === "return" || event.name === "enter" || event.name === "linefeed") {
+      if (row?.kind === "button") void activate(focus);
+      else if (row?.kind === "check") toggle(focus);
+      else move(1);
+      return true;
     }
+    return false;
+  };
+
+  return {
+    list,
+    show,
+    values: () => ({ ...values }),
+    key,
+    setActive: (next) => {
+      active = next;
+      paint();
+    },
+    say: (text, kind) => {
+      message = { text, tone: kind };
+      paint();
+    },
+    busy: () => busy,
+    destroy: () => {
+      for (const node of nodes) node.box.destroyRecursively();
+      nodes = [];
+      list.destroyRecursively();
+    },
+  };
+}
+
+/**
+ * Shows `first` and runs until the user closes the wizard. Resolves with the dwa command to run
+ * afterwards, or null when there is none. With `then`, that is carried out at once as if a
+ * button of `first` had returned it: a screen or a view to open straight away.
+ */
+export function createWizard(
+  renderer: CliRenderer,
+  first: Screen,
+  then?: Outcome,
+): Promise<string[] | null> {
+  const root = new BoxRenderable(renderer, {
+    id: "wizard-root",
+    flexDirection: "column",
+    width: "100%",
+    height: "100%",
+    paddingX: 2,
+    paddingY: 1,
+  });
+  const title = createText(renderer, "wizard-title", 2);
+  const footer = createText(renderer, "wizard-footer", 2);
+  /** `from` is the view a screen was opened by, which going back returns to. */
+  const stack: { screen: Screen; from?: View }[] = [];
+  /** A view has the popup: the screens are hidden and take no keys. */
+  let viewing = false;
+  let finish: (exec: string[] | null) => void = () => undefined;
+  const done = new Promise<string[] | null>((resolve) => {
+    finish = resolve;
+  });
+  const width = () => renderer.width - 4;
+
+  const form = createForm(renderer, {
+    id: "wizard",
+    width,
+    status: (message, hints) => {
+      footer.content = styled([
+        message ? [tone(message.tone, fit(message.text, width()))] : [],
+        [dim(fit(hints, width()))],
+      ]);
+    },
+    outcome: (outcome) => carryOut(outcome, stack.at(-1)?.from, false),
+  });
+  root.add(title);
+  root.add(form.list);
+  root.add(footer);
+  renderer.root.add(root);
+
+  const show = (keep = false) => {
+    const screen = stack.at(-1)?.screen;
+    if (!screen) return;
+    title.content = styled([[bold(screen.title)]]);
+    form.show(screen, keep);
+  };
+
+  const leave = () => {
+    const from = stack.at(-1)?.from;
+    if (stack.length <= 1 && !from) return finish(null);
+    stack.pop();
+    show();
+    if (from) void runView(from);
+  };
+
+  const runView = async (view: View) => {
+    viewing = true;
+    root.visible = false;
+    form.setActive(false);
+    let outcome: Outcome | null = null;
+    let failure: Error | null = null;
+    try {
+      outcome = await view({ renderer, parent: renderer.root });
+    } catch (error) {
+      failure = error as Error;
+    }
+    viewing = false;
+    root.visible = true;
+    form.setActive(true);
+    if (outcome) carryOut(outcome, view, true);
+    else form.say(failure?.message ?? "That did not work.", "bad");
+  };
+
+  /**
+   * `owner` is the view the outcome has to do with: the one that resolved with it (`fromView`),
+   * or the one that opened the screen whose button returned it.
+   */
+  function carryOut(outcome: Outcome, owner: View | undefined, fromView: boolean): void {
+    if ("to" in outcome) {
+      stack.push({ screen: outcome.to, from: owner });
+      show();
+    } else if ("replace" in outcome) {
+      // A view that is done leaves nothing of its own behind.
+      stack[stack.length - 1] = { screen: outcome.replace, from: fromView ? undefined : owner };
+      show(true);
+    } else if ("back" in outcome) {
+      leave();
+    } else if ("home" in outcome) {
+      while (stack.length > 1 && stack.at(-1)?.from) stack.pop();
+      stack[stack.length - 1] = { screen: outcome.home };
+      show();
+    } else if ("view" in outcome) {
+      // A screen that belongs to a view makes way for the view that follows it.
+      if (owner && !fromView) stack.pop();
+      show();
+      void runView(outcome.view);
+    } else {
+      finish("exec" in outcome ? outcome.exec : null);
+    }
+  }
+
+  renderer.keyInput.on("keypress", (key) => {
+    if (viewing || form.busy()) return;
+    if (key.name === "escape") return leave();
+    form.key(key);
   });
 
-  stack.push(first);
+  stack.push({ screen: first });
   show();
+  if (then) carryOut(then, undefined, false);
   return done;
 }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { homedir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildClaudeLaunch,
@@ -7,10 +8,12 @@ import {
   buildClaudeSettings,
 } from "../src/providers/claude/launch.ts";
 import { sessionPrompt, workspacePrompt } from "../src/providers/claude/prompt.ts";
+import { layerCapabilities } from "../src/shared/capabilities.ts";
 import {
   allProfiles,
   ConfigError,
   EMPTY_CONFIG,
+  loadConfig,
   mergeConfig,
   parseConfig,
   resolveProfile,
@@ -371,7 +374,7 @@ describe("tmux helpers", () => {
     expect(conf).toContain("/my proj");
     expect(conf).toContain("bind s run-shell -b ");
     expect(conf).toContain(
-      "bind w display-popup -E -w 70% -h 80% -T ' Workflows ' 'DWA_PROJECT='\\''/my proj'\\'' '\\''/bin/bun'\\'' '\\''/dwa/cli.ts'\\'' wizard workflows'",
+      "bind w display-popup -E -w 90% -h 90% -T ' Workflows ' 'DWA_PROJECT='\\''/my proj'\\'' '\\''/bin/bun'\\'' '\\''/dwa/cli.ts'\\'' wizard workflows'",
     );
     expect(conf).toContain("bind -n M-a display-popup -E -w 70% -h 80% -T ' New agent ' ");
     expect(conf).toContain("bind t display-popup -E -w 70% -h 90% -T ' Agent tools ' ");
@@ -472,5 +475,44 @@ describe("model and effort settings", () => {
     const mainProject = parseConfig('[main]\neffort = "high"', "project");
     expect(mergeConfig(mainUser, mainProject).main).toEqual({ model: "opus", effort: "high" });
     expect(() => parseConfig('[main]\nprofile = "x"', "cfg")).toThrow(/main/);
+  });
+});
+
+describe("personal defaults", () => {
+  const USER = '[defaults]\nmodel = "haiku"\neffort = "low"\ntools = ["Read"]\n';
+  const PROJECT = '[defaults]\nmodel = "sonnet"\ndeny_tools = ["WebFetch"]\n';
+
+  test("the merged defaults are what they were, and the personal ones are also kept apart", () => {
+    const user = parseConfig(USER, "user");
+    const project = parseConfig(PROJECT, "project");
+    const merged = mergeConfig(user, project);
+    expect(merged.defaults).toEqual(layerCapabilities(user.defaults, project.defaults));
+    expect(merged.defaults).toEqual({ model: "sonnet", effort: "low", deny_tools: ["WebFetch"] });
+    expect(merged.userDefaults).toEqual({ model: "haiku", effort: "low", tools: ["Read"] });
+    expect(mergeConfig(EMPTY_CONFIG, project).userDefaults).toEqual({});
+    // One file's own text never says which place it is.
+    expect(project.userDefaults).toBeUndefined();
+  });
+
+  test("loadConfig reads both files from their places", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dwa-config-"));
+    try {
+      // A personal folder of its own: the real one is never read.
+      const env = { XDG_CONFIG_HOME: join(dir, "home") };
+      mkdirSync(join(dir, "home", "dwa"), { recursive: true });
+      mkdirSync(join(dir, ".dwa"));
+      writeFileSync(join(dir, ".dwa", "config.toml"), PROJECT);
+      expect((await loadConfig(dir, env)).userDefaults).toEqual({});
+      writeFileSync(join(dir, "home", "dwa", "config.toml"), USER);
+      const config = await loadConfig(dir, env);
+      expect(config.userDefaults).toEqual({ model: "haiku", effort: "low", tools: ["Read"] });
+      expect(config.defaults).toEqual({
+        model: "sonnet",
+        effort: "low",
+        deny_tools: ["WebFetch"],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

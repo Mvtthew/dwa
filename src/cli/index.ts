@@ -21,7 +21,7 @@ Workspace
   attach                                Attach to the running workspace
   palette                               Menu of workspace actions (prefix key, then p)
   shell                                 Show or hide a plain shell under the main session
-  wizard <workflows|agent|tools|roles|menu> [session or role]
+  wizard <workflows|agent|tools|roles|design|menu> [session, role or workflow]
                                         The forms behind the status pane's buttons
   down                                  Stop every session and the workspace
 
@@ -39,7 +39,7 @@ Agents
   agent send <name> <text>              Send a message to an agent
   agent tools <name|main> [--json]      What a session can use: tools, MCP servers, rules
   agent tools <name|main> --block <x>... --unblock <x>... [--scope agent|role|file]
-              [--file <role>|defaults] [--when now|turn-end]
+              [--file <role>|defaults|personal-defaults] [--when now|turn-end]
                                         Switch tools, MCP servers (mcp__name) or rules off and on:
                                         for this session, for its role until the workspace stops,
                                         or in a file
@@ -61,7 +61,12 @@ Talking to agents
   inbox                                 Show open questions and messages agents sent to you
 
 Workflows
-  workflow list                         Workflows in .dwa/workflows and their runs
+  workflow list                         The project's and your personal workflows, and the runs
+  workflow new <name> [--personal]      A new workflow file to start from
+  workflow show <name>                  The steps of a workflow as a picture
+  workflow design [name]                Open the workflow designer (also: prefix g)
+  workflow duplicate|rename|move|delete <name> ...   Change the files (see: workflow show)
+  workflow history|diff|switch <name>   Versions of a workflow file and the way back to one
   workflow run <name> [input]           Start a run; each step gets its own agent
   workflow status [run]                 Steps and results of a run (the latest when run bare)
   workflow cancel <run>                 Stop a run and its agents
@@ -289,6 +294,15 @@ async function main(argv: string[]): Promise<number> {
     case "inbox":
       return (await import("./talk.ts")).talkCommand(projectRoot, command, rest);
     case "workflow":
+      if (rest[0] === "design") {
+        // Over the workspace when it is running, otherwise in this terminal.
+        const subject = rest[1];
+        const shown = await call(projectRoot, "POST", "/popup", { kind: "design", subject })
+          .then(() => true)
+          .catch(() => false);
+        if (shown) return 0;
+        return (await import("../ui/main.ts")).runWizard("design", projectRoot, selfArgv, subject);
+      }
       return (await import("./workflow.ts")).workflowCommand(projectRoot, rest);
     case "role":
       return (await import("./roles.ts")).roleCommand(projectRoot, rest);
@@ -315,10 +329,10 @@ async function main(argv: string[]): Promise<number> {
     }
     case "wizard": {
       const kind = rest[0];
-      const kinds = ["workflows", "agent", "tools", "roles", "menu"] as const;
+      const kinds = ["workflows", "agent", "tools", "roles", "design", "menu"] as const;
       const known = kinds.find((entry) => entry === kind);
       if (!known) {
-        console.error(`Usage: ${APP_NAME} wizard <${kinds.join("|")}> [session or role]`);
+        console.error(`Usage: ${APP_NAME} wizard <${kinds.join("|")}> [session, role or workflow]`);
         return 2;
       }
       return (await import("../ui/main.ts")).runWizard(known, projectRoot, selfArgv, rest[1]);

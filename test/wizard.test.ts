@@ -125,7 +125,7 @@ describe("the workflows wizard", () => {
     const texts = (await workflowsScreen(api)).rows.map((row) =>
       row.kind === "button" ? row.label : textOf(row),
     );
-    expect(texts).toContain("No workflows defined. Add one as .dwa/workflows/<name>.toml.");
+    expect(texts).toContain("No workflows defined. Add one with: dwa workflow new <name>");
     expect(texts).toContain("No runs yet.");
   });
 

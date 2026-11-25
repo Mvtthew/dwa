@@ -24,6 +24,7 @@ import {
   userRolesDir,
   userSkillsDir,
 } from "./paths.ts";
+import { type ItemEntry, type ItemKind, type ItemRef, listItems, type Scope } from "./scope.ts";
 
 export { EFFORT_LEVELS, type Effort };
 
@@ -77,13 +78,16 @@ export const diskFiles: RoleFiles = {
   which: (command) => Bun.which(command),
 };
 
+/** Origin (see `Origins`) of a value from `[defaults]` in the personal config. */
+export const PERSONAL_DEFAULTS = "personal defaults";
+
 export interface RoleContext {
   projectRoot: string;
   env?: Env;
   files?: RoleFiles;
 }
 
-export type RoleSource = "project" | "user";
+export type RoleSource = Scope;
 
 export interface RoleEntry {
   name: string;
@@ -102,19 +106,35 @@ function roleDirs(ctx: RoleContext): [RoleSource, string][] {
   ];
 }
 
+/** Role files as a kind of file kept in the project and in the personal folder. */
+export const roleKind: ItemKind = {
+  id: "roles",
+  label: "role",
+  dir: (source, ctx) => (source === "user" ? userRolesDir(ctx.env) : rolesDir(ctx.projectRoot)),
+  valid: (name) => NAME_PATTERN.test(name),
+};
+
+/**
+ * Every role file in both places, for the editors. A personal role the project has one of the
+ * same name for is `hidden`: no session here runs as it.
+ */
+export function listAllRoles(ctx: RoleContext): ItemEntry[] {
+  return listItems(roleKind, { ...ctx, files: ctx.files ?? diskFiles });
+}
+
 /** Every role a session in this project can run as. A project role hides a personal one of the same name. */
 export function listRoles(ctx: RoleContext): RoleEntry[] {
-  const files = ctx.files ?? diskFiles;
-  const found = new Map<string, RoleEntry>();
-  for (const [source, dir] of roleDirs(ctx)) {
-    for (const file of files.list(dir)) {
-      if (!file.endsWith(".toml")) continue;
-      const name = file.slice(0, -".toml".length);
-      if (!NAME_PATTERN.test(name) || found.has(name)) continue;
-      found.set(name, { name, source, path: join(dir, file) });
-    }
-  }
-  return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return listAllRoles(ctx)
+    .filter((entry) => !entry.hidden)
+    .map(({ name, source, path }) => ({ name, source, path }));
+}
+
+/** Reads the role file in one place, hidden or not. Null when that place has none of the name. */
+export function findRoleIn(ref: ItemRef, ctx: RoleContext): LoadedRole | null {
+  if (!NAME_PATTERN.test(ref.name)) return null;
+  const path = join(roleKind.dir(ref.source, ctx), `${ref.name}.toml`);
+  const text = (ctx.files ?? diskFiles).read(path);
+  return text === null ? null : { ...ref, path, role: parseRole(text, path) };
 }
 
 /** Reads a role: the project's file, otherwise the personal one. Null when there is neither. */
@@ -383,7 +403,14 @@ export function resolveLayers(request: SessionRequest, ctx: RoleContext): Layers
     }
     caps = next;
   };
+  // `config.defaults` already has the personal values under the project's; putting the
+  // personal ones first only tells the two files apart in the origins.
+  if (config.userDefaults) put(pickCapabilities(config.userDefaults), PERSONAL_DEFAULTS);
   put(pickCapabilities(config.defaults), "defaults");
+  // A value both files set is the project's: that file decides it here.
+  for (const key of CAPABILITY_KEYS) {
+    if (config.projectDefaults?.[key] !== undefined && origins[key]) origins[key] = "defaults";
+  }
   for (const loaded of chain) put(layerCapabilities(caps, loaded.role), `role ${loaded.name}`);
   put(layerCapabilities(caps, pickCapabilities(request.roleRun ?? {})), "run");
   put(
@@ -525,4 +552,38 @@ export function checkSessions(config: Config, ctx: RoleContext): string[] {
     attempt(`Agent "${agent.name}"`, { config, role: agent.role, overrides: agent });
   }
   return [...new Set(problems)];
+}
+
+/** What a project role that starts from a personal one means for the others on the project. */
+export function personalParentNote(name: string, parent: string): string {
+  return (
+    `Role "${name}" is in the project but starts from your personal role "${parent}", ` +
+    "which others who use this project do not have."
+  );
+}
+
+/**
+ * Things about the two places that are worth knowing and break nothing here: a personal role
+ * the project hides, and a project role that depends on a personal one.
+ */
+export function scopeNotes(ctx: RoleContext): string[] {
+  const notes: string[] = [];
+  for (const entry of listAllRoles(ctx)) {
+    if (entry.hidden) {
+      notes.push(
+        `Your personal role "${entry.name}" is not used here: the project has a role of the same name.`,
+      );
+      continue;
+    }
+    if (entry.source !== "project") continue;
+    try {
+      const parent = findRoleIn(entry, ctx)?.role.extends;
+      if (parent && findRole(parent, ctx)?.source === "user") {
+        notes.push(personalParentNote(entry.name, parent));
+      }
+    } catch {
+      // A role that does not parse is a problem `checkSessions` reports.
+    }
+  }
+  return notes;
 }

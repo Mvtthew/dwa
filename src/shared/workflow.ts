@@ -1,5 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 import {
   CAPABILITY_KEYS,
@@ -8,9 +7,12 @@ import {
   pickCapabilities,
   refuseBothToolLists,
 } from "./capabilities.ts";
-import { workflowsDir } from "./paths.ts";
+import { userWorkflowsDir, workflowsDir } from "./paths.ts";
 import type { WorkflowRunInfo, WorkflowStepState } from "./protocol.ts";
+import { type ItemEntry, type ItemKind, listItems, type ScopeContext, winner } from "./scope.ts";
 import { tomlString } from "./toml.ts";
+
+type Env = Record<string, string | undefined>;
 
 /** Step ids become agent names and workflow names become file names, so both stay simple. */
 const NAME = /^[A-Za-z0-9][\w-]{0,39}$/;
@@ -61,6 +63,8 @@ export interface WorkflowDefinition {
 /** A workflow file as listed for the user; `error` is set when it does not validate. */
 export interface WorkflowSummary {
   name: string;
+  /** Kept in the personal folder, not in the project. */
+  personal: boolean;
   description: string | null;
   steps: string[];
   error: string | null;
@@ -94,52 +98,107 @@ function ancestors(steps: Record<string, WorkflowStep>, source: string): Map<str
   return done;
 }
 
-export function parseWorkflow(text: string, name: string, source = name): WorkflowDefinition {
+/** For every step, the steps it depends on directly or through others. Throws on a cycle. */
+export function ancestorsOf(definition: WorkflowDefinition): Map<string, Set<string>> {
+  return ancestors(definition.steps, definition.name);
+}
+
+/** One thing wrong with a workflow text, with the step and key it is about when it has them. */
+export interface WorkflowProblem {
+  message: string;
+  step?: string;
+  key?: string;
+}
+
+/** A workflow text that does not validate; `problems` has everything found, not only the first. */
+export class WorkflowError extends ConfigError {
+  constructor(
+    message: string,
+    readonly problems: WorkflowProblem[],
+  ) {
+    super(message);
+  }
+}
+
+export interface WorkflowCheck {
+  /** The definition when nothing is wrong, otherwise null. */
+  definition: WorkflowDefinition | null;
+  /** In the order they are found; `parseWorkflow` reports the first. */
+  problems: WorkflowProblem[];
+  /** True when the text is not TOML or not shaped like a workflow at all, so the later checks did not run. */
+  shape: boolean;
+}
+
+/**
+ * Everything wrong with a workflow text. An editor shows all of it at the steps concerned;
+ * `parseWorkflow` is the same check that stops at the first problem.
+ */
+export function checkWorkflow(text: string, name: string): WorkflowCheck {
+  const problems: WorkflowProblem[] = [];
+  const failed = (shape = false): WorkflowCheck => ({ definition: null, problems, shape });
   let raw: unknown;
   try {
     raw = Bun.TOML.parse(text);
   } catch (error) {
-    throw new ConfigError(`${source}: invalid TOML: ${(error as Error).message}`);
+    problems.push({ message: `invalid TOML: ${(error as Error).message}` });
+    return failed(true);
   }
   const result = WorkflowSchema.safeParse(raw);
   if (!result.success) {
-    const issues = result.error.issues
-      .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
-      .join("; ");
-    throw new ConfigError(`${source}: ${issues}`);
+    for (const issue of result.error.issues) {
+      const [first, step, key] = issue.path;
+      problems.push({
+        message: `${issue.path.join(".") || "(root)"}: ${issue.message}`,
+        ...(first === "steps" && typeof step === "string" ? { step } : {}),
+        ...(first === "steps" && typeof key === "string" ? { key } : {}),
+      });
+    }
+    return failed(true);
   }
   const { steps, description } = result.data;
   const ids = Object.keys(steps);
-  if (ids.length === 0) throw new ConfigError(`${source}: a workflow needs at least one step`);
+  if (ids.length === 0) {
+    problems.push({ message: "a workflow needs at least one step" });
+    return failed();
+  }
 
   for (const [id, step] of Object.entries(steps)) {
     if (!NAME.test(id)) {
-      throw new ConfigError(
-        `${source}: step name "${id}" may only use letters, digits, - and _ (up to 40)`,
-      );
+      problems.push({
+        message: `step name "${id}" may only use letters, digits, - and _ (up to 40)`,
+        step: id,
+      });
+      continue;
     }
     for (const dependency of step.depends_on) {
       if (!(dependency in steps)) {
-        throw new ConfigError(`${source}: step "${id}" depends on unknown step "${dependency}"`);
+        problems.push({
+          message: `step "${id}" depends on unknown step "${dependency}"`,
+          step: id,
+          key: "depends_on",
+        });
       }
     }
   }
 
-  const before = ancestors(steps, source);
+  let before: Map<string, Set<string>>;
+  try {
+    before = ancestors(steps, "");
+  } catch (error) {
+    // Everything below asks what comes before what, which a cycle has no answer to.
+    problems.push({ message: (error as Error).message.slice(": ".length) });
+    return failed();
+  }
   for (const [id, step] of Object.entries(steps)) {
     for (const [, expression = ""] of step.prompt.matchAll(PLACEHOLDER)) {
       if (expression === "input") continue;
       const other = STEP_RESULT.exec(expression)?.[1];
-      if (!other) {
-        throw new ConfigError(
-          `${source}: step "${id}" uses unknown placeholder {{${expression}}}; use {{input}} or {{steps.<name>.result}}`,
-        );
-      }
-      if (!before.get(id)?.has(other)) {
-        throw new ConfigError(
-          `${source}: step "${id}" uses the result of "${other}" but does not depend on it`,
-        );
-      }
+      const message = !other
+        ? `step "${id}" uses unknown placeholder {{${expression}}}; use {{input}} or {{steps.<name>.result}}`
+        : !before.get(id)?.has(other)
+          ? `step "${id}" uses the result of "${other}" but does not depend on it`
+          : null;
+      if (message) problems.push({ message, step: id, key: "prompt" });
     }
   }
 
@@ -147,28 +206,53 @@ export function parseWorkflow(text: string, name: string, source = name): Workfl
     const target = step.reviews;
     if (target === undefined) {
       if (step.max_rounds !== undefined) {
-        throw new ConfigError(`${source}: step "${id}" sets max_rounds but reviews nothing`);
+        problems.push({
+          message: `step "${id}" sets max_rounds but reviews nothing`,
+          step: id,
+          key: "max_rounds",
+        });
       }
       continue;
     }
     if (!(target in steps)) {
-      throw new ConfigError(`${source}: step "${id}" reviews unknown step "${target}"`);
+      problems.push({
+        message: `step "${id}" reviews unknown step "${target}"`,
+        step: id,
+        key: "reviews",
+      });
+      continue;
     }
     if (!before.get(id)?.has(target)) {
-      throw new ConfigError(
-        `${source}: step "${id}" reviews "${target}" but does not depend on it`,
-      );
+      problems.push({
+        message: `step "${id}" reviews "${target}" but does not depend on it`,
+        step: id,
+        key: "reviews",
+      });
+      continue;
     }
     // Work that can be sent back must not be used by a step the review does not gate.
     for (const other of ids) {
       if (other === id || !before.get(other)?.has(target)) continue;
       if (before.get(id)?.has(other) || before.get(other)?.has(id)) continue;
-      throw new ConfigError(
-        `${source}: step "${other}" depends on "${target}", which "${id}" reviews; make "${other}" depend on "${id}", or "${id}" on "${other}"`,
-      );
+      problems.push({
+        message: `step "${other}" depends on "${target}", which "${id}" reviews; make "${other}" depend on "${id}", or "${id}" on "${other}"`,
+        step: other,
+        key: "depends_on",
+      });
     }
   }
-  return { name, description, steps };
+  if (problems.length > 0) return failed();
+  return { definition: { name, description, steps }, problems, shape: false };
+}
+
+export function parseWorkflow(text: string, name: string, source = name): WorkflowDefinition {
+  const { definition, problems, shape } = checkWorkflow(text, name);
+  if (definition) return definition;
+  // A text of the wrong shape is reported whole; anything else by the first thing wrong.
+  const message = shape
+    ? problems.map((problem) => problem.message).join("; ")
+    : (problems[0]?.message ?? "");
+  throw new WorkflowError(`${source}: ${message}`, problems);
 }
 
 /**
@@ -242,45 +326,70 @@ export function formatWorkflow(definition: WorkflowDefinition, header: string[] 
   return lines.join("\n");
 }
 
-function workflowPath(projectRoot: string, name: string): string {
-  return join(workflowsDir(projectRoot), `${name}.toml`);
+/** Workflow files as a kind of file kept in the project and in the personal folder. */
+export const workflowKind: ItemKind = {
+  id: "workflows",
+  label: "workflow",
+  dir: (source, ctx) =>
+    source === "user" ? userWorkflowsDir(ctx.env) : workflowsDir(ctx.projectRoot),
+  valid: (name) => NAME.test(name),
+};
+
+/** True for a name a workflow file or a step may have. */
+export function validWorkflowName(name: string): boolean {
+  return NAME.test(name);
 }
 
-/** Reads and validates `.dwa/workflows/<name>.toml`. */
-export function loadWorkflow(projectRoot: string, name: string): WorkflowDefinition {
-  const names = () =>
-    listWorkflows(projectRoot)
-      .map((workflow) => workflow.name)
-      .join(", ") || "none defined";
-  if (!NAME.test(name)) throw new ConfigError(`Unknown workflow "${name}" (available: ${names()})`);
-  const path = workflowPath(projectRoot, name);
-  if (!existsSync(path)) {
-    throw new ConfigError(`Unknown workflow "${name}" (available: ${names()})`);
+/**
+ * Every workflow file in both places, for the editors. A personal one the project has a
+ * workflow of the same name for is `hidden`: a run of that name uses the project's.
+ */
+export function listAllWorkflows(ctx: ScopeContext): ItemEntry[] {
+  return listItems(workflowKind, ctx);
+}
+
+/** The file a run of this name uses: the project's, otherwise the personal one. */
+export function findWorkflow(name: string, ctx: ScopeContext): ItemEntry | null {
+  return NAME.test(name) ? winner(workflowKind, name, ctx) : null;
+}
+
+/** Reads and validates the workflow a run of this name uses. */
+export function loadWorkflow(projectRoot: string, name: string, env?: Env): WorkflowDefinition {
+  const entry = findWorkflow(name, { projectRoot, env });
+  if (!entry) {
+    const names =
+      listWorkflows(projectRoot, env)
+        .map((workflow) => workflow.name)
+        .join(", ") || "none defined";
+    throw new ConfigError(`Unknown workflow "${name}" (available: ${names})`);
   }
-  return parseWorkflow(readFileSync(path, "utf8"), name, path);
+  return parseWorkflow(readFileSync(entry.path, "utf8"), name, entry.path);
 }
 
-/** Every workflow file of the project, by name. A broken file is listed with its error. */
-export function listWorkflows(projectRoot: string): WorkflowSummary[] {
-  const dir = workflowsDir(projectRoot);
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((file) => file.endsWith(".toml") && NAME.test(file.slice(0, -5)))
-    .sort()
-    .map((file) => {
-      const name = file.slice(0, -5);
-      try {
-        const workflow = parseWorkflow(readFileSync(join(dir, file), "utf8"), name, file);
-        return {
-          name,
-          description: workflow.description ?? null,
-          steps: Object.keys(workflow.steps),
-          error: null,
-        };
-      } catch (error) {
-        return { name, description: null, steps: [], error: (error as Error).message };
-      }
-    });
+/** One workflow file as it is listed. A broken file is listed with its error. */
+export function summarizeWorkflow(entry: ItemEntry): WorkflowSummary {
+  const { name } = entry;
+  const personal = entry.source === "user";
+  try {
+    const file = entry.path.slice(entry.path.lastIndexOf("/") + 1);
+    const workflow = parseWorkflow(readFileSync(entry.path, "utf8"), name, file);
+    return {
+      name,
+      personal,
+      description: workflow.description ?? null,
+      steps: Object.keys(workflow.steps),
+      error: null,
+    };
+  } catch (error) {
+    return { name, personal, description: null, steps: [], error: (error as Error).message };
+  }
+}
+
+/** Every workflow a run can be started from here, by name: the project's and the personal ones it does not hide. */
+export function listWorkflows(projectRoot: string, env?: Env): WorkflowSummary[] {
+  return listAllWorkflows({ projectRoot, env })
+    .filter((entry) => !entry.hidden)
+    .map(summarizeWorkflow);
 }
 
 /** Fills a step's prompt with the run's input and the results of earlier steps. */

@@ -3,16 +3,18 @@
 // and deletes nothing, so the way back stays open.
 import { createHash } from "node:crypto";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { historyDir, projectConfigPath, userHistoryDir } from "./paths.ts";
+import { historyDir, projectConfigPath, userConfigPath, userHistoryDir } from "./paths.ts";
 import type { RoleEntry } from "./roles.ts";
 
 type Env = Record<string, string | undefined>;
@@ -45,12 +47,33 @@ export interface History {
 export const BY_HAND = "edited by hand";
 const FIRST = "first version";
 
-export function trackedRole(entry: RoleEntry, projectRoot: string, env?: Env): Tracked {
+/**
+ * A role or workflow file with its history: under the project's history for a project file,
+ * under the personal one for a personal file, so the two never share versions.
+ */
+export function trackedItem(
+  kind: "roles" | "workflows",
+  entry: { name: string; source: "project" | "user"; path: string },
+  projectRoot: string,
+  env?: Env,
+): Tracked {
   const base = entry.source === "user" ? userHistoryDir(env) : historyDir(projectRoot);
-  return { path: entry.path, dir: join(base, "roles", entry.name) };
+  return { path: entry.path, dir: join(base, kind, entry.name) };
 }
 
-export function trackedConfig(projectRoot: string): Tracked {
+export function trackedRole(entry: RoleEntry, projectRoot: string, env?: Env): Tracked {
+  return trackedItem("roles", entry, projectRoot, env);
+}
+
+/** The project's config, or with "user" the personal one. */
+export function trackedConfig(
+  projectRoot: string,
+  source: "project" | "user" = "project",
+  env?: Env,
+): Tracked {
+  if (source === "user") {
+    return { path: userConfigPath(env), dir: join(userHistoryDir(env), "config") };
+  }
   return { path: projectConfigPath(projectRoot), dir: join(historyDir(projectRoot), "config") };
 }
 
@@ -177,7 +200,15 @@ export function moveHistory(from: Tracked, to: Tracked): void {
     while (existsSync(`${to.dir}.old-${n}`)) n += 1;
     renameSync(to.dir, `${to.dir}.old-${n}`);
   }
-  renameSync(from.dir, to.dir);
+  try {
+    renameSync(from.dir, to.dir);
+  } catch (error) {
+    // Another disk (a personal file moved into a project elsewhere): copied whole, then the
+    // original folder goes. Every version keeps its number.
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+    cpSync(from.dir, to.dir, { recursive: true });
+    rmSync(from.dir, { recursive: true });
+  }
 }
 
 /**

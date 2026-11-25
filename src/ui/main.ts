@@ -1,17 +1,25 @@
-import { createCliRenderer } from "@opentui/core";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import pkg from "../../package.json" with { type: "json" };
 import { call } from "../cli/client.ts";
+import { openEditor } from "../cli/editor.ts";
 import { projectRoles } from "../cli/palette.ts";
 import { loadConfig } from "../shared/config.ts";
+import { runDir } from "../shared/paths.ts";
 import type { WizardKind, WorkspaceState } from "../shared/protocol.ts";
 import { capabilityLines, resolveSession, summarizeSession } from "../shared/roles.ts";
+import { parseRef } from "../shared/scope.ts";
 import { createAgentsView } from "./agents.ts";
+import { createDesigner } from "./designer.ts";
 import { roleScreen, rolesScreen } from "./role-screens.ts";
 import { diskRoleStore } from "./role-store.ts";
 import { createStatusView } from "./status.ts";
 import { toolsPickScreen, toolsScreen } from "./tool-screens.ts";
-import { createWizard, type Screen } from "./wizard.ts";
+import { createWizard, type Outcome, type Screen } from "./wizard.ts";
 import { agentScreen, menuScreen, type WizardApi, workflowsScreen } from "./wizards.ts";
+import { type DesignDeps, designListScreen, openDesign } from "./workflow-screens.ts";
+import { diskWorkflowStore } from "./workflow-store.ts";
 
 export type UiView = "status" | "agents";
 
@@ -129,23 +137,68 @@ export async function runWizard(
     },
     profiles: Object.keys(config?.profiles ?? {}),
   };
+  // The designer suspends the screen for the user's editor, so it needs the renderer, which
+  // exists only once the first screen could be built.
+  let screen: CliRenderer | null = null;
+  const design: DesignDeps = {
+    api,
+    store: diskWorkflowStore(projectRoot, config),
+    start: (session) =>
+      createDesigner(
+        {
+          ...design,
+          editText: async (text, label) => {
+            if (!screen) return null;
+            mkdirSync(runDir(projectRoot), { recursive: true });
+            const path = join(runDir(projectRoot), label);
+            writeFileSync(path, text);
+            await screen.suspend();
+            try {
+              return (await openEditor(path)) ? readFileSync(path, "utf8") : null;
+            } finally {
+              await screen.resume();
+            }
+          },
+        },
+        session,
+      ).view,
+    home: () => designListScreen(design),
+  };
   let first: Screen;
+  let then: Outcome | undefined;
   try {
     const store = () => diskRoleStore(projectRoot, config);
-    first =
-      kind === "agent"
-        ? agentScreen(api)
-        : kind === "menu"
-          ? await menuScreen(api, store())
-          : kind === "tools"
-            ? subject
-              ? await toolsScreen(api, subject)
-              : await toolsPickScreen(api)
-            : kind === "roles"
+    if (kind === "design") {
+      first = designListScreen(design);
+      if (subject) {
+        // One workflow straight away; the list is what closing the designer returns to.
+        const named = parseRef(subject);
+        const found = design.store
+          .list()
+          .find(
+            (entry) =>
+              entry.name === named.name &&
+              (named.source ? entry.source === named.source : !entry.hidden),
+          );
+        if (!found) throw new Error(`Unknown workflow "${subject}".`);
+        then = openDesign(design, { kind: "file", name: found.name, source: found.source });
+      }
+    } else {
+      first =
+        kind === "agent"
+          ? agentScreen(api)
+          : kind === "menu"
+            ? await menuScreen(api, store(), design)
+            : kind === "tools"
               ? subject
-                ? roleScreen(api, store(), subject)
-                : rolesScreen(api, store())
-              : await workflowsScreen(api);
+                ? await toolsScreen(api, subject)
+                : await toolsPickScreen(api)
+              : kind === "roles"
+                ? subject
+                  ? roleScreen(api, store(), parseRef(subject))
+                  : rolesScreen(api, store())
+                : await workflowsScreen(api, design);
+    }
   } catch (error) {
     console.error((error as Error).message);
     await Bun.sleep(2000);
@@ -158,7 +211,8 @@ export async function runWizard(
     autoFocus: false,
   });
   exitWithTerminal(() => renderer.destroy());
-  const exec = await createWizard(renderer, first);
+  screen = renderer;
+  const exec = await createWizard(renderer, first, then);
   renderer.destroy();
   if (!exec) return 0;
   const child = Bun.spawn([...selfArgv, ...exec], {

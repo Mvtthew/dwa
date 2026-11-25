@@ -1,5 +1,5 @@
-// Writing TOML: values as text, and changes to single keys of an existing file that leave
-// every other byte, comments included, as it was. Reading is Bun's own parser.
+// Writing TOML: values as text, and changes to single keys or whole tables of an existing file
+// that leave every other byte, comments included, as it was. Reading is Bun's own parser.
 
 /** A value dwa writes into a config or role file. */
 export type TomlValue = string | number | boolean | string[];
@@ -54,14 +54,55 @@ interface Entry {
 }
 
 interface Header {
+  /** The table's path joined with dots, quotes and spaces of the header removed. */
   table: string;
+  /** `[[name]]`: one of a list of tables. */
+  array: boolean;
   lineStart: number;
   lineEnd: number;
+  /** The name as written between the brackets. */
+  nameStart: number;
+  nameEnd: number;
+}
+
+/** The parts of a table name as written in a header: `steps."my step"` is two parts. */
+function tablePath(raw: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  for (const char of raw) {
+    if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === ".") {
+      parts.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  parts.push(current.trim());
+  return parts;
+}
+
+/** A table path as a header names it; a part that is not a bare key is quoted. */
+function headerName(table: string): string {
+  return table
+    .split(".")
+    .map((part) => (/^[A-Za-z0-9_-]+$/.test(part) ? part : JSON.stringify(part)))
+    .join(".");
 }
 
 interface Layout {
   entries: Entry[];
   headers: Header[];
+}
+
+/** The line ending a text uses, so what is added to it ends its lines the same way. */
+function lineEnd(text: string): string {
+  return text.includes("\r\n") ? "\r\n" : "\n";
 }
 
 function lineEndAfter(text: string, from: number): number {
@@ -149,10 +190,19 @@ function layout(text: string): Layout {
     }
     if (char === "[") {
       const lineEnd = lineEndAfter(text, i);
-      const match = /^\[\[?\s*([^\]]+?)\s*\]\]?/.exec(text.slice(i, lineEnd));
+      const match = /^(\[\[?\s*)([^\]]+?)\s*\]\]?/.exec(text.slice(i, lineEnd));
       if (!match) throw new TomlEditError("a table header could not be read");
-      table = match[1] as string;
-      headers.push({ table, lineStart, lineEnd });
+      const [, open, name] = match as unknown as [string, string, string];
+      table = tablePath(name).join(".");
+      const nameStart = i + open.length;
+      headers.push({
+        table,
+        array: open.startsWith("[["),
+        lineStart,
+        lineEnd,
+        nameStart,
+        nameEnd: nameStart + name.length,
+      });
       pos = lineEnd;
       continue;
     }
@@ -275,9 +325,51 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** The object at a path of a parsed file; with `create`, missing tables on the way are added. */
+function dig(
+  root: Record<string, unknown>,
+  path: string[],
+  create = false,
+): Record<string, unknown> | undefined {
+  let at = root;
+  for (const part of path) {
+    if (at[part] === undefined) {
+      if (!create) return undefined;
+      at[part] = {};
+    }
+    const next = at[part];
+    if (next === null || typeof next !== "object" || Array.isArray(next)) return undefined;
+    at = next as Record<string, unknown>;
+  }
+  return at;
+}
+
+/** Removes the empty tables along a path that `before` did not have: nothing wrote them. */
+function pruneNew(
+  expected: Record<string, unknown>,
+  before: Record<string, unknown>,
+  path: string[],
+): void {
+  for (let depth = path.length; depth > 0; depth--) {
+    const here = dig(expected, path.slice(0, depth));
+    if (!here || Object.keys(here).length > 0 || dig(before, path.slice(0, depth))) return;
+    const parent = dig(expected, path.slice(0, depth - 1));
+    if (parent) delete parent[path[depth - 1] as string];
+  }
+}
+
+function parseOrThrow(text: string): Record<string, unknown> {
+  try {
+    return Bun.TOML.parse(text) as Record<string, unknown>;
+  } catch (error) {
+    throw new TomlEditError(`the change would break the file: ${(error as Error).message}`);
+  }
+}
+
 /**
  * Sets, adds or removes (value `undefined`) keys of one table of a TOML text; `table` null
- * means the keys before the first table header. Everything else in the text stays as it is.
+ * means the keys before the first table header, and a nested table is named with dots
+ * (`steps.build`). Everything else in the text stays as it is.
  * New root keys go after the last existing one and before any key named in `last` (a role's
  * prompt reads best at the end). The result is parsed and compared with what was asked for;
  * when it does not match, nothing is returned and a `TomlEditError` is thrown.
@@ -288,19 +380,22 @@ export function setKeys(
   changes: Record<string, TomlValue | undefined>,
   last: string[] = [],
 ): string {
-  if (table?.includes(".")) throw new TomlEditError("nested tables cannot be changed");
   const before = Bun.TOML.parse(text) as Record<string, unknown>;
   const { entries, headers } = layout(text);
+  if (headers.some((header) => header.table === table && header.array)) {
+    throw new TomlEditError(`"${table}" is a list of tables`);
+  }
   const inTable = entries.filter((entry) => entry.table === table);
   const edits: Edit[] = [];
   const inserts: string[] = [];
+  const nl = lineEnd(text);
 
   for (const [key, value] of Object.entries(changes)) {
     const found = inTable.filter((entry) => entry.key === key);
     if (found.length > 1) throw new TomlEditError(`"${key}" is set more than once`);
     const entry = found[0];
     if (!entry) {
-      if (value !== undefined) inserts.push(`${key} = ${tomlValue(value, key)}\n`);
+      if (value !== undefined) inserts.push(`${key} = ${tomlValue(value, key)}${nl}`);
     } else if (value === undefined) {
       edits.push({ start: entry.lineStart, end: entry.lineEnd, text: "" });
     } else {
@@ -319,18 +414,24 @@ export function setKeys(
     const header = headers.find((candidate) => candidate.table === table);
     const firstHeader = headers[0];
     if (anchor) {
-      const newline = text.endsWith("\n") || anchor.lineEnd < text.length ? "" : "\n";
+      const newline = text.endsWith("\n") || anchor.lineEnd < text.length ? "" : nl;
       edits.push({ start: anchor.lineEnd, end: anchor.lineEnd, text: `${newline}${block}` });
     } else if (tail) {
-      edits.push({ start: tail.lineStart, end: tail.lineStart, text: `${block}\n` });
+      // A root file keeps an empty line before its long last key; a table's keys stay together.
+      const gap = table === null ? nl : "";
+      edits.push({ start: tail.lineStart, end: tail.lineStart, text: `${block}${gap}` });
     } else if (table !== null && header) {
       edits.push({ start: header.lineEnd, end: header.lineEnd, text: block });
     } else if (table === null && firstHeader) {
-      edits.push({ start: firstHeader.lineStart, end: firstHeader.lineStart, text: `${block}\n` });
+      // Before the first table and the comment that belongs to it. A comment that opens the
+      // file is the file's own, so there the key goes under it.
+      const start = blocks(text)[0]?.start ?? firstHeader.lineStart;
+      const at = start === 0 ? firstHeader.lineStart : start;
+      edits.push({ start: at, end: at, text: `${block}${nl}` });
     } else {
       // Nothing to hang it on: the end of the file, under a new table header when needed.
-      const newline = text === "" || text.endsWith("\n") ? "" : "\n";
-      const heading = table === null ? "" : `${text === "" ? "" : "\n"}[${table}]\n`;
+      const newline = text === "" || text.endsWith("\n") ? "" : nl;
+      const heading = table === null ? "" : `${text === "" ? "" : nl}[${headerName(table)}]${nl}`;
       edits.push({ start: text.length, end: text.length, text: `${newline}${heading}${block}` });
     }
   }
@@ -349,22 +450,16 @@ export function setKeys(
     result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
   }
 
-  let after: Record<string, unknown>;
-  try {
-    after = Bun.TOML.parse(result) as Record<string, unknown>;
-  } catch (error) {
-    throw new TomlEditError(`the change would break the file: ${(error as Error).message}`);
-  }
+  const after = parseOrThrow(result);
   const expected = structuredClone(before);
-  if (table !== null && expected[table] === undefined) expected[table] = {};
-  const target = (table === null ? expected : expected[table]) as Record<string, unknown>;
+  const path = table === null ? [] : table.split(".");
+  const target = dig(expected, path, true);
+  if (!target) throw new TomlEditError(`"${table}" is not a table`);
   for (const [key, value] of Object.entries(changes)) {
     if (value === undefined) delete target[key];
     else target[key] = value;
   }
-  if (table !== null && Object.keys(target).length === 0 && !(table in before)) {
-    delete expected[table];
-  }
+  pruneNew(expected, before, path);
   if (!same(sortKeys(after), sortKeys(expected))) {
     throw new TomlEditError("the change could not be made without touching other settings");
   }
@@ -414,4 +509,236 @@ function sortKeys(value: unknown): unknown {
     sorted[key] = sortKeys((value as Record<string, unknown>)[key]);
   }
   return sorted;
+}
+
+/** One table of a file as a run of lines: its header, the comment lines right above it, and
+ * everything up to the next table. */
+interface Block {
+  table: string;
+  array: boolean;
+  start: number;
+  end: number;
+  header: Header;
+}
+
+function blocks(text: string): Block[] {
+  const { entries, headers } = layout(text);
+  const starts = headers.map((header) => {
+    // Comment lines directly above the header belong to it; a blank line ends them, and so
+    // does the statement before (whose last line may look like a comment inside a string).
+    const floor = entries.findLast((entry) => entry.lineEnd <= header.lineStart)?.lineEnd ?? 0;
+    let start = header.lineStart;
+    while (start > floor) {
+      const previous = text.lastIndexOf("\n", start - 2) + 1;
+      if (previous < floor || !text.slice(previous, start).trimStart().startsWith("#")) break;
+      start = previous;
+    }
+    return start;
+  });
+  return headers.map((header, index) => ({
+    table: header.table,
+    array: header.array,
+    start: starts[index] as number,
+    end: starts[index + 1] ?? text.length,
+    header,
+  }));
+}
+
+function parentOf(table: string): string {
+  return table.includes(".") ? table.slice(0, table.lastIndexOf(".")) : "";
+}
+
+/** The table's block. Refused for a missing table, a list of tables, or one with tables inside. */
+function wholeTable(text: string, table: string): Block {
+  const all = blocks(text);
+  const found = all.filter((block) => block.table === table);
+  if (found.length === 0) throw new TomlEditError(`there is no table [${table}]`);
+  if (found.length > 1 || found[0]?.array) {
+    throw new TomlEditError(`[${table}] is written more than once`);
+  }
+  if (all.some((block) => block.table.startsWith(`${table}.`))) {
+    throw new TomlEditError(`[${table}] has tables inside it`);
+  }
+  return found[0] as Block;
+}
+
+/** Puts a block in at a block boundary, one empty line away from its neighbours. */
+function insertBlock(text: string, at: number, block: string): string {
+  const nl = lineEnd(text);
+  const head = text.slice(0, at);
+  const tail = text.slice(at);
+  const piece = `${block.replace(/\s+$/, "")}${nl}`;
+  const lead = head === "" || head.endsWith(nl + nl) ? "" : head.endsWith("\n") ? nl : nl + nl;
+  return head + lead + piece + (tail === "" ? "" : nl) + tail;
+}
+
+/** Takes a block out. What was the last table leaves no empty lines behind at the end. */
+function cutBlock(text: string, block: Block): string {
+  const rest = text.slice(0, block.start) + text.slice(block.end);
+  return block.end === text.length ? rest.replace(/(\r?\n)\s*$/, "$1") : rest;
+}
+
+/** Where a table goes: before the named one, otherwise after the last table next to it. */
+function slot(text: string, table: string, before: string | null | undefined): number {
+  const all = blocks(text);
+  if (before != null) {
+    const target = all.find((block) => block.table === before);
+    if (!target) throw new TomlEditError(`there is no table [${before}]`);
+    return target.start;
+  }
+  const parent = parentOf(table);
+  const siblings = all.filter((block) => parentOf(block.table) === parent);
+  return siblings.at(-1)?.end ?? text.length;
+}
+
+/**
+ * The tables directly under `parent` in the order they are written: for "steps", the names
+ * after `steps.` of every `[steps.<name>]`.
+ */
+export function tableOrder(text: string, parent: string): string[] {
+  return layout(text)
+    .headers.filter((header) => header.table !== "" && parentOf(header.table) === parent)
+    .map((header) => header.table.slice(parent === "" ? 0 : parent.length + 1));
+}
+
+function sameOrder(text: string, parent: string, wanted: string[]): void {
+  if (!same(tableOrder(text, parent), wanted)) {
+    throw new TomlEditError("the tables did not end up in the order asked for");
+  }
+}
+
+/**
+ * Adds a table with its keys: before the table `before`, otherwise after the last table next
+ * to it. Keys named in `last` are written at the end. The rest of the text stays as it is.
+ */
+export function addTable(
+  text: string,
+  table: string,
+  body: Record<string, TomlValue>,
+  options: { before?: string | null; last?: string[] } = {},
+): string {
+  const before = Bun.TOML.parse(text) as Record<string, unknown>;
+  const path = table.split(".");
+  if (dig(before, path)) throw new TomlEditError(`there is already a table [${table}]`);
+  const last = options.last ?? [];
+  const keys = [
+    ...Object.keys(body).filter((key) => !last.includes(key)),
+    ...Object.keys(body).filter((key) => last.includes(key)),
+  ];
+  const nl = lineEnd(text);
+  const lines = keys.map((key) => `${key} = ${tomlValue(body[key] as TomlValue, key)}${nl}`);
+  const parent = parentOf(table);
+  const order = tableOrder(text, parent);
+  const name = table.slice(parent === "" ? 0 : parent.length + 1);
+  const index =
+    options.before != null
+      ? order.indexOf(options.before.slice(parent === "" ? 0 : parent.length + 1))
+      : -1;
+  const result = insertBlock(
+    text,
+    slot(text, table, options.before),
+    `[${headerName(table)}]${nl}${lines.join("")}`,
+  );
+
+  const expected = structuredClone(before);
+  const holder = dig(expected, path.slice(0, -1), true);
+  if (!holder) throw new TomlEditError(`[${table}] cannot be added here`);
+  holder[path.at(-1) as string] = { ...body };
+  if (!same(sortKeys(parseOrThrow(result)), sortKeys(expected))) {
+    throw new TomlEditError("the table could not be added without touching other settings");
+  }
+  sameOrder(result, parent, index === -1 ? [...order, name] : order.toSpliced(index, 0, name));
+  return result;
+}
+
+/** Removes a table with the comment lines right above it. */
+export function removeTable(text: string, table: string): string {
+  const before = Bun.TOML.parse(text) as Record<string, unknown>;
+  const result = cutBlock(text, wholeTable(text, table));
+  const expected = structuredClone(before);
+  const path = table.split(".");
+  const holder = dig(expected, path.slice(0, -1));
+  if (holder) delete holder[path.at(-1) as string];
+  // A parent that only existed through this header is gone with it.
+  const after = parseOrThrow(result);
+  for (let depth = path.length - 1; depth > 0; depth--) {
+    const here = dig(expected, path.slice(0, depth));
+    if (!here || Object.keys(here).length > 0 || dig(after, path.slice(0, depth))) break;
+    const parent = dig(expected, path.slice(0, depth - 1));
+    if (parent) delete parent[path[depth - 1] as string];
+  }
+  if (!same(sortKeys(after), sortKeys(expected))) {
+    throw new TomlEditError("the table could not be removed without touching other settings");
+  }
+  return result;
+}
+
+/** Gives a table another name in its header. Its keys, comments and place stay. */
+export function renameTable(text: string, from: string, to: string): string {
+  const before = Bun.TOML.parse(text) as Record<string, unknown>;
+  const { header } = wholeTable(text, from);
+  if (dig(before, to.split("."))) throw new TomlEditError(`there is already a table [${to}]`);
+  if (parentOf(from) !== parentOf(to)) {
+    throw new TomlEditError("a table can only be renamed where it is");
+  }
+  const result = text.slice(0, header.nameStart) + headerName(to) + text.slice(header.nameEnd);
+  const expected = structuredClone(before);
+  const holder = dig(expected, from.split(".").slice(0, -1)) as Record<string, unknown>;
+  holder[to.split(".").at(-1) as string] = holder[from.split(".").at(-1) as string];
+  delete holder[from.split(".").at(-1) as string];
+  if (!same(sortKeys(parseOrThrow(result)), sortKeys(expected))) {
+    throw new TomlEditError("the table could not be renamed without touching other settings");
+  }
+  return result;
+}
+
+/**
+ * Moves a table, with the comment lines right above it, before the table `before`, or with
+ * null after the last table next to it. Nothing but the order changes.
+ */
+export function moveTable(text: string, table: string, before: string | null): string {
+  if (before === table) return text;
+  const parsed = Bun.TOML.parse(text) as Record<string, unknown>;
+  const block = wholeTable(text, table);
+  const parent = parentOf(table);
+  const short = (name: string) => name.slice(parent === "" ? 0 : parent.length + 1);
+  const order = tableOrder(text, parent).filter((name) => name !== short(table));
+  const index = before === null ? order.length : order.indexOf(short(before));
+  if (index === -1) throw new TomlEditError(`there is no table [${before}] next to [${table}]`);
+  const without = cutBlock(text, block);
+  let result = insertBlock(
+    without,
+    slot(without, table, before),
+    text.slice(block.start, block.end),
+  );
+  // The file ends as it did: with or without a last newline, and without empty lines added.
+  if (!text.endsWith("\n")) result = result.replace(/\n$/, "");
+  if (!same(sortKeys(parseOrThrow(result)), sortKeys(parsed))) {
+    throw new TomlEditError("the table could not be moved without touching other settings");
+  }
+  sameOrder(result, parent, order.toSpliced(index, 0, short(table)));
+  return result;
+}
+
+/**
+ * Changes one value as it is written, quotes included, so a long text keeps its form (which
+ * kind of string, its line breaks). `change` gets the raw text of the value and returns the
+ * new one; returning it unchanged changes nothing. The result has to parse.
+ */
+export function replaceInValue(
+  text: string,
+  table: string | null,
+  key: string,
+  change: (raw: string) => string,
+): string {
+  const found = layout(text).entries.filter((entry) => entry.table === table && entry.key === key);
+  if (found.length > 1) throw new TomlEditError(`"${key}" is set more than once`);
+  const entry = found[0];
+  if (!entry) return text;
+  const raw = text.slice(entry.valueStart, entry.valueEnd);
+  const next = change(raw);
+  if (next === raw) return text;
+  const result = text.slice(0, entry.valueStart) + next + text.slice(entry.valueEnd);
+  parseOrThrow(result);
+  return result;
 }

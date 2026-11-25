@@ -17,6 +17,7 @@ import {
   sameWork,
   type WorkflowDefinition,
 } from "../shared/workflow.ts";
+import { noticeWorkflowEdits } from "../shared/workflow-edit.ts";
 import type { QuestionRow, Store, WorkflowRunRow, WorkflowStepRow } from "./db.ts";
 import { WorkspaceError } from "./errors.ts";
 import { USER, WORKFLOW } from "./messaging.ts";
@@ -119,7 +120,13 @@ export class Workflows {
 
   constructor(private readonly deps: WorkflowsDeps) {
     this.now = deps.now ?? Date.now;
-    this.load = deps.load ?? ((name) => loadWorkflow(deps.projectRoot, name));
+    this.load =
+      deps.load ??
+      ((name) => {
+        // What the run starts from is a version, so it can be found again later.
+        noticeWorkflowEdits({ projectRoot: deps.projectRoot });
+        return loadWorkflow(deps.projectRoot, name);
+      });
     // Listeners run inside the workspace's tmux queue: only enqueue here, never wait.
     deps.workspace.onAgentEvent((event) => {
       const handle =

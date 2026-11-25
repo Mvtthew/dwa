@@ -12,6 +12,7 @@ import {
   type ToolsSaveRequest,
 } from "../shared/protocol.ts";
 import { listWorkflows } from "../shared/workflow.ts";
+import { noticeWorkflowEdits } from "../shared/workflow-edit.ts";
 import { TmuxError } from "../tmux/driver.ts";
 import { USER } from "./messaging.ts";
 import type { Workflows } from "./workflows.ts";
@@ -84,9 +85,10 @@ export function startServer(options: ServerOptions) {
         const { kind, subject } = await body<{ kind?: unknown; subject?: unknown }>(request);
         const known = POPUP_KINDS.find((entry) => entry === kind);
         if (!known) throw new WorkspaceError(`Unknown popup: use ${POPUP_KINDS.join(", ")}.`);
-        // The subject becomes a word of a command line, so only a plain name or id passes.
+        // The subject becomes a word of a command line, so only a plain name or id passes,
+        // with the colon of "personal:<name>" and "run:<id>".
         const about =
-          typeof subject === "string" && /^[\w.-]{1,64}$/.test(subject) ? subject : undefined;
+          typeof subject === "string" && /^[\w.:-]{1,64}$/.test(subject) ? subject : undefined;
         workspace.popup(known, about);
         return json({ ok: true });
       }
@@ -164,6 +166,8 @@ export function startServer(options: ServerOptions) {
         return json({ ok: true });
       }
       case "GET /workflows":
+        // A file changed in an editor since the last look gets its version first.
+        noticeWorkflowEdits({ projectRoot: workspace.projectRoot });
         return json({
           workflows: listWorkflows(workspace.projectRoot),
           runs: workflows.runs(),

@@ -1,16 +1,8 @@
 // Changes to role files and to `[defaults]` made by dwa itself: the tools dialog, the role
 // settings and the `role` command. Every write keeps the rest of the file as it is and adds
 // a version to the history.
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { CAPABILITY_KEYS, type Capabilities, ConfigError, NAME_PATTERN } from "./capabilities.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -23,12 +15,32 @@ import {
   trackedRole,
   type Version,
 } from "./history.ts";
-import { projectConfigPath, rolesDir, userRolesDir, workflowsDir } from "./paths.ts";
-import { findRole, listRoles, parseRole, type RoleContext, type RoleEntry } from "./roles.ts";
+import {
+  findRole,
+  findRoleIn,
+  listAllRoles,
+  listRoles,
+  PERSONAL_DEFAULTS,
+  parseRole,
+  personalParentNote,
+  type RoleContext,
+  type RoleEntry,
+  roleKind,
+} from "./roles.ts";
+import { type ItemEntry, moveItem, requireItem, type Scope } from "./scope.ts";
 import { mapValues, setKeys, type TomlValue } from "./toml.ts";
+import { followRoleRename, roleMentions } from "./workflow-edit.ts";
 
-/** A file capability values can be saved in. */
-export type FileTarget = { kind: "role"; name: string } | { kind: "defaults" };
+/**
+ * A file capability values can be saved in. Without `source` a role is the one sessions here
+ * use (the project's before a personal one) and the defaults are the project's.
+ */
+export type FileTarget =
+  | { kind: "role"; name: string; source?: Scope }
+  | { kind: "defaults"; source?: Scope };
+
+/** A role by name (the one that is used), or by place and name. */
+export type RoleRef = string | { name: string; source?: Scope };
 
 /** Keys of a role file besides the capability fields. */
 export type RoleFields = Capabilities & { description?: string; extends?: string; prompt?: string };
@@ -42,28 +54,33 @@ const LAST_KEYS = ["prompt"];
 /** The file a value with this origin (see `Origins`) is written in, if it is one dwa edits. */
 export function originTarget(origin: string | undefined): FileTarget | null {
   if (origin === "defaults") return { kind: "defaults" };
+  if (origin === PERSONAL_DEFAULTS) return { kind: "defaults", source: "user" };
   if (origin?.startsWith("role ")) return { kind: "role", name: origin.slice("role ".length) };
   return null;
 }
 
 export function describeTarget(target: FileTarget): string {
-  return target.kind === "defaults" ? "[defaults] in config.toml" : `role ${target.name}`;
+  if (target.kind === "defaults") {
+    return target.source === "user"
+      ? "[defaults] in your personal config.toml"
+      : "[defaults] in config.toml";
+  }
+  return target.source === "user" ? `your personal role ${target.name}` : `role ${target.name}`;
 }
 
-function requireRole(name: string, ctx: RoleContext): RoleEntry {
-  const entry = listRoles(ctx).find((role) => role.name === name);
-  if (!entry) throw new ConfigError(`Unknown role "${name}".`);
-  return entry;
+/** The role's file, hidden or not. Throws when there is none. */
+export function requireRole(ref: RoleRef, ctx: RoleContext): ItemEntry {
+  return requireItem(roleKind, ref, ctx);
 }
 
 function tracked(target: FileTarget, ctx: RoleContext): Tracked {
-  if (target.kind === "defaults") return trackedConfig(ctx.projectRoot);
-  return trackedRole(requireRole(target.name, ctx), ctx.projectRoot, ctx.env);
+  if (target.kind === "defaults") return trackedConfig(ctx.projectRoot, target.source, ctx.env);
+  return trackedRole(requireRole(target, ctx), ctx.projectRoot, ctx.env);
 }
 
 /** The history of a role's file. */
-export function roleHistory(name: string, ctx: RoleContext): Tracked {
-  return tracked({ kind: "role", name }, ctx);
+export function roleHistory(ref: RoleRef, ctx: RoleContext): Tracked {
+  return trackedRole(requireRole(ref, ctx), ctx.projectRoot, ctx.env);
 }
 
 function tomlChanges(changes: RoleChanges): Record<string, TomlValue | undefined> {
@@ -105,7 +122,8 @@ export function saveValues(
     const extra = Object.keys(edits).filter((key) => !allowed.includes(key));
     if (extra.length > 0) throw new ConfigError(`[defaults] cannot hold ${extra.join(", ")}.`);
     after = setKeys(before, "defaults", edits);
-    parseConfig(after, file.path, ctx.projectRoot);
+    // Relative paths in a config start from where that config is.
+    parseConfig(after, file.path, target.source === "user" ? dirname(file.path) : ctx.projectRoot);
   } else {
     after = setKeys(before, null, edits, LAST_KEYS);
     parseRole(after, file.path);
@@ -137,10 +155,16 @@ function newRolePath(name: string, ctx: RoleContext, personal: boolean): string 
       `"${name}" cannot be a role name: use letters, digits, ".", "_" and "-".`,
     );
   }
-  if (listRoles(ctx).some((role) => role.name === name)) {
-    throw new ConfigError(`There is already a role "${name}".`);
+  // In either place: a second file of a name would hide one of the two.
+  const taken = listAllRoles(ctx).find((role) => role.name === name);
+  if (taken) {
+    throw new ConfigError(
+      taken.source === "user"
+        ? `There is already a personal role "${name}".`
+        : `There is already a role "${name}".`,
+    );
   }
-  return join(personal ? userRolesDir(ctx.env) : rolesDir(ctx.projectRoot), `${name}.toml`);
+  return join(roleKind.dir(personal ? "user" : "project", ctx), `${name}.toml`);
 }
 
 /** Creates a role file from text (a copy of another role, or a starting point). */
@@ -163,20 +187,29 @@ export function roleTemplate(description: string): string {
   return `description = ${JSON.stringify(description)}\n\nprompt = """\n"""\n`;
 }
 
-/** A new role with the same file content as an existing one, next to it. */
-export function duplicateRole(from: string, to: string, ctx: RoleContext): RoleEntry {
+/**
+ * A new role with the same file content as an existing one: next to it, or in the place
+ * `options.personal` names.
+ */
+export function duplicateRole(
+  from: RoleRef,
+  to: string,
+  ctx: RoleContext,
+  options: { personal?: boolean } = {},
+): RoleEntry {
   const origin = requireRole(from, ctx);
-  return createRole(to, readFileSync(origin.path, "utf8"), `copy of ${from}`, ctx, {
-    personal: origin.source === "user",
+  return createRole(to, readFileSync(origin.path, "utf8"), `copy of ${origin.name}`, ctx, {
+    personal: options.personal ?? origin.source === "user",
   });
 }
 
-function workflowFiles(projectRoot: string): string[] {
-  const dir = workflowsDir(projectRoot);
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((file) => file.endsWith(".toml"))
-    .map((file) => join(dir, file));
+/**
+ * Moves a role between the project and the personal folder, with its history. The name stays,
+ * so what refers to it still finds it.
+ */
+export function moveRole(ref: RoleRef, to: Scope, ctx: RoleContext): RoleEntry {
+  const { name, source, path } = moveItem(roleKind, requireRole(ref, ctx), to, ctx);
+  return { name, source, path };
 }
 
 /** Every `role = "<name>"` and `extends = "<name>"` in a file, as the tables they are in. */
@@ -193,42 +226,49 @@ function mentions(path: string, name: string): string[] {
   return found;
 }
 
+/** The config files a role can be named in, the project's first. */
+function configFiles(ctx: RoleContext): { file: Tracked; label: string }[] {
+  return [
+    { file: trackedConfig(ctx.projectRoot), label: "config.toml" },
+    { file: trackedConfig(ctx.projectRoot, "user", ctx.env), label: "your personal config.toml" },
+  ];
+}
+
 /**
  * What refers to a role in the files: child roles, `[main]`, `[[agents]]` entries and
- * workflow steps. Sessions that are running as the role are the daemon's to know.
+ * workflow steps. Sessions that are running as the role are the daemon's to know. A hidden
+ * personal role has no users here: its name means the project's role.
  */
-export function roleUsers(name: string, ctx: RoleContext): string[] {
+export function roleUsers(ref: RoleRef, ctx: RoleContext): string[] {
+  const entry = requireRole(ref, ctx);
+  if (entry.hidden) return [];
+  const { name } = entry;
   const users: string[] = [];
   for (const role of listRoles(ctx)) {
     if (role.name !== name && mentions(role.path, name).length > 0) {
       users.push(`role ${role.name} extends it`);
     }
   }
-  const config = projectConfigPath(ctx.projectRoot);
-  if (existsSync(config)) {
-    for (const table of mentions(config, name)) {
+  for (const { file, label } of configFiles(ctx)) {
+    if (!existsSync(file.path)) continue;
+    for (const table of mentions(file.path, name)) {
       users.push(
-        table === "main"
-          ? "the main session ([main] in config.toml)"
-          : `[[${table}]] in config.toml`,
+        table === "main" ? `the main session ([main] in ${label})` : `[[${table}]] in ${label}`,
       );
     }
   }
-  for (const file of workflowFiles(ctx.projectRoot)) {
-    const workflow = file.slice(file.lastIndexOf("/") + 1, -".toml".length);
-    for (const table of mentions(file, name)) {
-      users.push(`workflow ${workflow}, step ${table.replace(/^steps\./, "")}`);
-    }
+  for (const { workflow, step, personal } of roleMentions(name, ctx)) {
+    users.push(`${personal ? "your personal workflow" : "workflow"} ${workflow}, step ${step}`);
   }
   return users;
 }
 
 /** Deletes a role file. Refused while files refer to it. Its history stays. */
-export function deleteRole(name: string, ctx: RoleContext): void {
-  const entry = requireRole(name, ctx);
-  const users = roleUsers(name, ctx);
+export function deleteRole(ref: RoleRef, ctx: RoleContext): void {
+  const entry = requireRole(ref, ctx);
+  const users = roleUsers(entry, ctx);
   if (users.length > 0) {
-    throw new ConfigError(`Role "${name}" is still used: ${users.join("; ")}.`);
+    throw new ConfigError(`Role "${entry.name}" is still used: ${users.join("; ")}.`);
   }
   record(trackedRole(entry, ctx.projectRoot, ctx.env), BY_HAND);
   rmSync(entry.path);
@@ -236,29 +276,31 @@ export function deleteRole(name: string, ctx: RoleContext): void {
 
 /**
  * Renames a role and follows the new name through everything that refers to it: child roles,
- * the config and the project's workflows. The history moves with the file.
+ * the two configs and the project's workflows. The history moves with the file. A hidden
+ * personal role is only renamed: what names it here means the project's role.
  */
-export function renameRole(from: string, to: string, ctx: RoleContext): RoleEntry {
-  const entry = requireRole(from, ctx);
+export function renameRole(ref: RoleRef, to: string, ctx: RoleContext): RoleEntry {
+  const entry = requireRole(ref, ctx);
+  const from = entry.name;
   const path = newRolePath(to, ctx, entry.source === "user");
   const renamed: RoleEntry = { name: to, source: entry.source, path };
   const oldHistory = trackedRole(entry, ctx.projectRoot, ctx.env);
   record(oldHistory, BY_HAND);
 
-  const follow = (file: Tracked | string) => {
-    const filePath = typeof file === "string" ? file : file.path;
-    if (!existsSync(filePath) || mentions(filePath, from).length === 0) return;
-    const text = mapValues(readFileSync(filePath, "utf8"), (_table, key, value) =>
+  const follow = (file: Tracked) => {
+    if (!existsSync(file.path) || mentions(file.path, from).length === 0) return;
+    const text = mapValues(readFileSync(file.path, "utf8"), (_table, key, value) =>
       (key === "role" || key === "extends") && value === from ? to : undefined,
     );
-    if (typeof file === "string") writeFileSync(filePath, text);
-    else saveTracked(file, text, `role ${from} renamed to ${to}`);
+    saveTracked(file, text, `role ${from} renamed to ${to}`);
   };
-  for (const role of listRoles(ctx)) {
-    if (role.name !== from) follow(trackedRole(role, ctx.projectRoot, ctx.env));
+  if (!entry.hidden) {
+    for (const role of listRoles(ctx)) {
+      if (role.name !== from) follow(trackedRole(role, ctx.projectRoot, ctx.env));
+    }
+    for (const { file } of configFiles(ctx)) follow(file);
+    followRoleRename(from, to, ctx);
   }
-  follow(trackedConfig(ctx.projectRoot));
-  for (const file of workflowFiles(ctx.projectRoot)) follow(file);
 
   mkdirSync(join(path, ".."), { recursive: true });
   renameSync(entry.path, path);
@@ -267,13 +309,71 @@ export function renameRole(from: string, to: string, ctx: RoleContext): RoleEntr
 }
 
 /**
+ * What a change means beyond this project's files, for the user to read before or after it:
+ * other projects that share a personal role, a personal role that comes out from behind the
+ * project's, a project role left depending on a personal one.
+ */
+export function scopeWarnings(
+  action: "save" | "rename" | "delete" | "move",
+  ref: RoleRef,
+  ctx: RoleContext,
+): string[] {
+  const entry = requireRole(ref, ctx);
+  const { name } = entry;
+  const warnings: string[] = [];
+  const readExtends = (role: ItemEntry): string | undefined => {
+    try {
+      return findRoleIn(role, ctx)?.role.extends;
+    } catch {
+      return undefined;
+    }
+  };
+  if (action === "save") {
+    const parent = readExtends(entry);
+    if (entry.source === "project" && parent && findRole(parent, ctx)?.source === "user") {
+      warnings.push(personalParentNote(name, parent));
+    }
+    return warnings;
+  }
+  if (entry.source === "user") {
+    const what =
+      action === "rename"
+        ? "still name it by the old name"
+        : action === "delete"
+          ? "will no longer find it"
+          : "will no longer find it among your personal roles";
+    warnings.push(
+      `Other projects that use your personal role "${name}" are not checked: they ${what}.`,
+    );
+    return warnings;
+  }
+  if (action === "move") {
+    warnings.push(`Others who use this project will no longer have role "${name}".`);
+    const children = listRoles(ctx).filter(
+      (role) => role.source === "project" && role.name !== name && mentions(role.path, name).length,
+    );
+    for (const child of children) warnings.push(personalParentNote(child.name, name));
+    return warnings;
+  }
+  const twin = listAllRoles(ctx).find((role) => role.name === name && role.hidden);
+  if (twin) {
+    warnings.push(
+      `Your personal role "${name}" is hidden by this one and will be the one used here afterwards.`,
+    );
+  }
+  return warnings;
+}
+
+/**
  * Brings the history up to date with what is on disk, so a role or config changed in an
  * editor gets its version. Called wherever dwa reads these files on the user's behalf.
  */
 export function noticeEdits(ctx: RoleContext): void {
   try {
-    for (const role of listRoles(ctx)) record(trackedRole(role, ctx.projectRoot, ctx.env), BY_HAND);
-    record(trackedConfig(ctx.projectRoot), BY_HAND);
+    for (const role of listAllRoles(ctx)) {
+      record(trackedRole(role, ctx.projectRoot, ctx.env), BY_HAND);
+    }
+    for (const { file } of configFiles(ctx)) record(file, BY_HAND);
   } catch {
     // History is a convenience; a folder that cannot be written must not stop a session.
   }
