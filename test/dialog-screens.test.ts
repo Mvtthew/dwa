@@ -353,6 +353,33 @@ describe("the role settings", () => {
     expect(created.title).toBe("Role: tester (project)");
   });
 
+  test("describing a role to an agent needs a name, which is taken along from the form", async () => {
+    const { store, log } = fakeStore(roles());
+    const { api, calls } = fakeApi({ "/roles/author": () => ({}) });
+    const form = await press(rolesScreen(api, store), "New role");
+    expect(labels(form, "button")).toEqual(["Create", "Describe it to an agent…", "Back"]);
+    const screen = await press(form, "Describe it to an agent…", { name: " docs ", where: "user" });
+    expect(screen.title).toBe("Describe the role");
+    expect(screen.values).toEqual({ name: "docs", where: "user" });
+    const start = (values: Values) => button(screen, "Start the agent").run(values);
+    await expect(start({ text: " ", name: "docs" })).rejects.toThrow(
+      "Say what the role is for first.",
+    );
+    await expect(start({ text: "writes docs", name: " " })).rejects.toThrow("Type a name first.");
+    await expect(start({ text: "writes docs", name: "explore" })).rejects.toThrow(
+      'There is already a role "explore".',
+    );
+    expect(calls).toEqual([]);
+    expect(await start({ text: " writes docs ", name: "docs", where: "user" })).toEqual({
+      close: true,
+    });
+    expect(calls).toEqual([
+      { path: "/roles/author", body: { description: "writes docs", name: "docs", personal: true } },
+    ]);
+    // The agent makes the file, not this screen.
+    expect(log).toEqual([]);
+  });
+
   test("shows a role's own values, with inherit for what it does not set", () => {
     const { store } = fakeStore(roles());
     const screen = roleScreen(state([]).api, store, "reviewer");

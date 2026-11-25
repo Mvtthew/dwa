@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CAPABILITY_KEYS, type Capabilities, ConfigError, NAME_PATTERN } from "./capabilities.ts";
-import { parseConfig } from "./config.ts";
+import { type Config, parseConfig } from "./config.ts";
 import {
   BY_HAND,
   moveHistory,
@@ -16,6 +16,7 @@ import {
   type Version,
 } from "./history.ts";
 import {
+  diskFiles,
   findRole,
   findRoleIn,
   listAllRoles,
@@ -23,11 +24,13 @@ import {
   PERSONAL_DEFAULTS,
   parseRole,
   personalParentNote,
+  type Role,
   type RoleContext,
   type RoleEntry,
+  resolveSession,
   roleKind,
 } from "./roles.ts";
-import { type ItemEntry, moveItem, requireItem, type Scope } from "./scope.ts";
+import { type ItemEntry, type ItemRef, moveItem, requireItem, type Scope } from "./scope.ts";
 import { mapValues, setKeys, type TomlValue } from "./toml.ts";
 import { followRoleRename, roleMentions } from "./workflow-edit.ts";
 
@@ -149,7 +152,8 @@ function checkParents(name: string, parent: string, ctx: RoleContext): void {
   }
 }
 
-function newRolePath(name: string, ctx: RoleContext, personal: boolean): string {
+/** Refuses a name no new role can have: an unusable one, or one a role in either place has. */
+export function requireFreeRoleName(name: string, ctx: RoleContext): void {
   if (!NAME_PATTERN.test(name) || name.length > 40) {
     throw new ConfigError(
       `"${name}" cannot be a role name: use letters, digits, ".", "_" and "-".`,
@@ -164,7 +168,52 @@ function newRolePath(name: string, ctx: RoleContext, personal: boolean): string 
         : `There is already a role "${name}".`,
     );
   }
+}
+
+function newRolePath(name: string, ctx: RoleContext, personal: boolean): string {
+  requireFreeRoleName(name, ctx);
   return join(roleKind.dir(personal ? "user" : "project", ctx), `${name}.toml`);
+}
+
+/**
+ * Checks a whole role text before it becomes the file of `ref`: it has to be a valid role, and
+ * a session of it has to resolve as it would at start, with the text in the file's place. So a
+ * parent, an MCP server, a plugin or a skill that does not exist is refused here, by the same
+ * rules a start goes by. Nothing is written.
+ */
+export function checkRoleText(ref: ItemRef, text: string, config: Config, ctx: RoleContext): Role {
+  const role = parseRole(text, "the definition");
+  const path = join(roleKind.dir(ref.source, ctx), `${ref.name}.toml`);
+  const files = ctx.files ?? diskFiles;
+  resolveSession(
+    { config, role: ref.name },
+    {
+      ...ctx,
+      files: {
+        ...files,
+        read: (file) => (file === path ? text : files.read(file)),
+        exists: (file) => file === path || files.exists(file),
+      },
+    },
+  );
+  return role;
+}
+
+/**
+ * Replaces a role file with a whole text somebody wrote (an agent, through `save_role`). The
+ * text is written as given; it has to be a valid role with parents that exist.
+ */
+export function saveRoleText(
+  ref: RoleRef,
+  text: string,
+  source: string,
+  ctx: RoleContext,
+  now: Date = new Date(),
+): Version {
+  const entry = requireRole(ref, ctx);
+  const role = parseRole(text, entry.path);
+  if (role.extends !== undefined) checkParents(entry.name, role.extends, ctx);
+  return saveTracked(trackedRole(entry, ctx.projectRoot, ctx.env), text, source, now);
 }
 
 /** Creates a role file from text (a copy of another role, or a starting point). */
@@ -176,7 +225,8 @@ export function createRole(
   options: { personal?: boolean; now?: Date } = {},
 ): RoleEntry {
   const path = newRolePath(name, ctx, options.personal ?? false);
-  parseRole(text, path);
+  const role = parseRole(text, path);
+  if (role.extends !== undefined) checkParents(name, role.extends, ctx);
   const entry: RoleEntry = { name, source: options.personal ? "user" : "project", path };
   saveTracked(trackedRole(entry, ctx.projectRoot, ctx.env), text, source, options.now);
   return entry;

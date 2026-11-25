@@ -299,6 +299,33 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
   );
 
   server.registerTool(
+    "save_role",
+    {
+      description:
+        "Write a role file from a complete TOML definition. Only the session the user started to write a role may use this, and only for that role: its first version, or a new version of it. The text is checked first; when something is wrong nothing is written and you are told what. The user is told about every save and is shown a new role in the role settings.",
+      inputSchema: {
+        name: z.string().describe("The name you were given."),
+        definition: z
+          .string()
+          .describe("The whole file: description, what the role may use, and its prompt."),
+        personal: z
+          .boolean()
+          .optional()
+          .describe("Keep it in the user's personal folder instead of the project."),
+      },
+    },
+    ({ name, definition, personal }) =>
+      tool(async () => {
+        const saved = await api<{ name: string; path: string; version: number; created: boolean }>(
+          "POST",
+          "/roles/save",
+          { from: agentId, name, definition, personal },
+        );
+        return `${saved.created ? "Created" : "Saved"} role "${saved.name}" (v${saved.version}) at ${saved.path}`;
+      }),
+  );
+
+  server.registerTool(
     "run_workflow",
     {
       description:

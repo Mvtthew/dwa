@@ -7,6 +7,7 @@ import { daemonSocketPath, runDir, socketDir, tmuxSocketName } from "../shared/p
 import { buildTmuxConf } from "../tmux/conf.ts";
 import { createTmux } from "../tmux/driver.ts";
 import { Store } from "./db.ts";
+import { RoleAuthor } from "./role-author.ts";
 import { startServer } from "./server.ts";
 import { Workflows } from "./workflows.ts";
 import { Workspace } from "./workspace.ts";
@@ -100,6 +101,12 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
   });
 
   const workflows = new Workflows({ store, workspace, projectRoot });
+  const roleAuthor = new RoleAuthor({
+    store,
+    workspace,
+    loadConfig: () => loadConfig(projectRoot, env),
+    env,
+  });
 
   const shutdown = () => {
     server.stop(true);
@@ -108,7 +115,13 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
     rmSync(lockPath, { force: true });
     process.exit(0);
   };
-  const server = startServer({ socketPath, workspace, workflows, onShutdown: shutdown });
+  const server = startServer({
+    socketPath,
+    workspace,
+    workflows,
+    roleAuthor,
+    onShutdown: shutdown,
+  });
   // Runs that were in progress when the daemon last stopped carry on.
   workflows.resume().catch((error) => console.error("could not resume workflows:", error));
   process.on("SIGTERM", shutdown);

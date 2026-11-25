@@ -78,6 +78,7 @@ describe("the dwa tools", () => {
       "report_progress",
       "request_changes",
       "run_workflow",
+      "save_role",
       "save_workflow",
       "send_message",
       "spawn_agent",

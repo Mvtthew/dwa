@@ -6,6 +6,7 @@ import { initProject } from "../src/cli/init.ts";
 import { loadConfig } from "../src/shared/config.ts";
 import { readHistory, trackedConfig, versionText } from "../src/shared/history.ts";
 import {
+  checkRoleText,
   createRole,
   deleteRole,
   describeTarget,
@@ -17,6 +18,7 @@ import {
   roleHistory,
   roleTemplate,
   roleUsers,
+  saveRoleText,
   saveValues,
   scopeWarnings,
 } from "../src/shared/role-edit.ts";
@@ -122,6 +124,38 @@ describe("roles as files", () => {
     expect(() => duplicateRole("reviewer", "critic", ctx)).toThrow("already a role");
     expect(() => createRole("a b", "", "x", ctx)).toThrow("cannot be a role name");
     expect(() => createRole("broken", "tools = 1\n", "x", ctx)).toThrow();
+  });
+
+  test("a whole text replaces a role file as given, when it is a role that could start", async () => {
+    const text =
+      '# kept\ndescription = "Reads more"\nextends = "explore"\n\nprompt = """\nRead.\n"""\n';
+    expect(() => createRole("deep", 'extends = "nobody"\n', "x", ctx)).toThrow(
+      'there is no role "nobody" to extend',
+    );
+    createRole("deep", text, "agent a", ctx);
+    const next = text.replace("Reads more", "Reads everything");
+    expect(saveRoleText("deep", next, "agent a", ctx).n).toBe(2);
+    expect(roleText("deep")).toBe(next);
+    expect(readHistory(roleHistory("deep", ctx)).versions.map((version) => version.source)).toEqual(
+      ["agent a", "agent a"],
+    );
+    expect(() => saveRoleText("deep", "tools = 1\n", "agent a", ctx)).toThrow();
+    expect(() => saveRoleText("deep", 'extends = "deep"\n', "agent a", ctx)).toThrow("loop");
+    expect(() => saveRoleText("nobody", text, "agent a", ctx)).toThrow("Unknown role");
+    expect(roleText("deep")).toBe(next);
+
+    // The check works on a text that is not a file yet, by the rules of a session start.
+    const config = await loadConfig(dir, ctx.env);
+    const ref = { name: "fresh", source: "project" as const };
+    expect(checkRoleText(ref, text, config, ctx).extends).toBe("explore");
+    expect(() => checkRoleText(ref, 'mcp = ["jira"]\n', config, ctx)).toThrow(
+      'unknown MCP server "jira"',
+    );
+    expect(() => checkRoleText(ref, 'skills = ["nothing"]\n', config, ctx)).toThrow(
+      'unknown skill "nothing"',
+    );
+    expect(() => checkRoleText(ref, 'extends = "fresh"\n', config, ctx)).toThrow("loop");
+    expect(existsSync(join(dir, ".dwa", "roles", "fresh.toml"))).toBe(false);
   });
 
   test("lists what uses a role and refuses to delete it meanwhile", () => {

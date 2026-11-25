@@ -146,7 +146,7 @@ export function initCommand(projectRoot: string, args: string[]): number {
   for (const path of result.skipped) console.log(`kept     ${path}`);
   if (!args.includes("--roles")) {
     console.log(
-      `\nAdd example roles (main, explore, developer, reviewer), a skill and a workflow that use them with: ${APP_NAME} init --roles`,
+      `\nAdd example roles (main, explore, developer, reviewer, workflow-author, role-author), a skill and workflows that use them with: ${APP_NAME} init --roles`,
     );
   }
   return 0;

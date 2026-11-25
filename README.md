@@ -277,7 +277,7 @@ path = "tools/lint-plugin"           # a directory, relative to the project
 - **Built into Claude Code.** Its built-in plugins and skills are on in every session. Switch single ones off by id with `off_plugins = [...]` and `off_skills = [...]`; `/plugin` and `/skills` in a session list the ids. `memory = true` gives a role Claude Code's per-project memory.
 - **Status line.** Sessions show none. Context, cost and limits are in the status pane.
 
-`dwa init --roles` adds five roles to start from, a skill and four workflows that use them (`feature`, `bugfix`, `parallel-build`, `review-only`). The fifth role, `workflow-author`, writes workflows from a description (see "The workflow designer"); the other four:
+`dwa init --roles` adds six roles to start from, a skill and four workflows that use them (`feature`, `bugfix`, `parallel-build`, `review-only`). Two of the roles write for you from a description: `workflow-author` writes workflows (see "The workflow designer") and `role-author` writes roles (see "Role settings and history"). The other four:
 
 | Role        | Model          | Tools                        | Permissions                                                                          | Extra                                                 |
 | ----------- | -------------- | ---------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------- |
@@ -318,6 +318,8 @@ bun run dwa agent restart reviewer --when turn-end
 ### Role settings and history
 
 **Role settings** (`Ctrl+Q` then `r`, "Roles…" in the menu, or `dwa wizard roles`) lists the roles and opens one as a form: description, what it starts from, model, effort, permission mode, tools, MCP servers, plugins, skills, rules and memory. Every list can be left to inherit or set for the role. The prompt opens in `$EDITOR`. Roles can be created, duplicated, renamed and deleted there; a rename follows the name through child roles, the config and the workflows, and a role that something still uses cannot be deleted.
+
+A new role can also be described to an agent: "New role…", then "Describe it to an agent…". A session of the `role-author` role reads the project and the roles it has, writes the role, saves it with the `save_role` tool and stays open, so you refine the role by talking to it or in the settings, which open on it after the first save. The text is checked like a session start (unknown keys, parents, MCP servers, plugins and skills are refused and nothing is written), every save is a version in the history with the agent as its source, and you get a message that says what the role may use. A role decides what a session may do, so `save_role` works only for that session and only for the role you named: no agent can change another role, or its own.
 
 A role is either the project's (`.dwa/roles/`) or personal (`~/.config/dwa/roles/`, yours in every project), and every screen says which. New and Duplicate ask where the role goes, and a role can be moved from one place to the other with its history. A personal role that the project has one of the same name for is listed as hidden and can still be opened. "Save globally" in the Agent tools dialog names its targets the same way, and can write to your personal `[defaults]` as well as the project's.
 

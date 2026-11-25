@@ -15,6 +15,7 @@ import { listWorkflows } from "../shared/workflow.ts";
 import { noticeWorkflowEdits } from "../shared/workflow-edit.ts";
 import { TmuxError } from "../tmux/driver.ts";
 import { USER } from "./messaging.ts";
+import type { RoleAuthor } from "./role-author.ts";
 import type { Workflows } from "./workflows.ts";
 import { type Workspace, WorkspaceError } from "./workspace.ts";
 
@@ -22,6 +23,7 @@ export interface ServerOptions {
   socketPath: string;
   workspace: Workspace;
   workflows: Workflows;
+  roleAuthor: RoleAuthor;
   /** Called after `/down` has answered, to stop the daemon process. */
   onShutdown: () => void;
 }
@@ -60,7 +62,7 @@ function sender(value: unknown): string {
 
 /** The daemon's local API on a Unix socket. The CLI and the UI panes are its clients. */
 export function startServer(options: ServerOptions) {
-  const { workspace, workflows } = options;
+  const { workspace, workflows, roleAuthor } = options;
   const { messaging } = workspace;
 
   const route = async (request: Request): Promise<Response> => {
@@ -212,6 +214,33 @@ export function startServer(options: ServerOptions) {
         );
         return json(
           await workflows.author(text(input.description, "description"), {
+            name: text(input.name, "name"),
+            personal: input.personal === true,
+          }),
+        );
+      }
+      case "POST /roles/save": {
+        const input = await body<{
+          name?: string;
+          definition?: string;
+          from?: string;
+          personal?: boolean;
+        }>(request);
+        return json(
+          await roleAuthor.saveFile(
+            text(input.name, "name"),
+            text(input.definition, "definition"),
+            sender(input.from),
+            input.personal === true,
+          ),
+        );
+      }
+      case "POST /roles/author": {
+        const input = await body<{ description?: string; name?: string; personal?: boolean }>(
+          request,
+        );
+        return json(
+          await roleAuthor.author(text(input.description, "description"), {
             name: text(input.name, "name"),
             personal: input.personal === true,
           }),

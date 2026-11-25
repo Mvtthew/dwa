@@ -700,12 +700,53 @@ export function roleScreen(
   return { title: `Role: ${scopeTitle(name, key.source)}`, rows, values };
 }
 
+/**
+ * A role written by an agent: the user says what the role is for, and a session of the
+ * role-author role writes it. The session stays open, so the role is refined by talking to it,
+ * or in the role settings, which open on it when the agent has saved.
+ */
+export function describeRoleScreen(api: WizardApi, store: RoleStore): Screen {
+  return {
+    title: "Describe the role",
+    rows: [
+      {
+        kind: "note",
+        text: "Say what a session of this role is for, what it may change and what it must leave\nalone, in your own words. An agent reads the project and its roles, writes the role and\nsaves it; you are shown its settings then. Its session stays open: ask it for changes,\nor make them in the settings.",
+      },
+      { kind: "text", key: "text", label: "What it is for", height: 6 },
+      { kind: "input", key: "name", label: "Name", placeholder: "letters, digits, - and _" },
+      scopeRow("role"),
+      {
+        kind: "button",
+        label: "Start the agent",
+        tone: "good",
+        run: async (values) => {
+          const description = values.text?.trim() ?? "";
+          if (!description) throw new Error("Say what the role is for first.");
+          const name = values.name?.trim() ?? "";
+          if (!name) throw new Error("Type a name first.");
+          if (store.list().some((role) => role.name === name)) {
+            throw new Error(`There is already a role "${name}".`);
+          }
+          await api.call("POST", "/roles/author", {
+            description,
+            name,
+            personal: scopeValue(values) === "user",
+          });
+          return { close: true };
+        },
+      },
+      back,
+    ],
+  };
+}
+
 /** The roles, and a way to add one. */
 export function rolesScreen(api: WizardApi, store: RoleStore): Screen {
   const roles = store.list();
   const rows: Row[] = [];
   if (roles.length === 0) {
-    rows.push({ kind: "note", text: "No roles yet. `dwa init --roles` adds four to start from." });
+    rows.push({ kind: "note", text: "No roles yet. `dwa init --roles` adds a set to start from." });
   }
   for (const role of roles) {
     rows.push({
@@ -740,6 +781,21 @@ export function rolesScreen(api: WizardApi, store: RoleStore): Screen {
                 store.create(name, values.description?.trim() ?? "", where);
                 return { to: roleScreen(api, store, { name, source: where }) };
               },
+            },
+            {
+              kind: "button",
+              label: "Describe it to an agent…",
+              hint: "an agent writes it; the name above is used",
+              // The name and the place typed on this screen go along.
+              run: (values) => ({
+                to: {
+                  ...describeRoleScreen(api, store),
+                  values: {
+                    name: values.name?.trim() ?? "",
+                    ...(values[WHERE] ? { [WHERE]: values[WHERE] } : {}),
+                  },
+                },
+              }),
             },
             back,
           ],
