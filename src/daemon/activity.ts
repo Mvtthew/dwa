@@ -1,4 +1,5 @@
 import type { AgentActivity, Telemetry } from "../shared/protocol.ts";
+import { approvesOwnTool } from "../shared/tools.ts";
 
 export interface ActivityChange {
   activity: AgentActivity;
@@ -44,6 +45,8 @@ export function reduceHook(event: string, input: Input): ActivityChange | null {
     case "PreCompact":
       return { activity: "working", detail: "compacting" };
     case "PermissionRequest":
+      // The hook answers this one itself, so nobody is asked.
+      if (approvesOwnTool(input)) return null;
       return { activity: "needs_user", detail: permissionDetail(input) };
     case "Notification":
       return reduceNotification(input);

@@ -1,6 +1,6 @@
 // What the "Agent tools" dialog shows and what a change in it means for a session's
 // capabilities. Pure: the daemon supplies what it knows about servers and tools in use.
-import type { Capabilities } from "./capabilities.ts";
+import { type Capabilities, SUBAGENT_TOOLS } from "./capabilities.ts";
 import { APP_NAME } from "./constants.ts";
 import type { Origins, ResolvedSession } from "./roles.ts";
 
@@ -52,6 +52,17 @@ export const BUILTIN_TOOLS: readonly string[] = [
 
 /** Name of dwa's own MCP server, which every session keeps. */
 export const OWN_SERVER = "dwa";
+
+/**
+ * Whether a permission request is answered by the session's hook and never shown: one of dwa's
+ * own tools in plan mode. Plan mode asks before every MCP tool call, the allowed `mcp__dwa`
+ * included, and an approval on `PreToolUse` does not change that (docs/spikes.md, S6); a session
+ * that plans must still be able to hand work over and talk to the others. `input` is the hook's.
+ */
+export function approvesOwnTool(input: unknown): boolean {
+  const { tool_name: tool, permission_mode: mode } = (input ?? {}) as Record<string, unknown>;
+  return mode === "plan" && typeof tool === "string" && tool.startsWith(`mcp__${OWN_SERVER}__`);
+}
 
 /** One thing the user switched in the dialog. */
 export type ToolChange =
@@ -130,7 +141,9 @@ export function toolView(caps: Capabilities, origins: Origins, sources: ToolSour
     // A deny rule that is just the tool's name blocks it as well.
     on:
       (caps.tools ? caps.tools.includes(name) : !(caps.deny_tools ?? []).includes(name)) &&
-      !deny.includes(name),
+      !deny.includes(name) &&
+      // The tools that start subagents are there only with `subagents`.
+      (caps.subagents === true || !SUBAGENT_TOOLS.includes(name)),
   }));
 
   const serverTools = (server: string): ToolRow[] | null => {
@@ -197,6 +210,13 @@ export function applyToolChanges(
     next[key] ?? [];
   for (const change of changes) {
     if (change.kind === "tool") {
+      if (change.on && SUBAGENT_TOOLS.includes(change.name) && next.subagents !== true) {
+        // `subagents` brings all of them; the ones not asked for stay off.
+        next.subagents = true;
+        if (!next.tools) {
+          for (const other of SUBAGENT_TOOLS) next.deny_tools = withItem(list("deny_tools"), other);
+        }
+      }
       // The role's own way of saying it is kept: an allow list stays one.
       if (next.tools) {
         next.tools = change.on
@@ -237,6 +257,7 @@ export function applyToolChanges(
     if (JSON.stringify(next[key] ?? []) !== JSON.stringify(caps[key] ?? []))
       changed[key] = next[key];
   }
+  if (next.subagents !== caps.subagents) changed.subagents = next.subagents;
   return changed;
 }
 

@@ -44,9 +44,12 @@ describe("toolView", () => {
       sources,
     );
     expect(view.mode).toBe("except");
+    // Agent and Workflow are off as well: the session has no `subagents`.
     expect(view.tools.filter((tool) => !tool.on).map((tool) => tool.name)).toEqual([
+      "Agent",
       "Bash",
       "Edit",
+      "Workflow",
     ]);
     expect(view.servers.map((s) => [s.name, s.from, s.on])).toEqual([
       ["dwa", "dwa", true],
@@ -67,6 +70,31 @@ describe("toolView", () => {
       { list: "deny", rule: "Bash(git push *)" },
     ]);
   });
+
+  test("shows the tools that start subagents as off unless subagents is set", () => {
+    const row = (caps: Parameters<typeof toolView>[0], name: string) =>
+      toolView(caps, {}, { ...sources, seen: ["Workflow"] }).tools.find(
+        (tool) => tool.name === name,
+      );
+    for (const name of ["Agent", "Workflow"]) {
+      expect(row({}, name)).toEqual({ name, on: false });
+      expect(row({ subagents: false }, name)).toEqual({ name, on: false });
+      // An allow list that names them does not bring them back.
+      expect(row({ tools: ["Read", "Agent", "Workflow"] }, name)).toEqual({ name, on: false });
+      expect(row({ subagents: true }, name)).toEqual({ name, on: true });
+      expect(row({ subagents: true, tools: ["Read", "Agent", "Workflow"] }, name)).toEqual({
+        name,
+        on: true,
+      });
+    }
+    // With subagents the lists decide, as for any other tool.
+    expect(row({ subagents: true, deny_tools: ["Workflow"] }, "Agent")?.on).toBe(true);
+    expect(row({ subagents: true, deny_tools: ["Workflow"] }, "Workflow")?.on).toBe(false);
+    expect(row({ subagents: true, tools: ["Read"] }, "Agent")?.on).toBe(false);
+    expect(row({ subagents: true, deny: ["Agent"] }, "Agent")?.on).toBe(false);
+    // Other tools do not depend on it.
+    expect(row({}, "Bash")?.on).toBe(true);
+  });
 });
 
 describe("applyToolChanges", () => {
@@ -86,6 +114,60 @@ describe("applyToolChanges", () => {
     expect(apply({ deny_tools: ["Bash"] }, { kind: "tool", name: "Bash", on: true })).toEqual({
       deny_tools: [],
     });
+  });
+
+  test("switching a subagent tool on sets subagents and keeps the other one off", () => {
+    expect(apply({}, { kind: "tool", name: "Agent", on: true })).toEqual({
+      subagents: true,
+      deny_tools: ["Workflow"],
+    });
+    expect(apply({ deny_tools: ["Edit"] }, { kind: "tool", name: "Workflow", on: true })).toEqual({
+      subagents: true,
+      deny_tools: ["Edit", "Agent"],
+    });
+    expect(apply({ subagents: false }, { kind: "tool", name: "Agent", on: true })).toEqual({
+      subagents: true,
+      deny_tools: ["Workflow"],
+    });
+    // Both switched on: neither stays denied.
+    const both = apply(
+      {},
+      { kind: "tool", name: "Agent", on: true },
+      { kind: "tool", name: "Workflow", on: true },
+    );
+    expect(both.subagents).toBe(true);
+    expect(both.deny_tools ?? []).toEqual([]);
+    // An allow list stays one and names only the tool that was asked for.
+    expect(apply({ tools: ["Read"] }, { kind: "tool", name: "Agent", on: true })).toEqual({
+      subagents: true,
+      tools: ["Read", "Agent"],
+    });
+  });
+
+  test("what the dialog shows after such a switch is what was asked for", () => {
+    const caps = { deny_tools: ["Edit"] };
+    const next = { ...caps, ...apply(caps, { kind: "tool", name: "Agent", on: true }) };
+    const on = (name: string) =>
+      toolView(next, {}, { ...sources, seen: ["Workflow"] }).tools.find(
+        (tool) => tool.name === name,
+      )?.on;
+    expect(on("Agent")).toBe(true);
+    expect(on("Workflow")).toBe(false);
+    expect(on("Edit")).toBe(false);
+  });
+
+  test("with subagents on, the subagent tools switch like any other tool", () => {
+    expect(
+      apply(
+        { subagents: true, deny_tools: ["Workflow"] },
+        { kind: "tool", name: "Workflow", on: true },
+      ),
+    ).toEqual({ deny_tools: [] });
+    expect(apply({ subagents: true }, { kind: "tool", name: "Agent", on: false })).toEqual({
+      deny_tools: ["Agent"],
+    });
+    // Other tools never touch the setting.
+    expect(apply({}, { kind: "tool", name: "Edit", on: true })).toEqual({});
   });
 
   test("allowing a tool lifts a deny rule that names it", () => {

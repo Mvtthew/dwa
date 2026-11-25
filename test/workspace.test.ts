@@ -90,6 +90,8 @@ describe("up", () => {
       "/bin/claude_me",
       "--setting-sources",
       "project,local",
+      "--disallowedTools",
+      "Agent,Workflow",
       "--session-id",
       "id-2",
       "--name",
@@ -184,16 +186,18 @@ describe("agents", () => {
     expect(agent.open).toBe(false);
     expect(tmux.windowOf(agent.paneId)).toBe("explore");
     const argv = tmux.panes.get(agent.paneId)?.argv ?? [];
-    expect(argv.slice(0, 7)).toEqual([
+    expect(argv.slice(0, 9)).toEqual([
       "/bin/claude_me",
       "--setting-sources",
       "project,local",
+      "--disallowedTools",
+      "Agent,Workflow",
       "--session-id",
       "id-4",
       "--name",
       "explore",
     ]);
-    expect(argv[8]).toBe("/project/.dwa/run/agents/id-3/settings.json");
+    expect(argv[10]).toBe("/project/.dwa/run/agents/id-3/settings.json");
     expect(files.get("/project/.dwa/run/agents/id-3/prompt.md")).toContain('You are "explore"');
     // The task comes last, after everything dwa adds.
     expect(argv.at(-1)).toBe("find the bug");
@@ -476,7 +480,7 @@ skills = ["review", "house-style"]
       "--setting-sources",
       "project,local",
       "--disallowedTools",
-      "Edit,Write",
+      "Edit,Write,Agent,Workflow",
       "--session-id",
       "id-4",
       "--name",
@@ -555,7 +559,7 @@ skills = ["review", "house-style"]
     const expected = {
       model: "opus",
       permissionMode: "plan",
-      denyTools: ["Edit", "Write"],
+      denyTools: ["Edit", "Write", "Agent", "Workflow"],
       allow: ["Bash(git log *)"],
       deny: ["Read(.env)"],
       mcp: ["github"],
@@ -591,7 +595,7 @@ skills = ["review", "house-style"]
       skills: ["review"],
     });
     expect(narrow.capabilities).toMatchObject({
-      denyTools: ["Edit", "Write", "Bash"],
+      denyTools: ["Edit", "Write", "Bash", "Agent", "Workflow"],
       mcp: [],
       skills: ["review"],
     });
@@ -602,6 +606,7 @@ skills = ["review", "house-style"]
     );
     await refused({ mcp: ["github"] }).toThrow(/MCP server "github" is not part of it/);
     await refused({ permission_mode: "bypassPermissions" }).toThrow(/cannot set permission_mode/);
+    await refused({ subagents: true }).toThrow(/cannot turn subagents on/);
     expect((await workspace.state()).agents).toHaveLength(2);
   });
 
@@ -736,6 +741,9 @@ describe("live state", () => {
     send("Notification", { notification_type: "permission_prompt" });
     expect(await activity()).toEqual(["needs_user", "permission: Bash"]);
     send("PostToolUse", { tool_name: "Bash" });
+    expect(await activity()).toEqual(["working", null]);
+    // The hook approves dwa's own tools in plan mode itself, so nobody is waited for.
+    send("PermissionRequest", { tool_name: "mcp__dwa__spawn_agent", permission_mode: "plan" });
     expect(await activity()).toEqual(["working", null]);
     send("Stop", { last_assistant_message: "\nAll done.\nDetails follow." });
     expect(await activity()).toEqual(["idle", "All done."]);

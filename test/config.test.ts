@@ -19,9 +19,10 @@ import {
   resolveProfile,
 } from "../src/shared/config.ts";
 import { cleanEnv } from "../src/shared/env.ts";
-import type { ResolvedSession } from "../src/shared/roles.ts";
+import { type ResolvedSession, resolveSession } from "../src/shared/roles.ts";
 import { buildTmuxConf, tmuxQuote } from "../src/tmux/conf.ts";
 import { parsePaneList } from "../src/tmux/layout.ts";
+import { testRoleFiles } from "./role-files.ts";
 
 const TOML = `
 default_profile = "me"
@@ -245,6 +246,36 @@ describe("buildClaudeLaunch", () => {
     ]);
   });
 
+  test("a session resolved from the defaults is started without the subagent tools", () => {
+    const ctx = { projectRoot: "/p", env: {}, files: testRoleFiles({}) };
+    const argv = (toml: string) =>
+      buildClaudeLaunch({
+        profile,
+        sessionId: "sid",
+        name: "dev",
+        session: resolveSession({ config: parseConfig(toml, "config.toml") }, ctx),
+        task: "go",
+      }).argv;
+    const value = (list: string[], flag: string) => list[list.indexOf(flag) + 1];
+
+    const plain = argv("");
+    expect(plain).toContain("--disallowedTools");
+    expect(value(plain, "--disallowedTools")).toBe("Agent,Workflow");
+    expect(plain).not.toContain("--tools");
+    expect(value(argv('[defaults]\ndeny_tools = ["Edit"]'), "--disallowedTools")).toBe(
+      "Edit,Agent,Workflow",
+    );
+    // An allow list simply does not name them.
+    const only = argv('[defaults]\ntools = ["Read", "Agent"]');
+    expect(value(only, "--tools")).toBe("Read");
+    expect(only).not.toContain("--disallowedTools");
+    // With subagents nothing is taken away.
+    expect(argv("[defaults]\nsubagents = true")).not.toContain("--disallowedTools");
+    expect(value(argv('[defaults]\nsubagents = true\ntools = ["Read", "Agent"]'), "--tools")).toBe(
+      "Read,Agent",
+    );
+  });
+
   test("disables tool call timeouts and lets the profile override the environment", () => {
     const launch = buildClaudeLaunch({
       profile: { ...profile, env: { MCP_TOOL_TIMEOUT: "5" } },
@@ -334,10 +365,54 @@ describe("generated session files", () => {
   });
 
   test("the role's instructions follow the workspace part of the prompt", () => {
-    expect(sessionPrompt("dev", base)).toBe(workspacePrompt("dev"));
+    // `base` denies nothing, so it has the built-in subagents.
+    expect(sessionPrompt("dev", base)).toBe(workspacePrompt("dev", true));
     const prompt = sessionPrompt("rev", { ...base, role: "reviewer", prompt: "\nYou review.\n" });
-    expect(prompt.startsWith(workspacePrompt("rev"))).toBe(true);
+    expect(prompt.startsWith(workspacePrompt("rev", true))).toBe(true);
     expect(prompt.endsWith("\n\n# Your role: reviewer\n\nYou review.")).toBe(true);
+    const without = { ...base, denyTools: ["Agent", "Workflow"] };
+    expect(sessionPrompt("dev", without)).toBe(workspacePrompt("dev"));
+    expect(sessionPrompt("rev", { ...without, role: "reviewer", prompt: "You review." })).toBe(
+      `${workspacePrompt("rev")}\n\n# Your role: reviewer\n\nYou review.`,
+    );
+  });
+
+  test("the prompt says the built-in subagents are gone only when the session lacks Agent", () => {
+    const paragraph = "The built-in Agent tool and its subagents";
+    expect(workspacePrompt("dev")).toContain(paragraph);
+    expect(workspacePrompt("dev", false)).toContain(paragraph);
+    expect(workspacePrompt("dev", true)).not.toContain(paragraph);
+    // Apart from that paragraph the two are the same text.
+    const [before, after] = workspacePrompt("dev").split(paragraph) as [string, string];
+    expect(workspacePrompt("dev", true).startsWith(before.trimEnd())).toBe(true);
+    expect(workspacePrompt("dev", true).endsWith(after.slice(after.indexOf("\n\n")))).toBe(true);
+
+    // Denied, or left out of an allow list: the paragraph is there.
+    expect(sessionPrompt("dev", { ...base, denyTools: ["Agent", "Workflow"] })).toContain(
+      paragraph,
+    );
+    expect(sessionPrompt("dev", { ...base, denyTools: ["Edit", "Agent"] })).toContain(paragraph);
+    expect(sessionPrompt("dev", { ...base, tools: ["Read", "Bash"] })).toContain(paragraph);
+    expect(sessionPrompt("dev", { ...base, tools: [] })).toContain(paragraph);
+    // The session has Agent: nothing is said about it.
+    expect(sessionPrompt("dev", base)).not.toContain(paragraph);
+    expect(sessionPrompt("dev", { ...base, denyTools: ["Edit", "Workflow"] })).not.toContain(
+      paragraph,
+    );
+    expect(sessionPrompt("dev", { ...base, tools: ["Read", "Agent"] })).not.toContain(paragraph);
+    // An allow list decides alone, as it does for the launch.
+    expect(sessionPrompt("dev", { ...base, tools: ["Read"], denyTools: [] })).toContain(paragraph);
+  });
+
+  test("a session resolved from the defaults is told so, one with subagents is not", () => {
+    const paragraph = "The built-in Agent tool and its subagents";
+    const ctx = { projectRoot: "/p", env: {}, files: testRoleFiles({}) };
+    const prompt = (toml: string) =>
+      sessionPrompt("dev", resolveSession({ config: parseConfig(toml, "config.toml") }, ctx));
+    expect(prompt("")).toContain(paragraph);
+    expect(prompt('[defaults]\ntools = ["Read", "Agent"]')).toContain(paragraph);
+    expect(prompt("[defaults]\nsubagents = true")).not.toContain(paragraph);
+    expect(prompt('[defaults]\nsubagents = true\ntools = ["Read"]')).toContain(paragraph);
   });
 });
 

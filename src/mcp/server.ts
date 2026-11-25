@@ -202,7 +202,7 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
     "spawn_agent",
     {
       description:
-        "Start another session in this workspace. Give it a task to begin with, and the name of a role to run as. The role decides which tools, MCP servers, plugins and skills the session has; you can take some of them away for this session, but not add any.",
+        "Start another session in this workspace. This is how work is delegated here, in place of the built-in Agent tool and its subagents. Give it a task to begin with, and the name of a role to run as. The role decides which tools, MCP servers, plugins and skills the session has; you can take some of them away for this session, but not add any.",
       inputSchema: {
         name: z.string().optional(),
         role: z.string().optional().describe("A role of this workspace (a file in .dwa/roles)."),

@@ -4,7 +4,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { daemonSocketPath, runDir } from "../shared/paths.ts";
-import { BLOCKED_FILE, blockedReason } from "../shared/tools.ts";
+import { approvesOwnTool, BLOCKED_FILE, blockedReason } from "../shared/tools.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -61,8 +61,9 @@ export function localVerdict(
 
 /**
  * `dwa hook <event>`: forwards the event JSON from stdin to the daemon. Prints nothing, with
- * one exception: before a tool call the daemon may refuse a tool that was switched off for the
- * session after it started, and that refusal is printed in the form Claude Code reads.
+ * two exceptions, both in the form Claude Code reads: on `PreToolUse` the refusal of a tool that
+ * was switched off for the session after it started, and on `PermissionRequest` the approval of
+ * one of dwa's own tools in plan mode (`approvesOwnTool`). A refused call never gets that far.
  */
 export async function hookCommand(
   event: string | undefined,
@@ -87,6 +88,12 @@ export async function hookCommand(
           permissionDecision: "deny",
           permissionDecisionReason: deny,
         },
+      }),
+    );
+  } else if (event === "PermissionRequest" && approvesOwnTool(input)) {
+    console.log(
+      JSON.stringify({
+        hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } },
       }),
     );
   }

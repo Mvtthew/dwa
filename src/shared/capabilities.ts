@@ -18,6 +18,12 @@ export const PERMISSION_MODES = [
 ] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
+/**
+ * Built-in tools that start subagents inside a session, out of the workspace's sight. A session
+ * has them only with `subagents = true`. (`Task` is another name for `Agent`; docs/spikes.md, S6.)
+ */
+export const SUBAGENT_TOOLS: readonly string[] = ["Agent", "Workflow"];
+
 /** Model for a session, as the Claude command's `--model` takes it (an alias or a full name). */
 export const ModelSchema = z.string().min(1);
 /** Effort for a session, passed with `--effort`. */
@@ -68,6 +74,11 @@ export const capabilityFields = {
    * in the user's Claude config. Off unless set, like the rest of the user's own setup.
    */
   memory: z.boolean().optional(),
+  /**
+   * Lets the session use the Claude command's own subagents (`SUBAGENT_TOOLS`). Off unless
+   * set: work is handed over to sessions of the workspace, which the user can see.
+   */
+  subagents: z.boolean().optional(),
 };
 
 const CapabilitiesSchema = z.strictObject(capabilityFields);

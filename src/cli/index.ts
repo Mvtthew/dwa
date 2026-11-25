@@ -31,6 +31,7 @@ Agents
               [--permission-mode <mode>] [--tools <a,b>] [--deny-tools <a,b>]
               [--allow <rule>]... [--deny <rule>]... [--mcp <a,b>] [--plugins <a,b>]
               [--skills <a,b>] [--off-plugins <a,b>] [--off-skills <a,b>] [--memory]
+              [--subagents]
                                         These replace what the role says, for this agent
   agent list [--json]
   agent open <name|number>              Show an agent's session under the main session
@@ -136,6 +137,7 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
       "off-plugins": { type: "string" },
       "off-skills": { type: "string" },
       memory: { type: "boolean" },
+      subagents: { type: "boolean" },
       json: { type: "boolean" },
       block: { type: "string", multiple: true },
       unblock: { type: "string", multiple: true },
@@ -169,6 +171,7 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
         off_plugins: list(values["off-plugins"]),
         off_skills: list(values["off-skills"]),
         memory: values.memory,
+        subagents: values.subagents,
       });
       console.log(`Started agent ${agent.name} (profile ${agent.profile}).`);
       return 0;

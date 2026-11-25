@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { dirname } from "node:path";
-import { layerCapabilities } from "../src/shared/capabilities.ts";
+import { layerCapabilities, SUBAGENT_TOOLS } from "../src/shared/capabilities.ts";
 import { ConfigError, EMPTY_CONFIG, mergeConfig, parseConfig } from "../src/shared/config.ts";
 import {
   findRole,
@@ -134,7 +134,7 @@ describe("resolveSession", () => {
       effort: undefined,
       permissionMode: "manual",
       tools: undefined,
-      denyTools: ["WebFetch"],
+      denyTools: ["WebFetch", "Agent", "Workflow"],
       allow: [],
       deny: [],
       mcp: {},
@@ -155,7 +155,7 @@ describe("resolveSession", () => {
     expect(session.effort).toBe("high");
     expect(session.permissionMode).toBe("manual");
     // From the parent, which replaced the list in [defaults].
-    expect(session.denyTools).toEqual(["Edit", "Write"]);
+    expect(session.denyTools).toEqual(["Edit", "Write", "Agent", "Workflow"]);
     expect(Object.keys(session.mcp)).toEqual(["github", "docs"]);
     expect(session.mcp.github).toEqual({ command: "gh-mcp", args: ["serve"], env: {} });
     expect(session.plugins).toEqual([{ name: "lint", path: `${ROOT}/tools/lint` }]);
@@ -189,7 +189,80 @@ describe("resolveSession", () => {
       context(FILES),
     );
     expect(reopened.tools).toBeUndefined();
-    expect(reopened.denyTools).toEqual(["Bash"]);
+    expect(reopened.denyTools).toEqual(["Bash", "Agent", "Workflow"]);
+  });
+
+  test("a session is without the tools that start subagents unless subagents is set", () => {
+    expect(SUBAGENT_TOOLS).toEqual(["Agent", "Workflow"]);
+    // Nothing set anywhere: the two are denied.
+    const plain = resolveSession({ config: EMPTY_CONFIG }, context(FILES));
+    expect(plain.tools).toBeUndefined();
+    expect(plain.denyTools).toEqual(["Agent", "Workflow"]);
+    // A role's own deny list keeps its entries and gets them after.
+    const explore = resolveSession({ config: CONFIG, role: "explore" }, context(FILES));
+    expect(explore.denyTools).toEqual(["Edit", "Write", "Agent", "Workflow"]);
+    // One the role already denies is not listed twice.
+    const twice = resolveSession(
+      { config: CONFIG, role: "explore", overrides: { deny_tools: ["Agent", "Bash"] } },
+      context(FILES),
+    );
+    expect(twice.denyTools).toEqual(["Agent", "Bash", "Workflow"]);
+  });
+
+  test("an allow list loses the subagent tools instead of gaining a deny list", () => {
+    const files = { ...FILES, [`${ROOT}/.dwa/roles/lead.toml`]: 'tools = ["Read", "Agent"]' };
+    const lead = resolveSession({ config: CONFIG, role: "lead" }, context(files));
+    expect(lead.tools).toEqual(["Read"]);
+    expect(lead.denyTools).toEqual([]);
+    const both = resolveSession(
+      { config: CONFIG, overrides: { tools: ["Workflow", "Read", "Agent", "Bash"] } },
+      context(FILES),
+    );
+    expect(both.tools).toEqual(["Read", "Bash"]);
+    expect(both.denyTools).toEqual([]);
+  });
+
+  test("subagents = true keeps them, from [defaults] or from the role", () => {
+    const files = {
+      ...FILES,
+      [`${ROOT}/.dwa/roles/lead.toml`]: 'tools = ["Read", "Agent"]',
+      [`${ROOT}/.dwa/roles/helper.toml`]: 'subagents = true\ndeny_tools = ["Edit"]',
+      [`${ROOT}/.dwa/roles/chief.toml`]: 'subagents = true\ntools = ["Read", "Agent"]',
+    };
+    const on = mergeConfig(CONFIG, parseConfig("[defaults]\nsubagents = true", "c"));
+    expect(resolveSession({ config: on }, context(files)).denyTools).toEqual(["WebFetch"]);
+    expect(resolveSession({ config: on, role: "explore" }, context(files)).denyTools).toEqual([
+      "Edit",
+      "Write",
+    ]);
+    const lead = resolveSession({ config: on, role: "lead" }, context(files));
+    expect(lead.tools).toEqual(["Read", "Agent"]);
+    expect(lead.denyTools).toEqual([]);
+
+    // The same from a role, with [defaults] saying nothing.
+    expect(resolveSession({ config: CONFIG, role: "helper" }, context(files)).denyTools).toEqual([
+      "Edit",
+    ]);
+    const chief = resolveSession({ config: CONFIG, role: "chief" }, context(files));
+    expect(chief.tools).toEqual(["Read", "Agent"]);
+    expect(chief.denyTools).toEqual([]);
+  });
+
+  test("a role's subagents = false takes them away again over [defaults]", () => {
+    const files = {
+      ...FILES,
+      [`${ROOT}/.dwa/roles/quiet.toml`]: 'subagents = false\ndeny_tools = ["Edit"]',
+      [`${ROOT}/.dwa/roles/narrow.toml`]: 'subagents = false\ntools = ["Read", "Agent"]',
+    };
+    const on = mergeConfig(CONFIG, parseConfig("[defaults]\nsubagents = true", "c"));
+    expect(resolveSession({ config: on, role: "quiet" }, context(files)).denyTools).toEqual([
+      "Edit",
+      "Agent",
+      "Workflow",
+    ]);
+    const narrow = resolveSession({ config: on, role: "narrow" }, context(files));
+    expect(narrow.tools).toEqual(["Read"]);
+    expect(narrow.denyTools).toEqual([]);
   });
 
   test("the user's overrides replace anything", () => {
@@ -272,7 +345,7 @@ describe("a spawn made by an agent", () => {
     });
     expect(session.model).toBe("haiku");
     expect(session.effort).toBe("low");
-    expect(session.denyTools).toEqual(["Edit", "Write", "Bash"]);
+    expect(session.denyTools).toEqual(["Edit", "Write", "Bash", "Agent", "Workflow"]);
     expect(session.deny).toEqual(["Read(.env)"]);
     expect(Object.keys(session.mcp)).toEqual(["docs"]);
     expect(session.plugins).toEqual([]);
@@ -303,6 +376,44 @@ describe("a spawn made by an agent", () => {
     ).toThrow(/cannot turn memory on/);
     // The user's own override replaces the list instead of adding to it.
     expect(resolve({ off_skills: [] }, false).offSkills).toEqual([]);
+  });
+
+  test("can switch subagents off, but not on", () => {
+    const files = {
+      ...FILES,
+      [`${ROOT}/.dwa/roles/helper.toml`]: 'subagents = true\ndeny_tools = ["Edit"]',
+      [`${ROOT}/.dwa/roles/chief.toml`]: 'subagents = true\ntools = ["Read", "Agent"]',
+    };
+    const resolve = (role: string, overrides: object, config = CONFIG) =>
+      resolveSession({ config, role, overrides, narrowOnly: true }, context(files));
+    expect(() => resolve("explore", { subagents: true })).toThrow(ConfigError);
+    expect(() => resolve("explore", { subagents: true })).toThrow(
+      /Role "explore": an agent can only narrow a role, so it cannot turn subagents on/,
+    );
+    // Not even for a role that has them: the request is refused as such.
+    expect(() => resolve("helper", { subagents: true })).toThrow(/cannot turn subagents on/);
+
+    // Without a word about them the role's own value stands.
+    expect(resolve("helper", {}).denyTools).toEqual(["Edit"]);
+    expect(resolve("helper", { subagents: false }).denyTools).toEqual([
+      "Edit",
+      "Agent",
+      "Workflow",
+    ]);
+    const chief = resolve("chief", { subagents: false });
+    expect(chief.tools).toEqual(["Read"]);
+    expect(chief.denyTools).toEqual([]);
+    // The same over [defaults].
+    const on = mergeConfig(CONFIG, parseConfig("[defaults]\nsubagents = true", "c"));
+    expect(resolve("explore", {}, on).denyTools).toEqual(["Edit", "Write"]);
+    expect(resolve("explore", { subagents: false }, on).denyTools).toEqual([
+      "Edit",
+      "Write",
+      "Agent",
+      "Workflow",
+    ]);
+    // Where they are off already, switching them off changes nothing.
+    expect(resolve("explore", { subagents: false })).toEqual(resolve("explore", {}));
   });
 
   test("removes denied tools from an allow list", () => {

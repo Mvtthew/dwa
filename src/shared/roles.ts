@@ -14,6 +14,7 @@ import {
   type PermissionMode,
   pickCapabilities,
   refuseBothToolLists,
+  SUBAGENT_TOOLS,
 } from "./capabilities.ts";
 import type { Config, McpServerConfig } from "./config.ts";
 import {
@@ -355,6 +356,12 @@ function narrow(
     throw new ConfigError(`${who}: an agent can only narrow a role, so it cannot turn memory on`);
   }
   if (request.memory === false) result.memory = false;
+  if (request.subagents === true) {
+    throw new ConfigError(
+      `${who}: an agent can only narrow a role, so it cannot turn subagents on`,
+    );
+  }
+  if (request.subagents === false) result.subagents = false;
   for (const key of NARROWING_LISTS) {
     const more = request[key];
     if (more !== undefined) result[key] = union(result[key] ?? [], more);
@@ -460,13 +467,22 @@ export function resolveSession(request: SessionRequest, ctx: RoleContext): Resol
   // The prompt is inherited like any other value: the nearest role that has one gives it.
   const prompt = chain.findLast((loaded) => loaded.role.prompt !== undefined)?.role.prompt;
 
+  // Without `subagents` the tools that start them are taken away, in whichever of the two
+  // forms the session has its tools, so no list of a role can bring them back.
+  const subagents = caps.subagents === true;
+  const tools = subagents ? caps.tools : caps.tools && without(caps.tools, [...SUBAGENT_TOOLS]);
+  const denyTools =
+    subagents || tools !== undefined
+      ? (caps.deny_tools ?? [])
+      : union(caps.deny_tools ?? [], [...SUBAGENT_TOOLS]);
+
   return {
     role: roleName,
     model: caps.model,
     effort: caps.effort,
     permissionMode: caps.permission_mode,
-    tools: caps.tools,
-    denyTools: caps.deny_tools ?? [],
+    tools,
+    denyTools,
     allow: caps.allow ?? [],
     deny: caps.deny ?? [],
     mcp: Object.fromEntries(lookup("MCP server", caps.mcp ?? [], config.mcp)),

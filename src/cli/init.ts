@@ -75,6 +75,8 @@ effort = "medium"
 # off_plugins = ["name@builtin"]  # plugins built into the Claude command to switch off, and
 # off_skills = ["name"]           # built-in skills; /plugin and /skills in a session list them
 # memory = true                   # let sessions use the Claude command's own project memory
+# subagents = true                # let sessions use the Claude command's own subagents (the Agent
+#                                 # tool); without it work is handed over with spawn_agent
 
 # [keys]
 # prefix = "C-q"        # tmux key notation

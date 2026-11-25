@@ -649,6 +649,7 @@ const OWN_SETTINGS = [
   "off_plugins",
   "off_skills",
   "memory",
+  "subagents",
 ] as const;
 
 /** A definition as the picture's input: the role on the second line, signs for the rest. */

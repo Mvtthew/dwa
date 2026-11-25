@@ -116,6 +116,7 @@ function fieldsFrom(
   fields.effort = text("effort") as RoleFields["effort"];
   fields.permission_mode = text("permission_mode") as RoleFields["permission_mode"];
   if (values.memory) fields.memory = values.memory === ON;
+  if (values.subagents) fields.subagents = values.subagents === ON;
 
   const more = split(values.moreTools);
   // What the file already lists keeps its order, so an untouched list is not a change.
@@ -327,6 +328,7 @@ export function roleScreen(
     effort: role.effort ?? INHERIT,
     permission_mode: role.permission_mode ?? INHERIT,
     memory: role.memory === undefined ? INHERIT : role.memory ? ON : OFF,
+    subagents: role.subagents === undefined ? INHERIT : role.subagents ? ON : OFF,
     toolsMode: role.tools ? "only" : role.deny_tools ? "except" : INHERIT,
     moreTools: "",
   };
@@ -378,6 +380,16 @@ export function roleScreen(
       kind: "choice",
       key: "memory",
       label: "The Claude command's own project memory",
+      options: [
+        { value: INHERIT, label: "inherit" },
+        { value: ON, label: "on" },
+        { value: OFF, label: "off" },
+      ],
+    },
+    {
+      kind: "choice",
+      key: "subagents",
+      label: "The Claude command's own subagents (Agent, Workflow)",
       options: [
         { value: INHERIT, label: "inherit" },
         { value: ON, label: "on" },

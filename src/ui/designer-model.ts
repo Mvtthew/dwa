@@ -252,6 +252,7 @@ const OWN_SETTINGS = [
   "off_plugins",
   "off_skills",
   "memory",
+  "subagents",
 ];
 
 /** How a step's state in a run shows on the picture. */

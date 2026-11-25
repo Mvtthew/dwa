@@ -54,6 +54,7 @@ function grants(role: Role): string {
   if (role.mcp?.length) parts.push(`mcp ${role.mcp.join(", ")}`);
   if (role.plugins?.length) parts.push(`plugins ${role.plugins.join(", ")}`);
   if (role.memory) parts.push("memory on");
+  if (role.subagents) parts.push("subagents on");
   return parts.join("; ");
 }
 
