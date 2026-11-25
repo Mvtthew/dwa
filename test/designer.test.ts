@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -41,7 +41,7 @@ describe("the designer on screen", () => {
       },
       store: diskWorkflowStore(project, null, { XDG_CONFIG_HOME: join(dir, "home") }),
       start: (session) => {
-        designer = createDesigner(deps, session);
+        designer = createDesigner({ ...deps, checkEvery: 20 }, session);
         return designer.view;
       },
       home: () => designListScreen(deps),
@@ -73,6 +73,7 @@ describe("the designer on screen", () => {
         .steps.map((step) => `${step.id}<-${step.dependsOn.join(",")}`) ?? [];
     const file = () => readFileSync(join(project, ".dwa", "workflows", "feature.toml"), "utf8");
     return {
+      project,
       harness,
       frame,
       at,
@@ -93,6 +94,30 @@ describe("the designer on screen", () => {
     expect(text).toContain("Nothing is wrong with this workflow.");
     // A line longer than its field shows how it starts while nobody types in it.
     expect(text).toContain("│ Explore the code, implement the");
+  });
+
+  test("follows the file while nothing is unsaved, and warns once something is", async () => {
+    const { frame, key, steps, file, harness, project } = await setup();
+    const path = join(project, ".dwa", "workflows", "feature.toml");
+    writeFileSync(path, file().replace("max_rounds = 3", "max_rounds = 5"));
+    await Bun.sleep(60);
+    let text = (await frame()).join("\n");
+    expect(text).toContain("◀─×5─╮");
+    expect(text).toContain("The file was changed elsewhere; this is how it is now.");
+    expect(text).not.toContain("THE FILE CHANGED ELSEWHERE");
+
+    // With work of the user's own in hand the file is not taken over.
+    for (let i = 0; i < 3; i++) {
+      harness.mockInput.pressArrow("down");
+      await frame();
+    }
+    await key("x");
+    expect(steps()).toHaveLength(2);
+    writeFileSync(path, file().replace("max_rounds = 5", "max_rounds = 2"));
+    await Bun.sleep(60);
+    text = (await frame()).join("\n");
+    expect(text).toContain("THE FILE CHANGED ELSEWHERE: f shows what");
+    expect(steps()).toHaveLength(2);
   });
 
   test("a click selects a step and the panel follows", async () => {

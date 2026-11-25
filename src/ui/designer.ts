@@ -721,6 +721,16 @@ export function createDesigner(
       if (target.fresh) return;
       try {
         const text = options.store.read(target);
+        if (text !== session.base && !dirty(session)) {
+          // Nothing of the user's is at stake, so the picture simply follows the file: an
+          // agent that refines a workflow is seen at work.
+          fileStale = null;
+          put(rebase(session, text));
+          say("The file was changed elsewhere; this is how it is now.", "attention");
+          shown = "";
+          refresh();
+          return;
+        }
         const next = text === session.base ? null : text;
         if (next === fileStale) return;
         fileStale = next;
