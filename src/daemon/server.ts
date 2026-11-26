@@ -6,6 +6,7 @@ import type {
   UpRequest,
 } from "../shared/protocol.ts";
 import {
+  type LeaderRequest,
   POPUP_KINDS,
   type RefreshRequest,
   type RestartWhen,
@@ -142,6 +143,10 @@ export function startServer(options: ServerOptions) {
         );
       case "POST /tools":
         return json(await workspace.saveTools(await body<ToolsSaveRequest>(request)));
+      case "GET /main/leader":
+        return json(await workspace.leaderInfo());
+      case "POST /main/leader":
+        return json(await workspace.setLeader(await body<LeaderRequest>(request)));
       case "POST /agents/refresh":
         return json(await workspace.refresh(await body<RefreshRequest>(request)));
       case "POST /agents/restart": {

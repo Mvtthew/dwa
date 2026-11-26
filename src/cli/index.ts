@@ -356,6 +356,7 @@ async function main(argv: string[]): Promise<number> {
         "design",
         "messages",
         "feed",
+        "leader",
         "menu",
       ] as const;
       const known = kinds.find((entry) => entry === kind);

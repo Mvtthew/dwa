@@ -15,7 +15,7 @@ import type { WorkflowSummary } from "../shared/workflow.ts";
 import { ago } from "./model.ts";
 import { type RoleStore, rolesScreen } from "./role-screens.ts";
 import { openRun } from "./run-screens.ts";
-import { toolsScreen } from "./tool-screens.ts";
+import { leaderScreen, toolsScreen } from "./tool-screens.ts";
 import type { Row, Screen } from "./wizard.ts";
 import { type DesignDeps, designListScreen, newWorkflowScreen } from "./workflow-screens.ts";
 
@@ -426,6 +426,12 @@ export async function menuScreen(
           },
         ]
       : []),
+    {
+      kind: "button",
+      label: "Leader mode…",
+      hint: "whether the main session hands work to agents",
+      run: async () => ({ to: await leaderScreen(api) }),
+    },
     {
       kind: "button",
       label: state.shell?.open ? "Hide the shell" : "Show the shell",

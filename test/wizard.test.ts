@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { TextAttributes } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../src/shared/protocol.ts";
+import { leaderScreen } from "../src/ui/tool-screens.ts";
 import { createWizard, type Row, type Screen } from "../src/ui/wizard.ts";
 import { agentScreen, menuScreen, type WizardApi, workflowsScreen } from "../src/ui/wizards.ts";
 
@@ -211,6 +212,7 @@ describe("the menu", () => {
       "WORKSPACE",
       "[Start an agent…]",
       "[Workflows…]",
+      "[Leader mode…] whether the main session hands work to agents",
       "[Show the shell]",
       "[Hide the pane under main]",
       "[Stop the workspace…]",
@@ -268,6 +270,42 @@ describe("the menu", () => {
     const menu = await menuScreen(api);
     expect((await next(menu, "Start an agent…")).title).toBe("Start an agent");
     expect((await next(menu, "Workflows…")).title).toBe("Workflows");
+  });
+
+  describe("the leader mode switch", () => {
+    test("asks how to restart the main session, then says what happened", async () => {
+      const sent: unknown[] = [];
+      const { api } = fakeApi({
+        "/main/leader": (body) => {
+          if (!("on" in body)) return { on: true, project: false };
+          sent.push(body);
+          return body.when
+            ? { on: false, project: false, applied: "restarted" }
+            : { on: true, project: false, applied: "ask", reason: "main" };
+        },
+        "/state": () => state(),
+      });
+      const screen = await leaderScreen(api);
+      expect(screen.title).toBe("Leader mode: on");
+      const ask = await next(screen, "Turn leader mode off…");
+      expect(ask.title).toBe("Restart main?");
+      const done = await next(ask, "Restart now");
+      expect(done.title).toBe("Leader mode: off");
+      expect(sent).toEqual([
+        { on: false, when: undefined },
+        { on: false, when: "now" },
+      ]);
+    });
+
+    test("offers no switch when the project's config decides", async () => {
+      const { api } = fakeApi({
+        "/main/leader": () => ({ on: false, project: true }),
+        "/state": () => state(),
+      });
+      const screen = await leaderScreen(api);
+      expect(screen.title).toBe("Leader mode: off");
+      expect([...buttons(screen).keys()]).toEqual(["Close"]);
+    });
   });
 });
 

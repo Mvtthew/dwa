@@ -171,6 +171,50 @@ export function saveValues(
   return saveTracked(file, after, source, now);
 }
 
+/** The `[main]` keys dwa writes itself. */
+export type MainChanges = { leader?: boolean | null };
+
+/** What `[main]` holds in one of the two config files, as written there; empty without the file. */
+export function ownMain(where: Scope, ctx: RoleContext): Record<string, unknown> {
+  const { path } = trackedConfig(ctx.projectRoot, where, ctx.env);
+  if (!existsSync(path)) return {};
+  try {
+    const parsed = Bun.TOML.parse(readFileSync(path, "utf8")) as { main?: Record<string, unknown> };
+    return parsed.main ?? {};
+  } catch {
+    // A config that does not parse is reported where it is loaded.
+    return {};
+  }
+}
+
+/**
+ * Writes values into `[main]` of a config file, the rest of the file kept as it is; `null`
+ * removes a key. The new text has to be a valid config, otherwise nothing is written. Returns
+ * the version the file is at afterwards.
+ */
+export function saveMain(
+  changes: MainChanges,
+  source: string,
+  where: Scope,
+  ctx: RoleContext,
+  now: Date = new Date(),
+): Version {
+  const file = trackedConfig(ctx.projectRoot, where, ctx.env);
+  const before = existsSync(file.path) ? readFileSync(file.path, "utf8") : "";
+  const own = ownMain(where, ctx);
+  const edits: Record<string, TomlValue | undefined> = {};
+  for (const [key, value] of Object.entries(changes)) {
+    if (value === undefined) continue;
+    // Removing a key that is not there is not a change.
+    if (value === null && !(key in own)) continue;
+    edits[key] = value === null ? undefined : value;
+  }
+  const after = setKeys(before, "main", edits);
+  // Relative paths in a config start from where that config is.
+  parseConfig(after, file.path, where === "user" ? dirname(file.path) : ctx.projectRoot);
+  return saveTracked(file, after, source, now);
+}
+
 /** Refuses a parent that does not exist or that leads back to the role itself. */
 function checkParents(name: string, parent: string, ctx: RoleContext): void {
   const seen = [name];

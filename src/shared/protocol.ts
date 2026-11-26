@@ -134,6 +134,25 @@ export interface RefreshRequest {
   when?: RestartWhen;
 }
 
+/** Whether the main session leads, and where that is decided. */
+export interface LeaderInfo {
+  on: boolean;
+  /** The project's config sets it, so the switch (which writes the personal config) cannot. */
+  project: boolean;
+}
+
+export interface LeaderRequest {
+  on: boolean;
+  /** How to restart the main session; without it the answer is `ask`. */
+  when?: RestartWhen;
+}
+
+export interface LeaderResult extends LeaderInfo {
+  applied: Applied;
+  /** For `ask`: why a restart needs a decision. */
+  reason?: "working" | "main";
+}
+
 export interface RefreshResult {
   results: { name: string; applied: Applied; error?: string }[];
 }
@@ -285,7 +304,15 @@ export interface FeedDetail extends FeedItem {
 }
 
 /** The wizards that open in a popup over the workspace. */
-export type WizardKind = "workflows" | "agent" | "tools" | "roles" | "design" | "messages" | "feed";
+export type WizardKind =
+  | "workflows"
+  | "agent"
+  | "tools"
+  | "roles"
+  | "design"
+  | "messages"
+  | "feed"
+  | "leader";
 
 /** Everything the daemon can show in a popup: the wizards, the question queue, the command menu. */
 export type PopupKind = WizardKind | "questions" | "palette";
@@ -298,6 +325,7 @@ export const POPUP_KINDS: readonly PopupKind[] = [
   "design",
   "messages",
   "feed",
+  "leader",
   "questions",
   "palette",
 ];

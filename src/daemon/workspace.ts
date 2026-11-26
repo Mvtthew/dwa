@@ -33,6 +33,9 @@ import type {
   AgentKind,
   Applied,
   HookRequest,
+  LeaderInfo,
+  LeaderRequest,
+  LeaderResult,
   PopupKind,
   RefreshRequest,
   RefreshResult,
@@ -47,7 +50,7 @@ import type {
   UpRequest,
   WorkspaceState,
 } from "../shared/protocol.ts";
-import { describeTarget, noticeEdits, saveValues } from "../shared/role-edit.ts";
+import { describeTarget, noticeEdits, ownMain, saveMain, saveValues } from "../shared/role-edit.ts";
 import {
   guideEntries,
   roleGuideList,
@@ -1238,6 +1241,49 @@ export class Workspace {
    * workspace stops, or into a file. The first two also bring the session up to date; a save
    * into a file leaves the running sessions alone and says which ones are now behind.
    */
+  /** Whether the main session leads as the config files are now. */
+  async leaderInfo(): Promise<LeaderInfo> {
+    const config = await this.deps.loadConfig();
+    return {
+      on: config.main.leader !== false,
+      project: ownMain("project", this.roleContext()).leader !== undefined,
+    };
+  }
+
+  /**
+   * Switches leader mode: `[main] leader` in the personal config, then the main session is
+   * started again with its conversation, because only a start reads the system prompt. Nothing
+   * is written until the caller has said when to restart.
+   */
+  async setLeader(request: LeaderRequest): Promise<LeaderResult> {
+    return this.serial(async () => {
+      const state = await this.requireUp();
+      const main = state.main;
+      const ctx = this.roleContext();
+      const info = await this.leaderInfo();
+      if (info.project) {
+        throw new WorkspaceError(
+          `Leader mode is set in the project's config.toml ([main] leader = ${info.on}), which wins over your personal one. Change it there.`,
+        );
+      }
+      if (info.on === request.on) return { ...info, applied: "unchanged" };
+      if (!request.when) {
+        return { ...info, applied: "ask", reason: isBusy(main) ? "working" : "main" };
+      }
+      // Absent means on, so turning it on takes the line out.
+      saveMain(
+        { leader: request.on ? null : false },
+        "leader mode switch",
+        "user",
+        ctx,
+        new Date(this.now()),
+      );
+      this.behind.at = 0;
+      const applied = await this.bringUpToDate(main, await this.deps.loadConfig(), request.when);
+      return { on: request.on, project: false, applied };
+    });
+  }
+
   async saveTools(request: ToolsSaveRequest): Promise<ToolsSaveResult> {
     return this.serial(async () => {
       const state = await this.requireUp();

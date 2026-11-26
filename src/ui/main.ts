@@ -17,7 +17,7 @@ import { roleScreen, rolesScreen } from "./role-screens.ts";
 import { diskRoleStore } from "./role-store.ts";
 import { openRun } from "./run-screens.ts";
 import { createStatusView } from "./status.ts";
-import { toolsPickScreen, toolsScreen } from "./tool-screens.ts";
+import { leaderScreen, toolsPickScreen, toolsScreen } from "./tool-screens.ts";
 import { createTopbarView } from "./topbar.ts";
 import { createWizard, type Outcome, type Screen } from "./wizard.ts";
 import {
@@ -236,15 +236,17 @@ export async function runWizard(
               ? await messagesScreen(api)
               : kind === "feed"
                 ? await feedScreen(api, subject ?? "")
-                : kind === "tools"
-                  ? subject
-                    ? await toolsScreen(api, subject)
-                    : await toolsPickScreen(api)
-                  : kind === "roles"
+                : kind === "leader"
+                  ? await leaderScreen(api)
+                  : kind === "tools"
                     ? subject
-                      ? roleScreen(api, store(), parseRef(subject))
-                      : rolesScreen(api, store())
-                    : await workflowsScreen(api, design);
+                      ? await toolsScreen(api, subject)
+                      : await toolsPickScreen(api)
+                    : kind === "roles"
+                      ? subject
+                        ? roleScreen(api, store(), parseRef(subject))
+                        : rolesScreen(api, store())
+                      : await workflowsScreen(api, design);
     }
   } catch (error) {
     console.error((error as Error).message);

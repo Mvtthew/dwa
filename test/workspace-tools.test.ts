@@ -1,7 +1,14 @@
 // The tools dialog's side of the workspace: what it shows, and the three ways a change is
 // saved. Role files are real files in a temporary project, since saving writes them.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { localVerdict } from "../src/cli/hook.ts";
@@ -12,7 +19,7 @@ import { claudeProvider } from "../src/providers/claude/launch.ts";
 import { loadConfig } from "../src/shared/config.ts";
 import { readHistory } from "../src/shared/history.ts";
 import type { AgentInfo } from "../src/shared/protocol.ts";
-import { roleHistory } from "../src/shared/role-edit.ts";
+import { roleHistory, saveMain } from "../src/shared/role-edit.ts";
 import { FakeTmux } from "./fake-tmux.ts";
 
 let dir: string;
@@ -483,5 +490,77 @@ describe("save globally", () => {
     expect(await workspace.restart("dev")).toBe("restarted");
     expect(flag(agent, "--model")).toBe("opus");
     expect((await workspace.state()).agents[0]?.outOfDate).toBeUndefined();
+  });
+});
+
+describe("the leader mode switch", () => {
+  const personal = () => join(dir, "home", "dwa", "config.toml");
+  const prompt = () =>
+    readFileSync(join(dir, ".dwa", "run", "agents", "id-1", "prompt.md"), "utf8");
+
+  test("asks before it restarts the main session, then writes the personal config", async () => {
+    await workspace.up();
+    const main = (await workspace.state()).main as AgentInfo;
+    idle(main);
+    expect(await workspace.leaderInfo()).toEqual({ on: true, project: false });
+    expect(prompt()).toContain("# Leading the work");
+
+    // Nothing is written until the caller has said when.
+    expect(await workspace.setLeader({ on: false })).toEqual({
+      on: true,
+      project: false,
+      applied: "ask",
+      reason: "main",
+    });
+    expect(existsSync(personal())).toBe(false);
+    expect(respawns()).toBe(0);
+
+    expect(await workspace.setLeader({ on: false, when: "now" })).toEqual({
+      on: false,
+      project: false,
+      applied: "restarted",
+    });
+    expect(readFileSync(personal(), "utf8")).toBe("[main]\nleader = false\n");
+    expect(respawns()).toBe(1);
+    expect(prompt()).not.toContain("# Leading the work");
+    expect((await workspace.state()).main?.outOfDate).toBeUndefined();
+
+    // On again: absent means on, so the line goes.
+    expect((await workspace.setLeader({ on: true, when: "now" })).applied).toBe("restarted");
+    expect(readFileSync(personal(), "utf8")).not.toContain("leader");
+    expect(prompt()).toContain("# Leading the work");
+    expect(await workspace.setLeader({ on: true, when: "now" })).toMatchObject({
+      applied: "unchanged",
+    });
+  });
+
+  test("a working main session restarts when its turn ends, if asked so", async () => {
+    await workspace.up();
+    const main = (await workspace.state()).main as AgentInfo;
+    working(main);
+    expect(await workspace.setLeader({ on: false })).toMatchObject({
+      applied: "ask",
+      reason: "working",
+    });
+    expect(await workspace.setLeader({ on: false, when: "turn-end" })).toMatchObject({
+      on: false,
+      applied: "pending",
+    });
+    expect(respawns()).toBe(0);
+    expect(readFileSync(personal(), "utf8")).toContain("leader = false");
+  });
+
+  test("is refused when the project's config decides", async () => {
+    const before = readFileSync(join(dir, ".dwa", "config.toml"), "utf8");
+    saveMain({ leader: true }, "test", "project", { projectRoot: dir, env });
+    // Only the one line is new; the rest of the file is as it was.
+    const after = readFileSync(join(dir, ".dwa", "config.toml"), "utf8");
+    expect(after.replace("leader = true\n", "")).toBe(before);
+    expect(after).toMatch(/\[main\]\n(?:(?!\[).*\n)*leader = true\n/);
+    await workspace.up();
+    expect(await workspace.leaderInfo()).toEqual({ on: true, project: true });
+    await expect(workspace.setLeader({ on: false, when: "now" })).rejects.toThrow(
+      "set in the project's config.toml",
+    );
   });
 });

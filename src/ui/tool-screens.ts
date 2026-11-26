@@ -2,6 +2,8 @@
 // and the three ways to save a change. Rows and requests only, like the other screens.
 import type {
   Applied,
+  LeaderInfo,
+  LeaderResult,
   RefreshResult,
   RestartWhen,
   SessionRef,
@@ -389,6 +391,67 @@ export async function toolsPickScreen(api: WizardApi): Promise<Screen> {
           run: async () => ({ to: await toolsScreen(api, agent.id) }),
         }),
       ),
+      close,
+    ],
+  };
+}
+
+/**
+ * The leader mode switch: what it means, and the restart of the main session that makes it
+ * take effect. The setting goes into the personal config.
+ */
+export async function leaderScreen(api: WizardApi): Promise<Screen> {
+  const [info, state] = await Promise.all([
+    api.call<LeaderInfo>("GET", "/main/leader"),
+    api.call<WorkspaceState>("GET", "/state"),
+  ]);
+  const title = `Leader mode: ${info.on ? "on" : "off"}`;
+  const what = info.on
+    ? "The main session leads: it hands work to agents and keeps the conversation with you,\nthe plan and the results. Off, it does the work itself, as an ordinary session."
+    : "The main session does the work itself. On, it leads: it hands work to agents and keeps\nthe conversation with you, the plan and the results.";
+  if (info.project) {
+    return {
+      title,
+      rows: [
+        { kind: "note", text: what },
+        {
+          kind: "note",
+          tone: "attention",
+          text: "The project's .dwa/config.toml sets this ([main] leader), which wins over your\npersonal setting. Change it there.",
+        },
+        close,
+      ],
+    };
+  }
+  const main = state.main;
+  if (!main) {
+    return { title, rows: [{ kind: "note", text: "The workspace is not running." }, close] };
+  }
+  const send = async (when?: RestartWhen): Promise<Outcome> => {
+    const result = await api.call<LeaderResult>("POST", "/main/leader", { on: !info.on, when });
+    if (result.applied === "ask") return { to: restartScreen(main, result.reason, send) };
+    return {
+      to: doneScreen(`Leader mode: ${result.on ? "on" : "off"}`, [
+        result.applied === "pending"
+          ? "Saved in your personal config. The main session restarts when its turn ends."
+          : "Saved in your personal config. The main session was restarted with its conversation.",
+      ]),
+    };
+  };
+  return {
+    title,
+    rows: [
+      { kind: "note", text: what },
+      {
+        kind: "note",
+        text: "The setting is yours, for every project ([main] leader in your personal config.toml).",
+      },
+      {
+        kind: "button",
+        label: info.on ? "Turn leader mode off…" : "Turn leader mode on…",
+        tone: "good",
+        run: () => send(),
+      },
       close,
     ],
   };
