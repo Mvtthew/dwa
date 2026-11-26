@@ -4,6 +4,20 @@ description = "The session you work in; hands work to agents and keeps track of 
 
 model = "opus"
 effort = "high"
+# The built-in tools the session has, and no others: the default list plus WebSearch. A tool
+# that is not named here does not exist for the session (and costs it no context).
+tools = [
+  "Read",
+  "Edit",
+  "Write",
+  "Bash",
+  "Glob",
+  "Grep",
+  "Skill",
+  "AskUserQuestion",
+  "ExitPlanMode",
+  "WebSearch",
+]
 
 # Looking at the repository never asks; everything else follows the permission mode.
 allow = ["Bash(git status *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)"]

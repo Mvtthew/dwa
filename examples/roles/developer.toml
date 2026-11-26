@@ -1,5 +1,4 @@
-# Implements a change. It has the default tools (no `tools` line: Read, Edit, Write, Bash, Glob,
-# Grep, Skill and the two for questions and plans); file edits are accepted without asking,
+# Implements a change. It has the default tools and WebSearch; file edits are accepted without asking,
 # shell commands still ask unless a rule below allows them.
 description = "Implements a change that has already been scoped, with tests, and reports what was done."
 # What the main session reads when it picks a role for a job.
@@ -10,6 +9,20 @@ Not for open questions about the code (explore) or for judging a finished change
 
 model = "sonnet"
 effort = "high"
+# The built-in tools the session has, and no others: the default list plus WebSearch. A tool
+# that is not named here does not exist for the session (and costs it no context).
+tools = [
+  "Read",
+  "Edit",
+  "Write",
+  "Bash",
+  "Glob",
+  "Grep",
+  "Skill",
+  "AskUserQuestion",
+  "ExitPlanMode",
+  "WebSearch",
+]
 permission_mode = "acceptEdits"
 
 allow = [
