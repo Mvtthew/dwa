@@ -3,6 +3,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import pkg from "../../package.json" with { type: "json" };
 import { call } from "../cli/client.ts";
 import { APP_NAME } from "../shared/constants.ts";
 import { daemonSocketPath } from "../shared/paths.ts";
@@ -86,7 +87,7 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
     return null;
   };
 
-  const server = new McpServer({ name: APP_NAME, version: "0.0.0" });
+  const server = new McpServer({ name: APP_NAME, version: pkg.version });
 
   server.registerTool(
     "list_agents",

@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import pkg from "../../package.json" with { type: "json" };
 import { listServerTools } from "../mcp/list-tools.ts";
 import type { Provider } from "../providers/provider.ts";
 import {
@@ -1528,7 +1529,11 @@ export class Workspace {
       });
     write(
       join(plugin, ".claude-plugin", "plugin.json"),
-      JSON.stringify({ name: APP_NAME, version: "0.0.0", description: "Skills for this session" }),
+      JSON.stringify({
+        name: APP_NAME,
+        version: pkg.version,
+        description: "Skills for this session",
+      }),
     );
     for (const skill of skills) link(skill.path, join(plugin, "skills", skill.name));
     return plugin;
