@@ -1,6 +1,6 @@
 // Pure functions that turn workspace state into what the panes show. No terminal code here,
 // so everything is unit-tested without a renderer.
-import { MAX_VISIBLE_AGENTS } from "../shared/constants.ts";
+import { DEFAULT_KEY_PREFIX, MAX_VISIBLE_AGENTS } from "../shared/constants.ts";
 import { contextText } from "../shared/context.ts";
 import type {
   AgentActivity,
@@ -12,6 +12,7 @@ import type {
   WorkspaceState,
 } from "../shared/protocol.ts";
 import { capabilityLines, type SessionSummary } from "../shared/roles.ts";
+import { SHORTCUT_CATEGORIES, type ShortcutCategory } from "../shared/shortcuts.ts";
 
 export type Tone = "good" | "muted" | "attention" | "bad";
 
@@ -365,4 +366,72 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
     })),
     workflows: state.workflows.map(workflowLine),
   };
+}
+
+/** What a click on a part of the top bar does. */
+export type TopbarAction =
+  | { menu: ShortcutCategory }
+  | { toggle: "shell" | "feed" }
+  | { popup: "questions" | "messages" };
+
+export interface TopbarSegment {
+  text: string;
+  /** Columns from the bar's left edge. */
+  x: number;
+  tone?: Tone;
+  /** Drawn in inverse video: a toggle that is on. */
+  on?: boolean;
+  /** Kept dim: separators and the key hint. */
+  quiet?: boolean;
+  action?: TopbarAction;
+}
+
+/**
+ * The top bar, left to right: the shortcut categories (each opens its dropdown), the pane
+ * toggles, what waits for the user (open questions to them, unread messages), and the keys at
+ * the right edge when there is room. Segments that do not fit are left out from the right.
+ */
+export function topbarModel(state: WorkspaceState | null, width: number): TopbarSegment[] {
+  const parts: Omit<TopbarSegment, "x">[] = [];
+  const separator = () => parts.push({ text: " │ ", quiet: true });
+  // Each button has a space at both ends, which is the gap between two of them.
+  SHORTCUT_CATEGORIES.forEach((category) => {
+    parts.push({ text: ` ${category} `, action: { menu: category } });
+  });
+  separator();
+  const shell = state?.shell?.open ?? false;
+  parts.push({ text: " Shell ", on: shell, action: { toggle: "shell" } });
+  const questions = state?.questions.filter((question) => question.to === "user").length ?? 0;
+  const waiting = state?.questions.length ?? 0;
+  const messages = state?.inbox.length ?? 0;
+  if (waiting > 0 || messages > 0) separator();
+  if (waiting > 0) {
+    parts.push({
+      text: ` ? ${waiting} `,
+      tone: questions > 0 ? "attention" : undefined,
+      action: { popup: "questions" },
+    });
+  }
+  if (messages > 0) parts.push({ text: ` ✉ ${messages} `, action: { popup: "messages" } });
+
+  const segments: TopbarSegment[] = [];
+  let x = 0;
+  for (const part of parts) {
+    if (x + part.text.length > width) break;
+    segments.push({ ...part, x });
+    x += part.text.length;
+  }
+  const prefix = formatKey(state?.keyPrefix ?? DEFAULT_KEY_PREFIX);
+  const keys = `${prefix} then key · Alt+key `;
+  if (x + keys.length + 2 <= width) {
+    segments.push({ text: keys, x: width - keys.length, quiet: true });
+  }
+  return segments;
+}
+
+/** The segment with an action under column `x`, if any. */
+export function topbarHit(segments: TopbarSegment[], x: number): TopbarSegment | undefined {
+  return segments.find(
+    (segment) => segment.action && x >= segment.x && x < segment.x + segment.text.length,
+  );
 }

@@ -1,24 +1,12 @@
 import { BoxRenderable, bold, type CliRenderer, dim } from "@opentui/core";
-import { APP_LOGO, APP_NAME, DEFAULT_KEY_PREFIX } from "../shared/constants.ts";
+import { APP_LOGO, APP_NAME } from "../shared/constants.ts";
 import type { WorkspaceState } from "../shared/protocol.ts";
-import { bar, fit, formatKey, type Meter, percentTone, statusModel } from "./model.ts";
+import { bar, fit, type Meter, percentTone, statusModel } from "./model.ts";
 import { createText, type Part, styled } from "./text.ts";
 import { accent, tone } from "./theme.ts";
 
-/** What a button in the status pane asks for. */
-export type StatusAction =
-  | "workflows"
-  | "agent"
-  | "tools"
-  | "roles"
-  | "design"
-  | "shell"
-  | "close"
-  | "focus"
-  | "questions"
-  | "palette"
-  | "zoom"
-  | "detach";
+/** What a clicked line of the status pane opens: the designer, at a workflow run. */
+export type StatusAction = "design";
 
 export interface StatusOptions {
   /**
@@ -28,66 +16,6 @@ export interface StatusOptions {
   /** Shown at the very bottom. */
   version: string;
 }
-
-interface Button {
-  /** The key that does the same: after the prefix anywhere, or alone while this pane has the focus. */
-  key: string;
-  label: (state: WorkspaceState | null) => string;
-  /** Without one the line is a hint in the same shape, not a button: the key needs a choice. */
-  action?: StatusAction;
-}
-
-interface Section {
-  title: string;
-  buttons: Button[];
-}
-
-/**
- * The shortcuts as buttons, by what they are about. Every key comes after the prefix. A pane too
- * short for them and the text above loses them from the last section up.
- */
-const SECTIONS: Section[] = [
-  {
-    title: "Workflows",
-    buttons: [
-      { key: "w", label: () => "Workflows", action: "workflows" },
-      { key: "g", label: () => "Workflow designer", action: "design" },
-    ],
-  },
-  {
-    title: "Agents",
-    buttons: [
-      { key: "a", label: () => "New agent", action: "agent" },
-      { key: "t", label: () => "Agent tools", action: "tools" },
-      { key: "r", label: () => "Role settings", action: "roles" },
-      { key: "q", label: () => "Answer", action: "questions" },
-      { key: "1-9", label: () => "Open agent" },
-    ],
-  },
-  {
-    title: "Panes",
-    buttons: [
-      {
-        key: "s",
-        label: (state) => (state?.shell?.open ? "Hide shell" : "Shell"),
-        action: "shell",
-      },
-      { key: "0", label: () => "Focus main", action: "focus" },
-      { key: "z", label: () => "Zoom main", action: "zoom" },
-      { key: "x", label: () => "Close pane", action: "close" },
-    ],
-  },
-  {
-    title: "Workspace",
-    buttons: [
-      { key: "p", label: () => "Menu", action: "palette" },
-      { key: "d", label: () => "Detach", action: "detach" },
-    ],
-  },
-];
-
-/** Rows of a section: a gap, its title, its buttons. */
-const rows = (section: Section) => section.buttons.length + 2;
 
 export interface StatusView {
   update(state: WorkspaceState, nowMs: number): void;
@@ -109,8 +37,8 @@ function meter(entry: Meter, width: number): Part[][] {
 }
 
 /**
- * The status pane: the selected session, usage limits and workflow runs, and at the bottom, where
- * they stay however long the text above gets, the shortcuts as buttons in sections and the version.
+ * The status pane: the selected session, usage limits and workflow runs, and at the bottom the
+ * logo and the version. The shortcuts are in the top bar.
  */
 export function createStatusView(renderer: CliRenderer, options: StatusOptions): StatusView {
   const root = new BoxRenderable(renderer, {
@@ -140,52 +68,15 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
   root.add(body);
 
   const bottom = new BoxRenderable(renderer, {
-    id: "status-buttons",
+    id: "status-bottom",
     flexDirection: "column",
     flexShrink: 0,
   });
-  const addLine = (id: string, parent: BoxRenderable = bottom) => {
+  const addLine = (id: string) => {
     const line = createText(renderer, id, 1);
-    parent.add(line);
+    bottom.add(line);
     return line;
   };
-  const sections = SECTIONS.map((section) => {
-    const id = section.title.toLowerCase();
-    const box = new BoxRenderable(renderer, {
-      id: `status-section-${id}`,
-      flexDirection: "column",
-      flexShrink: 0,
-      height: rows(section),
-    });
-    addLine(`status-gap-${id}`, box);
-    // Dim, so it is not taken for a heading of the text above (WORKFLOWS, AGENTS).
-    addLine(`status-title-${id}`, box).content = styled([[dim(section.title)]]);
-    const buttons = section.buttons.map((button) => {
-      const { action } = button;
-      const line = new BoxRenderable(renderer, {
-        id: `status-button-${action ?? button.key}`,
-        height: 1,
-        flexShrink: 0,
-        onMouseDown: action ? () => options.run(action) : undefined,
-      });
-      const label = createText(renderer, `status-button-text-${action ?? button.key}`, 1);
-      line.add(label);
-      box.add(line);
-      return { button, label };
-    });
-    bottom.add(box);
-    return { section, box, buttons };
-  });
-  // The prefix once, under all of them and as quiet as a footnote. Gone with the last section.
-  const prefix = new BoxRenderable(renderer, {
-    id: "status-keys",
-    flexDirection: "column",
-    flexShrink: 0,
-    height: 2,
-  });
-  addLine("status-gap-keys", prefix);
-  const title = addLine("status-keys-title", prefix);
-  bottom.add(prefix);
   addLine("status-gap-version");
   /** The name drawn large. The first thing left out when the pane is short, or too narrow for it. */
   const logo = createText(renderer, "status-logo", APP_LOGO.length);
@@ -193,37 +84,11 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
   bottom.add(logo);
   const version = addLine("status-version");
   version.content = styled([[dim(`${APP_NAME} ${options.version}`)]]);
-  /** Rows of the bottom part without any shortcut: a gap and the version. */
+  /** Rows of the bottom part without the logo: a gap and the version. */
   const bare = 2;
-  /** Rows with the first `count` sections: a gap and the line with the prefix come with the first one. */
-  const height = (count: number) =>
-    SECTIONS.slice(0, count).reduce((total, section) => total + rows(section), bare) +
-    (count > 0 ? prefix.height : 0);
-  const full = height(SECTIONS.length);
-  bottom.height = full + APP_LOGO.length;
+  bottom.height = bare + APP_LOGO.length;
   root.add(bottom);
   renderer.root.add(root);
-
-  const paintButtons = (state: WorkspaceState | null) => {
-    for (const { button, label } of sections.flatMap((entry) => entry.buttons)) {
-      const text = button.label(state);
-      label.content = styled([
-        button.action
-          ? [accent("▸ "), bold(text), dim(`  ${button.key}`)]
-          : [dim(`▸ ${text}  ${button.key}`)],
-      ]);
-    }
-    const keys = formatKey(state?.keyPrefix ?? DEFAULT_KEY_PREFIX).toLowerCase();
-    title.content = styled([[dim(`shortcuts  ${keys}, then`)]]);
-  };
-  paintButtons(null);
-
-  renderer.keyInput.on("keypress", (key) => {
-    const button = SECTIONS.flatMap((section) => section.buttons).find(
-      (entry) => entry.key === key.name,
-    );
-    if (button?.action) options.run(button.action);
-  });
 
   return {
     update(state, nowMs) {
@@ -284,19 +149,12 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
       }
 
       text.content = styled(lines);
-      // What needs the user must not be pushed out of sight by a list of shortcuts.
-      let shown = SECTIONS.length;
-      while (shown > 0 && lines.length + height(shown) > renderer.height) shown--;
+      // What needs the user must not be pushed out of sight by the logo.
       const drawn =
-        lines.length + full + APP_LOGO.length <= renderer.height &&
+        lines.length + bare + APP_LOGO.length <= renderer.height &&
         APP_LOGO.every((row) => row.length <= width);
-      prefix.visible = shown > 0;
-      sections.forEach(({ box }, index) => {
-        box.visible = index < shown;
-      });
       logo.visible = drawn;
-      bottom.height = height(shown) + (drawn ? APP_LOGO.length : 0);
-      paintButtons(state);
+      bottom.height = bare + (drawn ? APP_LOGO.length : 0);
     },
     showMessage(message) {
       targets.clear();

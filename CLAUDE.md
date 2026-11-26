@@ -51,7 +51,8 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - `src/providers/` the provider interface and the Claude Code launch command
 - `src/daemon/activity.ts` turns hook events and statusline JSON into agent activity and telemetry
 - `src/cli/hook.ts` holds the `hook` and `statusline` commands Claude Code runs in every session; keep it fast, free of heavy imports and silent apart from what its comments name
-- `src/ui/` OpenTUI panes: `model.ts` is pure view logic, `agents.ts` and `status.ts` draw it; `wizard.ts` is the form engine for the popups and `wizards.ts` their screens, the menu included (no terminal code); `theme.ts` holds the colours; test with `createTestRenderer` from `@opentui/core/testing`
+- `src/shared/shortcuts.ts` every shortcut once (key, label, category, action); the tmux bindings, the top bar and its `display-menu` dropdowns (`menuArgs` in `src/tmux/conf.ts`) are made from it
+- `src/ui/` OpenTUI panes: `model.ts` is pure view logic, `agents.ts`, `status.ts` and `topbar.ts` draw it; `wizard.ts` is the form engine for the popups and `wizards.ts` their screens, the menu included (no terminal code); `theme.ts` holds the colours; test with `createTestRenderer` from `@opentui/core/testing`
 - `src/daemon/messaging.ts` messages and questions: delivery through the mailbox hook with a paste fallback, questions that never expire
 - `src/mcp/server.ts` the MCP server each session runs for the dwa tools; stateless, every tool is a daemon request
 - `src/cli/talk.ts` the user's `ask`, `answer` and `inbox` commands; `palette.ts` lists the project's roles; `init.ts` project setup; `roles.ts` the `role` and `config check` commands

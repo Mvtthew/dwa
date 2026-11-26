@@ -357,8 +357,8 @@ async function main(argv: string[]): Promise<number> {
     }
     case "ui": {
       const view = rest[0];
-      if (view !== "status" && view !== "agents") {
-        console.error("Usage: dwa ui <status|agents>");
+      if (view !== "status" && view !== "agents" && view !== "topbar") {
+        console.error(`Usage: ${APP_NAME} ui <status|agents|topbar>`);
         return 2;
       }
       return (await import("../ui/main.ts")).runUi(view, projectRoot);

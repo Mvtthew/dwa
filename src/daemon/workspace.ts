@@ -65,6 +65,7 @@ import {
   UnknownRoleError,
 } from "../shared/roles.ts";
 import { type Scope, scopeLabel } from "../shared/scope.ts";
+import type { ShortcutCategory } from "../shared/shortcuts.ts";
 import { SKILL_FILE, skillHeader } from "../shared/skill-file.ts";
 import { skillGuideEntries, skillGuidePrompt, skillTask } from "../shared/skill-guide.ts";
 import {
@@ -76,7 +77,7 @@ import {
   type ToolSources,
   toolView,
 } from "../shared/tools.ts";
-import { popupArgs, selfCommand, tmuxQuote } from "../tmux/conf.ts";
+import { menuArgs, popupArgs, selfCommand, tmuxQuote } from "../tmux/conf.ts";
 import type { TmuxRunner } from "../tmux/driver.ts";
 import {
   createWorkspace,
@@ -92,6 +93,7 @@ import {
   returnToPool,
   SESSION,
   spawnPoolWindow,
+  TOP_BAR_HEIGHT,
 } from "../tmux/layout.ts";
 import { parseStatusline, reduceHook, sessionLine, snippet } from "./activity.ts";
 import type { AgentRow, Store } from "./db.ts";
@@ -332,6 +334,7 @@ export class Workspace {
       });
       const panes = await createWorkspace(this.deps.run, {
         cwd: this.deps.projectRoot,
+        top: this.uiPane("topbar", APP_NAME),
         left: this.uiPane("status", "status"),
         main: {
           argv: launch.argv,
@@ -544,6 +547,16 @@ export class Workspace {
     const self = selfCommand(this.deps.selfArgv, this.deps.projectRoot);
     // Not queued and not awaited: the command only returns when the popup is closed.
     this.deps.run(popupArgs(self, kind, subject)).catch(() => undefined);
+  }
+
+  /**
+   * Opens a category's dropdown under the top bar, at column `x` of the bar. Returns at once,
+   * like a popup: tmux shows the menu on the attached terminal and runs the chosen item.
+   */
+  menu(category: ShortcutCategory, x: number): void {
+    const self = selfCommand(this.deps.selfArgv, this.deps.projectRoot);
+    // The bar is the window's first pane: its border line is row 0 and its text row 1.
+    this.deps.run(menuArgs(self, category, x, TOP_BAR_HEIGHT + 1)).catch(() => undefined);
   }
 
   /** Gives the main session the whole window, or the layout back when it already has it. */

@@ -283,3 +283,13 @@ The last row's total and its parts do not add up (the screen showed the same tot
 - **Tried with the real hook command** (`dwa hook PreToolUse` with a `skills.json` of `["projskill", "dwa:*"]`): `projskill` and `dwa:dwaskill` loaded, `projskill2` and `simplify` came back as "PreToolUse:Skill hook error" with dwa's text, and the model reported them as not available.
 
 Not tested: a skill typed as `/<name>` by the user (no `PreToolUse` is expected for it); skills of a plugin that is built into the Claude command; whether a later version keeps these ids; the cost of the default list on a larger model, whose tool definitions may differ.
+
+## S10. A dropdown menu started from the daemon
+
+Run on 2026-11-26 with tmux 3.8 in a private server (`tmux -L dwaspike -f /dev/null`), with one client attached through `script` so a menu had a terminal to appear on. `display-menu` and `display-popup` were run from outside tmux, the way the daemon runs them, and timed.
+
+- **`display-menu` returns at once** (0.01 s) with exit code 0, while the menu stays on the client. `display-popup -E 'sleep 2'` returned after 2.03 s, when the popup closed. So a menu needs no queue of its own, but it is still run outside the workspace's tmux queue like a popup, and not awaited.
+- **Without `-c` the menu goes to the attached client**, as with `display-popup`.
+- `-x` and `-y` take absolute columns and rows. As the manual describes it, tmux places the menu so that `-y` is the row under its last line, which is why `menuArgs` adds the menu's height to the row its top should be at.
+
+Not tested: where the menu appears on the screen (an overlay is not part of `capture-pane`), and two clients attached at once.

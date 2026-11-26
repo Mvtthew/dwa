@@ -85,7 +85,7 @@ const DEFAULT_TOOL_LIST = [...DEFAULT_TOOLS, "WaitForMcpServers"].join(",");
 const builtinOff = Object.fromEntries(BUILTIN_SKILLS.map((name) => [name, "off"]));
 
 describe("up", () => {
-  test("creates the three columns with the main session in the middle", async () => {
+  test("creates the top bar and three columns with the main session in the middle", async () => {
     const state = await workspace.up();
     expect(state.up).toBe(true);
     expect(state.main?.name).toBe("main");
@@ -93,7 +93,7 @@ describe("up", () => {
     expect(state.agents).toEqual([]);
 
     const panes = [...tmux.panes.values()];
-    expect(panes.map((pane) => pane.window)).toEqual(Array(3).fill(WORKSPACE_WINDOW));
+    expect(panes.map((pane) => pane.window)).toEqual(Array(4).fill(WORKSPACE_WINDOW));
     expect(panes[0]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "status"]);
     const mainArgv = panes[1]?.argv ?? [];
     expect(mainArgv).toEqual([
@@ -116,6 +116,7 @@ describe("up", () => {
     ]);
     expect(files.get("/project/.dwa/run/agents/id-1/prompt.md")).toContain('You are "main"');
     expect(panes[2]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "agents"]);
+    expect(panes[3]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "topbar"]);
     expect(panes[1]?.env).toMatchObject({
       DWA_PROJECT: "/project",
       DWA_SOCKET: "/tmp/dwa.sock",
@@ -204,7 +205,17 @@ describe("config", () => {
   test("layout sizes from the config are applied", async () => {
     config.layout = { status_width: 24, agents_width: 40, agent_height: 55 };
     await workspace.up();
-    expect(tmux.commands("resize-pane").map((command) => command.at(-1))).toEqual(["24", "40"]);
+    // The top bar keeps its one row, the side columns their widths, now and on every resize.
+    expect(tmux.commands("resize-pane").map((command) => command.at(-1))).toEqual([
+      "1",
+      "24",
+      "40",
+    ]);
+    const hook = tmux.commands("set-hook").find((command) => command.includes("window-resized"));
+    expect(hook?.at(-1)).toMatch(/-y 1 ; resize-pane .* -x 24 ; resize-pane .* -x 40$/);
+    // Full width, above the columns, running the bar.
+    const bar = tmux.commands("split-window").find((command) => command.includes("-f"));
+    expect(bar).toEqual(expect.arrayContaining(["-v", "-b", "-l", "1", "ui", "topbar"]));
     await workspace.spawn({ name: "a" });
     await workspace.open("a");
     expect(tmux.commands("join-pane").at(-1)).toContain("55%");

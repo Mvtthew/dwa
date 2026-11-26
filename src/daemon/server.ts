@@ -11,6 +11,7 @@ import {
   type RestartWhen,
   type ToolsSaveRequest,
 } from "../shared/protocol.ts";
+import { isShortcutCategory, SHORTCUT_CATEGORIES } from "../shared/shortcuts.ts";
 import { listWorkflows } from "../shared/workflow.ts";
 import { noticeWorkflowEdits } from "../shared/workflow-edit.ts";
 import { TmuxError } from "../tmux/driver.ts";
@@ -98,6 +99,15 @@ export function startServer(options: ServerOptions) {
         const about =
           typeof subject === "string" && /^[\w.:-]{1,64}$/.test(subject) ? subject : undefined;
         workspace.popup(known, about);
+        return json({ ok: true });
+      }
+      case "POST /menu": {
+        const { category, x } = await body<{ category?: unknown; x?: unknown }>(request);
+        if (!isShortcutCategory(category)) {
+          throw new WorkspaceError(`Unknown menu: use ${SHORTCUT_CATEGORIES.join(", ")}.`);
+        }
+        const column = typeof x === "number" && Number.isFinite(x) ? Math.round(x) : 0;
+        workspace.menu(category, Math.max(0, Math.min(column, 1000)));
         return json({ ok: true });
       }
       case "POST /zoom":

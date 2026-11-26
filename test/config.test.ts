@@ -20,7 +20,8 @@ import {
 } from "../src/shared/config.ts";
 import { cleanEnv, spawnOrigin } from "../src/shared/env.ts";
 import { type ResolvedSession, resolveSession } from "../src/shared/roles.ts";
-import { buildTmuxConf, tmuxQuote } from "../src/tmux/conf.ts";
+import { SHORTCUTS } from "../src/shared/shortcuts.ts";
+import { buildTmuxConf, menuArgs, tmuxQuote } from "../src/tmux/conf.ts";
 import { parsePaneList } from "../src/tmux/layout.ts";
 import { testRoleFiles } from "./role-files.ts";
 
@@ -476,6 +477,21 @@ describe("tmux helpers", () => {
     expect(conf).toContain("bind -n M-a display-popup -E -w 70% -h 80% -T ' New agent ' ");
     expect(conf).toContain("bind t display-popup -E -w 70% -h 90% -T ' Agent tools ' ");
     expect(conf).toContain("bind -n M-r display-popup -E -w 70% -h 90% -T ' Role settings ' ");
+    expect(conf).toContain("bind z resize-pane -Z");
+    // Detach is after the prefix only: Alt+D deletes a word in the programs in the panes.
+    expect(conf).toContain("bind d detach-client");
+    expect(conf).not.toContain("M-d");
+    // Every shortcut is bound after the prefix, the same keys as the menus list.
+    for (const entry of SHORTCUTS) expect(conf).toContain(`bind ${entry.key} `);
+  });
+
+  test("a category's menu lists its shortcuts with their keys, under the given row", () => {
+    const args = menuArgs("dwa", "Agents", 12, 2);
+    expect(args.slice(0, 7)).toEqual(["display-menu", "-x", "12", "-y", "9", "-T", " Agents "]);
+    // Four items and the hint, two border lines: the menu's last row is 2 + 7.
+    expect(args.slice(7, 10)).toEqual(["New agent", "a", expect.stringContaining("New agent")]);
+    expect(args.slice(-3)).toEqual(["-Open agent  1-9", "", ""]);
+    expect(menuArgs("dwa", "Panes", 0, 2)).toContain("run-shell -b 'dwa key shell'");
   });
 
   test("parsePaneList reads pane id, dead flag and window", () => {

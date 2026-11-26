@@ -12,6 +12,9 @@ export interface LayoutSizes {
   agentHeight: number;
 }
 
+/** Rows of the top bar's text. tmux draws its border line above it. */
+export const TOP_BAR_HEIGHT = 1;
+
 export const DEFAULT_LAYOUT: LayoutSizes = { statusWidth: 30, agentsWidth: 34, agentHeight: 40 };
 
 const PRINT_PANE = ["-P", "-F", "#{pane_id}"];
@@ -37,19 +40,22 @@ export async function hasSession(run: TmuxRunner): Promise<boolean> {
 }
 
 export interface WorkspacePanes {
+  top: string;
   left: string;
   main: string;
   right: string;
 }
 
 /**
- * Creates the session with its three columns: status pane, main session, agents pane.
- * The side columns keep a fixed width when the terminal is resized.
+ * Creates the session with the top bar across the whole width and three columns under it:
+ * status pane, main session, agents pane. The bar keeps its height and the side columns their
+ * width when the terminal is resized.
  */
 export async function createWorkspace(
   run: TmuxRunner,
   options: {
     cwd: string;
+    top: PaneCommand;
     left: PaneCommand;
     main: PaneCommand;
     right: PaneCommand;
@@ -101,26 +107,51 @@ export async function createWorkspace(
     "--",
     ...options.right.argv,
   ]);
+  // Full width (-f) and above the columns (-b): one row over all of them.
+  const top = await run([
+    "split-window",
+    "-d",
+    "-f",
+    "-v",
+    "-b",
+    "-l",
+    String(TOP_BAR_HEIGHT),
+    "-t",
+    left,
+    "-c",
+    cwd,
+    ...envArgs(options.top.env),
+    ...PRINT_PANE,
+    "--",
+    ...options.top.argv,
+  ]);
+  await setTitle(run, top, options.top.title);
   await setTitle(run, left, options.left.title);
   await setTitle(run, main, options.main.title);
   await setTitle(run, right, options.right.title);
-  await fixSideColumns(run, { left, right }, sizes);
+  const frame = { top, left, right };
+  for (const args of frameResizes(frame, sizes)) await run(args);
   await run([
     "set-hook",
     "-g",
     "window-resized",
-    `resize-pane -t ${left} -x ${sizes.statusWidth} ; resize-pane -t ${right} -x ${sizes.agentsWidth}`,
+    frameResizes(frame, sizes)
+      .map((args) => args.join(" "))
+      .join(" ; "),
   ]);
-  return { left, main, right };
+  return { top, left, main, right };
 }
 
-export async function fixSideColumns(
-  run: TmuxRunner,
-  panes: { left: string; right: string },
+/** The resizes that put the top bar and the side columns back to their sizes. */
+export function frameResizes(
+  panes: { top: string; left: string; right: string },
   sizes: LayoutSizes = DEFAULT_LAYOUT,
-): Promise<void> {
-  await run(["resize-pane", "-t", panes.left, "-x", String(sizes.statusWidth)]);
-  await run(["resize-pane", "-t", panes.right, "-x", String(sizes.agentsWidth)]);
+): string[][] {
+  return [
+    ["resize-pane", "-t", panes.top, "-y", String(TOP_BAR_HEIGHT)],
+    ["resize-pane", "-t", panes.left, "-x", String(sizes.statusWidth)],
+    ["resize-pane", "-t", panes.right, "-x", String(sizes.agentsWidth)],
+  ];
 }
 
 export async function setTitle(run: TmuxRunner, pane: string, title: string): Promise<void> {

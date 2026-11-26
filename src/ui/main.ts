@@ -17,6 +17,7 @@ import { diskRoleStore } from "./role-store.ts";
 import { openRun } from "./run-screens.ts";
 import { createStatusView } from "./status.ts";
 import { toolsPickScreen, toolsScreen } from "./tool-screens.ts";
+import { createTopbarView } from "./topbar.ts";
 import { createWizard, type Outcome, type Screen } from "./wizard.ts";
 import {
   agentScreen,
@@ -28,7 +29,7 @@ import {
 import { type DesignDeps, designListScreen, openDesign } from "./workflow-screens.ts";
 import { diskWorkflowStore } from "./workflow-store.ts";
 
-export type UiView = "status" | "agents";
+export type UiView = "status" | "agents" | "topbar";
 
 const POLL_MS = 500;
 
@@ -83,20 +84,17 @@ export async function runUi(view: UiView, projectRoot: string): Promise<never> {
           toggle: (agentId) => post("/agents/toggle", { target: agentId }),
           close: () => post("/agents/close"),
           tools: (agentId) => post("/popup", { kind: "tools", subject: agentId }),
-          open: (kind, subject) => post("/popup", { kind, subject }),
-          clearMessages: () => post("/inbox/clear"),
         })
-      : createStatusView(renderer, {
-          version: pkg.version,
-          run: (action, subject) => {
-            if (action === "shell") return post("/shell/toggle");
-            if (action === "close") return post("/agents/close");
-            if (action === "focus") return post("/focus");
-            if (action === "zoom") return post("/zoom");
-            if (action === "detach") return post("/detach");
-            return post("/popup", { kind: action, subject });
-          },
-        });
+      : view === "topbar"
+        ? createTopbarView(renderer, (action, x) => {
+            if ("menu" in action) return post("/menu", { category: action.menu, x });
+            if ("toggle" in action) return post(`/${action.toggle}/toggle`);
+            return post("/popup", { kind: action.popup });
+          })
+        : createStatusView(renderer, {
+            version: pkg.version,
+            run: (action, subject) => post("/popup", { kind: action, subject }),
+          });
 
   while (true) {
     try {
