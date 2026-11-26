@@ -76,6 +76,18 @@ export function startServer(options: ServerOptions) {
         return json({ ok: true, pid: process.pid });
       case "GET /state":
         return json(await workspace.state());
+      case "GET /feed": {
+        const params = new URL(request.url).searchParams;
+        const after = Number(params.get("after") ?? 0) || 0;
+        const limit = Number(params.get("limit") ?? 200) || 200;
+        return json({ items: workspace.feed.list(after, limit) });
+      }
+      case "GET /feed/item": {
+        const id = Number(new URL(request.url).searchParams.get("id"));
+        const item = Number.isInteger(id) ? workspace.feed.item(id) : null;
+        if (!item) throw new WorkspaceError(`No feed item ${id}.`);
+        return json(item);
+      }
       case "POST /up":
         return json(await workspace.up(await body<UpRequest>(request)));
       case "POST /agents":

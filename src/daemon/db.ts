@@ -69,6 +69,24 @@ export interface QuestionRow {
   answeredAt: number | null;
 }
 
+/** One item of the event feed, as stored. `data` is JSON whose shape depends on the kind. */
+export interface FeedRow {
+  id: number;
+  at: number;
+  kind: string;
+  agentId: string | null;
+  agentName: string | null;
+  refId: string | null;
+  refName: string | null;
+  title: string;
+  body: string;
+  data: string | null;
+  /** True for an item about the main session. */
+  fromMain: number | null;
+}
+
+export type NewFeedRow = Omit<FeedRow, "id" | "fromMain">;
+
 export interface EventRow {
   agentId: string;
   at: number;
@@ -202,6 +220,19 @@ const MIGRATIONS = [
    ALTER TABLE agents ADD COLUMN reminders INTEGER NOT NULL DEFAULT 0;`,
   // Not used any more: it held the whole reply for a dialog that is gone. Migrations stay.
   "ALTER TABLE agents ADD COLUMN detail_text TEXT;",
+  // The event feed: what happened across the sessions, for the feed pane (`FeedRow`).
+  `CREATE TABLE feed (
+     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+     at          INTEGER NOT NULL,
+     kind        TEXT NOT NULL,
+     agent_id    TEXT,
+     agent_name  TEXT,
+     ref_id      TEXT,
+     ref_name    TEXT,
+     title       TEXT NOT NULL,
+     body        TEXT NOT NULL DEFAULT '',
+     data        TEXT
+   );`,
 ];
 
 const HANDOVER_COLUMNS = `id, name, state, detail, spawned_by AS spawnedBy, keep,
@@ -226,6 +257,13 @@ const STEP_COLUMNS = `run_id AS runId, step_id AS stepId, attempt, state, agent_
 
 /** Events kept in the log; older ones are dropped. */
 const MAX_EVENTS = 5000;
+
+/** Items kept in the feed; older ones are dropped. */
+export const MAX_FEED = 2000;
+
+const FEED_COLUMNS = `feed.id, feed.at, feed.kind, feed.agent_id AS agentId,
+  feed.agent_name AS agentName, feed.ref_id AS refId, feed.ref_name AS refName, feed.title,
+  feed.data, agents.kind = 'main' AS fromMain`;
 
 /** Persistent state of one project's workspace. Pass ":memory:" in tests. */
 export class Store {
@@ -563,6 +601,56 @@ export class Store {
     if (Number(lastInsertRowid) % 500 === 0) {
       this.db.query("DELETE FROM events WHERE id <= ?").run(Number(lastInsertRowid) - MAX_EVENTS);
     }
+  }
+
+  addFeed(item: NewFeedRow): number {
+    const { lastInsertRowid } = this.db
+      .query(
+        `INSERT INTO feed (at, kind, agent_id, agent_name, ref_id, ref_name, title, body, data)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        item.at,
+        item.kind,
+        item.agentId,
+        item.agentName,
+        item.refId,
+        item.refName,
+        item.title,
+        item.body,
+        item.data,
+      );
+    const id = Number(lastInsertRowid);
+    if (id % 100 === 0) this.db.query("DELETE FROM feed WHERE id <= ?").run(id - MAX_FEED);
+    return id;
+  }
+
+  /**
+   * Feed items after `after`, oldest first, at most `limit`. Without `after` the latest `limit`.
+   * The body is cut to `preview` characters.
+   */
+  feedAfter(after: number, limit: number, preview: number): FeedRow[] {
+    const columns = `${FEED_COLUMNS}, substr(feed.body, 1, ${Math.max(0, Math.floor(preview))}) AS body`;
+    const from = "FROM feed LEFT JOIN agents ON agents.id = feed.agent_id";
+    if (after > 0) {
+      return this.db
+        .query(`SELECT ${columns} ${from} WHERE feed.id > ? ORDER BY feed.id LIMIT ?`)
+        .all(after, limit) as FeedRow[];
+    }
+    const rows = this.db
+      .query(`SELECT ${columns} ${from} ORDER BY feed.id DESC LIMIT ?`)
+      .all(limit) as FeedRow[];
+    return rows.reverse();
+  }
+
+  feedItem(id: number): FeedRow | null {
+    return (
+      (this.db
+        .query(
+          `SELECT ${FEED_COLUMNS}, feed.body FROM feed LEFT JOIN agents ON agents.id = feed.agent_id WHERE feed.id = ?`,
+        )
+        .get(id) as FeedRow | null) ?? null
+    );
   }
 
   /** Most recent events first. */

@@ -128,11 +128,24 @@ export class Delegation {
           `Still running, started by "${row.name}": ${children.join(", ")}. Their results will come to you.`,
         );
       }
-      workspace.messaging.send(agentId, to, lines.join("\n"));
+      // The feed has the result as an item of its own, with the whole text.
+      workspace.messaging.send(agentId, to, lines.join("\n"), { feed: false });
       if (to !== USER) {
         const line = snippet(result) ?? "";
-        workspace.messaging.send(agentId, USER, `${keep ? "reported" : "finished"}: ${line}`);
+        workspace.messaging.send(agentId, USER, `${keep ? "reported" : "finished"}: ${line}`, {
+          feed: false,
+        });
       }
+      workspace.feed.add({
+        kind: "finish",
+        agentId,
+        agentName: row.name,
+        refId: to === USER ? null : to,
+        refName: workspace.messaging.nameOf(to),
+        title: `${row.name} ${keep ? "reported" : "finished"}: ${snippet(result) ?? ""}`,
+        body: result,
+        data: { keep, spawnedBy: spawner },
+      });
       store.setFinished(agentId, this.now());
       const whom = to === USER ? "the user" : workspace.messaging.nameOf(to);
       if (keep) return `Result delivered to ${whom}. This session stays open.`;

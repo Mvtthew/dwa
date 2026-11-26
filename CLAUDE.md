@@ -49,6 +49,7 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - `src/daemon/` one process per project: `workspace.ts` is the application service (all tmux changes go through its serial queue), `server.ts` the Unix-socket API, `db.ts` the SQLite store
 - `src/tmux/` private-server driver, generated config, layout operations
 - `src/providers/` the provider interface and the Claude Code launch command
+- `src/daemon/feed.ts` the event feed: recaps, spawns, results, messages, workflow steps and lifecycle items, written where each happens (a write never throws), read with `GET /feed` and `GET /feed/item`
 - `src/daemon/activity.ts` turns hook events and statusline JSON into agent activity and telemetry
 - `src/cli/hook.ts` holds the `hook` and `statusline` commands Claude Code runs in every session; keep it fast, free of heavy imports and silent apart from what its comments name
 - `src/shared/shortcuts.ts` every shortcut once (key, label, category, action); the tmux bindings, the top bar and its `display-menu` dropdowns (`menuArgs` in `src/tmux/conf.ts`) are made from it

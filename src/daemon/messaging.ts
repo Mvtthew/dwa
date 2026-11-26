@@ -3,6 +3,7 @@ import type { TmuxRunner } from "../tmux/driver.ts";
 import { snippet } from "./activity.ts";
 import type { AgentRow, QuestionRow, Store } from "./db.ts";
 import { WorkspaceError } from "./errors.ts";
+import type { Feed } from "./feed.ts";
 
 /** The id used for the person at the keyboard, as sender or recipient. */
 export const USER = "user";
@@ -18,6 +19,8 @@ const PASTE_FALLBACK_MS = 3000;
 
 export interface MessagingDeps {
   store: Store;
+  /** Where messages and questions are recorded for the feed pane. */
+  feed?: Feed;
   run: TmuxRunner;
   now: () => number;
   /** Shortcut prefix, for the hint shown when a question for the user arrives. */
@@ -73,12 +76,36 @@ export class Messaging {
     return this.deps.store.getAgentName(id) ?? "unknown";
   }
 
-  /** Sends a message. Returns once it is stored; delivery follows on its own. */
-  send(fromId: string, to: string, body: string): { id: number; to: string } {
+  /** A session's id for a feed item; the user, the workflow engine and dwa have none. */
+  private sessionId(id: string): string | null {
+    return id === USER || id === WORKFLOW || id === WORKSPACE ? null : id;
+  }
+
+  /**
+   * Sends a message. Returns once it is stored; delivery follows on its own. `feed: false`
+   * leaves it out of the feed, for a message the feed has as an item of its own.
+   */
+  send(
+    fromId: string,
+    to: string,
+    body: string,
+    options: { feed?: boolean } = {},
+  ): { id: number; to: string } {
     if (body.trim() === "") throw new WorkspaceError("The message is empty.");
     const toId = this.resolve(to);
     if (toId === fromId) throw new WorkspaceError("A message to yourself would go nowhere.");
     const id = this.deps.store.addMessage({ fromId, toId, body, createdAt: this.deps.now() });
+    if (options.feed !== false) {
+      this.deps.feed?.add({
+        kind: "message",
+        agentId: this.sessionId(fromId),
+        agentName: this.nameOf(fromId),
+        refId: this.sessionId(toId),
+        refName: this.nameOf(toId),
+        title: `${this.nameOf(fromId)} → ${toId === USER ? "you" : this.nameOf(toId)}: ${snippet(body) ?? ""}`,
+        body,
+      });
+    }
     if (toId === USER) {
       // The user reads these in the status pane; there is nothing to wake.
       this.deps.store.markDelivered([id], this.deps.now());
@@ -97,6 +124,16 @@ export class Messaging {
     const { store } = this.deps;
     const id = store.addQuestion({ fromId, toId, question, options, createdAt: this.deps.now() });
     const from = this.nameOf(fromId);
+    this.deps.feed?.add({
+      kind: "question",
+      agentId: this.sessionId(fromId),
+      agentName: from,
+      refId: this.sessionId(toId),
+      refName: this.nameOf(toId),
+      title: `#${id} ${from} asks ${toId === USER ? "you" : this.nameOf(toId)}: ${snippet(question) ?? ""}`,
+      body: options?.length ? `${question}\n\nSuggested answers: ${options.join(" | ")}` : question,
+      data: { questionId: id },
+    });
     if (toId === USER) {
       this.notifyUser(
         `${from} asks: ${snippet(question, 60) ?? ""}  (${this.deps.keyPrefix} then q)`,
@@ -281,6 +318,20 @@ export class Messaging {
       throw new WorkspaceError(`Question #${question.id} is already ${question.state}.`);
     }
     const closed = store.getQuestion(question.id) as QuestionRow;
+    const by = this.nameOf(result.by);
+    this.deps.feed?.add({
+      kind: "answer",
+      agentId: this.sessionId(result.by),
+      agentName: by,
+      refId: this.sessionId(question.fromId),
+      refName: this.nameOf(question.fromId),
+      title:
+        closed.state === "answered"
+          ? `#${closed.id} ${by === USER ? "you" : by} answered: ${snippet(closed.answer) ?? ""}`
+          : `#${closed.id} cancelled${closed.answer ? `: ${snippet(closed.answer)}` : ""}`,
+      body: `${closed.question}\n\n${closed.state === "answered" ? "Answer" : "Cancelled"}: ${closed.answer ?? ""}`,
+      data: { questionId: closed.id, state: closed.state },
+    });
     const waiters = this.questionWaiters.get(question.id);
     this.questionWaiters.delete(question.id);
     if (waiters && waiters.size > 0) {

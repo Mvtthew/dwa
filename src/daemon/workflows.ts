@@ -133,10 +133,22 @@ export function workflowRuns(store: Store): WorkflowRunInfo[] {
  * progress: steps that have not started simply follow the new text, and a changed step that has
  * started runs again, together with every started step after it.
  */
+/** How the feed words a step's state. */
+const STEP_WORDS: Record<WorkflowStepRow["state"], string> = {
+  pending: "waits",
+  running: "started",
+  done: "done",
+  failed: "failed",
+  skipped: "skipped",
+  rejected: "asked for changes",
+};
+
 export class Workflows {
   private queue: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
   private readonly load: (name: string) => WorkflowDefinition;
+  /** The attempt and state of each step the feed was last told, by `<run>:<step>`. */
+  private readonly told = new Map<string, string>();
 
   constructor(private readonly deps: WorkflowsDeps) {
     this.now = deps.now ?? Date.now;
@@ -206,6 +218,14 @@ export class Workflows {
         },
         Object.keys(definition.steps),
       );
+      this.deps.workspace.feed.add({
+        kind: "step",
+        agentId: byId === USER ? null : byId,
+        agentName: this.deps.workspace.messaging.nameOf(byId),
+        title: `${definition.name} #${id} started`,
+        body: input,
+        data: { runId: id },
+      });
       await this.advance(id);
       return this.status(id);
     });
@@ -538,6 +558,8 @@ export class Workflows {
     await this.deps.workspace.state();
     await this.serial(async () => {
       const { store } = this.deps;
+      // What the feed already has from before the restart is not told again.
+      for (const run of store.runningWorkflowRuns()) this.tellFeed(run.id, true);
       for (const run of store.runningWorkflowRuns()) {
         for (const step of store.workflowSteps(run.id)) {
           if (step.state === "rejected") {
@@ -679,6 +701,36 @@ export class Workflows {
   private async advance(runId: number): Promise<void> {
     await this.startReady(runId);
     this.release(runId);
+    this.tellFeed(runId);
+  }
+
+  /**
+   * Records in the feed each step whose attempt or state changed since it was last told. Every
+   * change of a step ends in `advance`, so this one place sees them all.
+   */
+  private tellFeed(runId: number, quiet = false): void {
+    const { store, workspace } = this.deps;
+    const run = store.getWorkflowRun(runId);
+    if (!run) return;
+    for (const step of store.workflowSteps(runId)) {
+      const key = `${runId}:${step.stepId}`;
+      const now = `${step.attempt}:${step.state}`;
+      const before = this.told.get(key);
+      this.told.set(key, now);
+      // A step that waits is not news; it is told when it starts.
+      if (quiet || before === now || step.state === "pending") continue;
+      const text = STEP_WORDS[step.state];
+      const pass = step.attempt > 1 ? ` (pass ${step.attempt})` : "";
+      const agent = step.agentId ? store.getAgentName(step.agentId) : null;
+      workspace.feed.add({
+        kind: "step",
+        agentId: step.agentId,
+        agentName: agent,
+        title: `${run.name} #${run.id} · ${step.stepId}${pass} ${text}`,
+        body: step.state === "failed" ? (step.error ?? "") : (step.result ?? step.feedback ?? ""),
+        data: { runId, stepId: step.stepId, attempt: step.attempt, state: step.state },
+      });
+    }
   }
 
   /**
@@ -860,6 +912,14 @@ export class Workflows {
       }
     }
     const body = lines.join("\n");
+    // The steps' own items first, so the run's end comes after them.
+    this.tellFeed(runId);
+    workspace.feed.add({
+      kind: "step",
+      title: `${run.name} #${run.id} ${run.state}`,
+      body,
+      data: { runId, state: run.state },
+    });
     const starter = store.getWorkflowRun(runId)?.startedBy ?? USER;
     try {
       workspace.messaging.send(WORKFLOW, starter, body);

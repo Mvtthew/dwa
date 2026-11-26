@@ -232,6 +232,56 @@ export interface WorkspaceState {
   shell: { open: boolean } | null;
 }
 
+/** What an item of the event feed is about. */
+export type FeedKind =
+  | "recap"
+  | "spawn"
+  | "finish"
+  | "message"
+  | "question"
+  | "answer"
+  | "step"
+  | "lifecycle";
+
+export const FEED_KINDS: readonly FeedKind[] = [
+  "recap",
+  "spawn",
+  "finish",
+  "message",
+  "question",
+  "answer",
+  "step",
+  "lifecycle",
+];
+
+/** One thing that happened, as the feed pane lists it. */
+export interface FeedItem {
+  id: number;
+  at: number;
+  kind: FeedKind;
+  /** The session it is about or that did it; null for the user or a workflow. */
+  agentId: string | null;
+  /** That session's name at the time, or "user" or "workflow". */
+  agent: string | null;
+  /** True when it is about the main session. */
+  main: boolean;
+  /** The other side: who a message went to, who was started, who answered. */
+  refId: string | null;
+  ref: string | null;
+  /** One line. */
+  title: string;
+  /** The text, cut short in a list (`GET /feed`) and whole for one item (`GET /feed/item`). */
+  body: string;
+  /** Details by kind: for a spawn its role, profile, effort, skill, who started it. */
+  data: Record<string, unknown> | null;
+}
+
+/** One feed item with everything the reader popup shows. */
+export interface FeedDetail extends FeedItem {
+  /** For a spawn: what the session was started with, as label and text. */
+  launch: [label: string, text: string][] | null;
+}
+
 /** The wizards that open in a popup over the workspace. */
 export type WizardKind = "workflows" | "agent" | "tools" | "roles" | "design" | "messages";
 

@@ -99,6 +99,7 @@ import { parseStatusline, reduceHook, sessionLine, snippet } from "./activity.ts
 import type { AgentRow, Store } from "./db.ts";
 import { reportSuffix } from "./delegation.ts";
 import { WorkspaceError } from "./errors.ts";
+import { Feed } from "./feed.ts";
 import { Messaging, USER } from "./messaging.ts";
 import { MAX_REMINDERS, workflowRuns } from "./workflows.ts";
 
@@ -241,6 +242,8 @@ export class Workspace {
   /** Ids of the sessions whose files changed since their start, and when that was worked out. */
   private behind: { at: number; ids: Set<string> } = { at: 0, ids: new Set() };
   readonly messaging: Messaging;
+  /** What happened across the sessions, for the feed pane. */
+  readonly feed: Feed;
   private readonly env: Record<string, string | undefined>;
   private readonly newId: () => string;
   private readonly now: () => number;
@@ -255,10 +258,12 @@ export class Workspace {
     this.now = deps.now ?? Date.now;
     // Not kept alive for: a daemon that is shutting down does not wait to hand out a task.
     this.taskTimer = deps.taskTimer ?? ((callback, ms) => void setTimeout(callback, ms).unref());
+    this.feed = new Feed(deps.store, this.now);
     this.messaging = new Messaging({
       store: deps.store,
       run: deps.run,
       now: this.now,
+      feed: this.feed,
       keyPrefix: deps.keyPrefix ?? DEFAULT_KEY_PREFIX,
       schedule: deps.schedule,
     });
@@ -284,7 +289,9 @@ export class Workspace {
 
   /** Records that a session is gone and lets everything that depended on it know. */
   private markStopped(agentId: string): void {
+    const name = this.deps.store.getAgentName(agentId);
     this.deps.store.markStopped(agentId, this.now());
+    this.feed.add({ kind: "lifecycle", agentId, agentName: name, title: "stopped" });
     this.telemetry.delete(agentId);
     this.capabilities.delete(agentId);
     this.awaitingTask.delete(agentId);
@@ -464,6 +471,26 @@ export class Workspace {
       );
       if (spawner) this.deps.store.setSpawner(row.id, spawner.id, keep);
       if (task) this.awaitTask(row.id);
+      const by = request.from ? this.messaging.nameOf(request.from) : null;
+      // The task as it was asked for: the suffix about reporting is dwa's, not the spawner's.
+      this.feed.add({
+        kind: "spawn",
+        agentId: spawner?.id ?? request.from ?? null,
+        agentName: by,
+        refId: row.id,
+        refName: name,
+        title: by ? `${by} started ${name}` : `${name} started`,
+        body: asked ?? "",
+        data: {
+          role: role ?? null,
+          profile: profile.name,
+          effort: request.effort ?? null,
+          model: request.model || null,
+          skill: skill?.name ?? null,
+          startedBy: by,
+          keep,
+        },
+      });
       return {
         ...row,
         telemetry: null,
@@ -661,6 +688,10 @@ export class Workspace {
       if (note) this.messaging.send(USER, row.name, note);
     }
     if (request.event === "Stop") {
+      const reply = input.last_assistant_message;
+      if (typeof reply === "string" && reply.trim() !== "") {
+        this.feed.add({ kind: "recap", agentId: row.id, agentName: row.name, body: reply.trim() });
+      }
       // A restart that was waiting for the turn to end. Only queued here, never awaited.
       if (store.pendingRestart(row.id)) {
         void this.serial(() => this.restartNow(row.id)).catch((error) => {
@@ -703,6 +734,15 @@ export class Workspace {
         : note;
     this.deps.store.setProgress(agentId, text.trim() || null);
     this.deps.store.addEvent({ agentId, at: this.now(), event: "Progress", summary: text });
+    if (text.trim()) {
+      this.feed.add({
+        kind: "lifecycle",
+        agentId,
+        agentName: row.name,
+        title: `progress: ${text.trim()}`,
+        data: { progress: true },
+      });
+    }
   }
 
   /** Stores the figures from a session's statusline and returns the line the session shows. */
@@ -904,7 +944,17 @@ export class Workspace {
    * other files, where its hook reads it, so a refusal holds while this daemon is down or slow.
    */
   private setBlocks(agentId: string, blocks: string[]): void {
+    const before = parseJson<string[]>(this.deps.store.getBlocked(agentId)) ?? [];
     this.deps.store.setBlocked(agentId, blocks.length > 0 ? JSON.stringify(blocks) : null);
+    if (before.join("\n") !== blocks.join("\n")) {
+      this.feed.add({
+        kind: "lifecycle",
+        agentId,
+        agentName: this.deps.store.getAgentName(agentId),
+        title:
+          blocks.length > 0 ? `refused until restart: ${blocks.join(", ")}` : "nothing refused",
+      });
+    }
     const file = join(this.deps.runDir, "agents", agentId, BLOCKED_FILE);
     const text = JSON.stringify(blocks);
     if (this.deps.writeFile) this.deps.writeFile(file, text);
@@ -1339,6 +1389,12 @@ export class Workspace {
     this.setBlocks(agentId, []);
     store.setActivity(agentId, "starting", null, this.now());
     store.addEvent({ agentId, at: this.now(), event: "Restart", summary: null });
+    this.feed.add({
+      kind: "lifecycle",
+      agentId,
+      agentName: row.name,
+      title: resume ? "restarted with changed settings" : "started afresh",
+    });
     this.capabilities.set(agentId, summarizeSession(session));
     this.telemetry.delete(agentId);
     this.behind.at = 0;
