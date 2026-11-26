@@ -150,7 +150,21 @@ describe("model", () => {
 
   test("statusModel follows the open agent and reports missing figures as null", () => {
     const state = workspace(
-      [agent("a", { activity: "working" }), agent("b", { open: true, activity: "needs_user" })],
+      [
+        agent("a", { activity: "working" }),
+        // A later report with other limits: it must not replace main's.
+        agent("b", {
+          open: true,
+          activity: "needs_user",
+          telemetry: {
+            ...telemetry,
+            costUsd: null,
+            fiveHour: { usedPercent: 55, resetsAt: NOW / 1000 + 60 },
+            sevenDay: null,
+            updatedAt: NOW + 5000,
+          },
+        }),
+      ],
       { telemetry },
     );
     const model = statusModel(state, NOW);
@@ -163,7 +177,7 @@ describe("model", () => {
       note: null,
     });
     expect(model.cost).toBeNull();
-    // Limits are per account, so they come from main even though b is selected.
+    // The limits are main's too, though b is selected and reported later.
     expect(model.limits.map((limit) => [limit.percent, limit.note])).toEqual([
       [19, "in 2h 5m"],
       [92, "in 2d 14h"],

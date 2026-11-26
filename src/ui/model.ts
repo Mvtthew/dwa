@@ -307,12 +307,6 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
   const subject = state.agents.find((agent) => agent.open) ?? state.main;
   const telemetry = subject?.telemetry ?? null;
   const main = state.main?.telemetry ?? null;
-  // Usage limits belong to the account, so the freshest report from any session will do.
-  const freshest = everyone
-    .map((agent) => agent.telemetry)
-    .filter((entry) => entry?.fiveHour || entry?.sevenDay)
-    .sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))[0];
-
   return {
     subject,
     subjectStyle: subject ? agentStyle(subject) : null,
@@ -325,9 +319,12 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
       value: contextText(main?.contextPercent ?? null, main?.contextSize ?? null),
       note: null,
     },
+    // The main session's too, not the freshest report of any session: sessions report at
+    // different moments and may run under another profile, so the numbers would change with
+    // whichever session was last looked at.
     limits: [
-      limitMeter("5 hours", freshest?.fiveHour, nowMs),
-      limitMeter("7 days", freshest?.sevenDay, nowMs),
+      limitMeter("5 hours", main?.fiveHour, nowMs),
+      limitMeter("7 days", main?.sevenDay, nowMs),
     ],
     counts: {
       working: state.agents.filter((agent) => agent.activity === "working").length,
