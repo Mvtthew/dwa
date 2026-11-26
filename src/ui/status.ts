@@ -143,15 +143,12 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
     id: "status-buttons",
     flexDirection: "column",
     flexShrink: 0,
-    paddingTop: 1,
   });
   const addLine = (id: string, parent: BoxRenderable = bottom) => {
     const line = createText(renderer, id, 1);
     parent.add(line);
     return line;
   };
-  // The prefix once, above all of them.
-  const title = addLine("status-keys-title");
   const sections = SECTIONS.map((section) => {
     const id = section.title.toLowerCase();
     const box = new BoxRenderable(renderer, {
@@ -179,6 +176,16 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
     bottom.add(box);
     return { section, box, buttons };
   });
+  // The prefix once, under all of them and as quiet as a footnote. Gone with the last section.
+  const prefix = new BoxRenderable(renderer, {
+    id: "status-keys",
+    flexDirection: "column",
+    flexShrink: 0,
+    height: 2,
+  });
+  addLine("status-gap-keys", prefix);
+  const title = addLine("status-keys-title", prefix);
+  bottom.add(prefix);
   addLine("status-gap-version");
   /** The name drawn large. The first thing left out when the pane is short, or too narrow for it. */
   const logo = createText(renderer, "status-logo", APP_LOGO.length);
@@ -186,12 +193,12 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
   bottom.add(logo);
   const version = addLine("status-version");
   version.content = styled([[dim(`${APP_NAME} ${options.version}`)]]);
-  /** Rows of the bottom part without any shortcut: a gap, a gap, the version. */
-  const bare = 3;
-  /** Rows with the first `count` sections: the line with the prefix comes with the first one. */
+  /** Rows of the bottom part without any shortcut: a gap and the version. */
+  const bare = 2;
+  /** Rows with the first `count` sections: a gap and the line with the prefix come with the first one. */
   const height = (count: number) =>
     SECTIONS.slice(0, count).reduce((total, section) => total + rows(section), bare) +
-    (count > 0 ? 1 : 0);
+    (count > 0 ? prefix.height : 0);
   const full = height(SECTIONS.length);
   bottom.height = full + APP_LOGO.length;
   root.add(bottom);
@@ -206,9 +213,8 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
           : [dim(`▸ ${text}  ${button.key}`)],
       ]);
     }
-    title.content = styled([
-      [bold("SHORTCUTS"), dim(`  ${formatKey(state?.keyPrefix ?? DEFAULT_KEY_PREFIX)}, then`)],
-    ]);
+    const keys = formatKey(state?.keyPrefix ?? DEFAULT_KEY_PREFIX).toLowerCase();
+    title.content = styled([[dim(`shortcuts  ${keys}, then`)]]);
   };
   paintButtons(null);
 
@@ -284,7 +290,7 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
       const drawn =
         lines.length + full + APP_LOGO.length <= renderer.height &&
         APP_LOGO.every((row) => row.length <= width);
-      title.visible = shown > 0;
+      prefix.visible = shown > 0;
       sections.forEach(({ box }, index) => {
         box.visible = index < shown;
       });

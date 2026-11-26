@@ -516,9 +516,8 @@ describe("panes", () => {
     view.update(workspace([agent("dev")]), NOW);
     await harness.renderOnce();
     let lines = harness.captureCharFrame().split("\n");
-    // The prefix once, then the shortcuts in sections.
-    expect(lines.slice(18, 42).map((line) => line.trim())).toEqual([
-      "SHORTCUTS  Ctrl+Q, then",
+    // The shortcuts in sections, then the prefix once.
+    expect(lines.slice(17, 42).map((line) => line.trim())).toEqual([
       "",
       "Workflows",
       "▸ Workflows  w",
@@ -540,6 +539,8 @@ describe("panes", () => {
       "Workspace",
       "▸ Menu  p",
       "▸ Detach  d",
+      "",
+      "shortcuts  ctrl+q, then",
       "",
       "dwa 1.2.3",
     ]);
@@ -572,7 +573,7 @@ describe("panes", () => {
     await harness.renderOnce();
     lines = harness.captureCharFrame().split("\n");
     expect(lines.some((line) => line.trim() === "▸ Hide shell  s")).toBe(true);
-    expect(lines.some((line) => line.trim() === "SHORTCUTS  Ctrl+A, then")).toBe(true);
+    expect(lines.some((line) => line.trim() === "shortcuts  ctrl+a, then")).toBe(true);
   });
 
   test("a short status pane drops the last sections of shortcuts, not what needs the user", async () => {
@@ -584,8 +585,7 @@ describe("panes", () => {
     expect(lines.join("\n")).toContain("NEEDS YOU");
     expect(lines.join("\n")).not.toContain("Panes");
     expect(lines.join("\n")).not.toContain("Workspace");
-    expect(lines.slice(21, 35).map((line) => line.trim())).toEqual([
-      "SHORTCUTS  Ctrl+Q, then",
+    expect(lines.slice(20, 35).map((line) => line.trim())).toEqual([
       "",
       "Workflows",
       "▸ Workflows  w",
@@ -597,6 +597,8 @@ describe("panes", () => {
       "▸ Role settings  r",
       "▸ Answer  q",
       "▸ Open agent  1-9",
+      "",
+      "shortcuts  ctrl+q, then",
       "",
       "dwa 1.2.3",
     ]);
