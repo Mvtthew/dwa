@@ -1,4 +1,5 @@
 import { APP_NAME } from "../shared/constants.ts";
+import { tmuxQuote } from "./conf.ts";
 import type { TmuxRunner } from "./driver.ts";
 
 export const SESSION = APP_NAME;
@@ -56,7 +57,7 @@ export interface WorkspacePanes {
 }
 
 /** The panes whose size the layout keeps: the bar, the side columns, the feed while shown. */
-export type FramePanes = Omit<WorkspacePanes, "main">;
+export type FramePanes = WorkspacePanes;
 
 /**
  * Creates the session with the top bar across the whole width and three columns under it:
@@ -161,20 +162,36 @@ export async function createWorkspace(
   await setTitle(run, left, options.left.title);
   await setTitle(run, main, options.main.title);
   await setTitle(run, right, options.right.title);
-  const frame: FramePanes = { top, left, right, feed };
+  const frame: FramePanes = { top, left, main, right, feed };
   await fixFrame(run, frame, sizes);
   return { top, left, main, right, feed };
 }
 
-/** The resizes that put the top bar, the side columns and the feed back to their sizes. */
+/** Columns of the borders between the columns: one between each two of them. */
+const borders = (feed: boolean) => (feed ? 3 : 2);
+
+/**
+ * The commands that put the top bar, the side columns and the feed back to their sizes.
+ *
+ * tmux sizes a pane by moving one of its borders: the right one, or the left one for the last
+ * pane of a row. The agents pane and the feed share their border, so sizing one undoes the other
+ * (the feed came out a few columns wide). With the feed shown, the feed is sized by that border
+ * and the agents pane by main's width, worked out from the window's: `run-shell -C` expands the
+ * format before it runs the resize, now and in the resize hook alike.
+ */
 export function frameResizes(panes: FramePanes, sizes: LayoutSizes = DEFAULT_LAYOUT): string[][] {
-  // The feed first: when the terminal is too narrow for everything, the panes sized last keep
-  // their widths, and the agents pane matters more than the feed.
-  return [
+  const resizes = [
     ["resize-pane", "-t", panes.top, "-y", String(TOP_BAR_HEIGHT)],
-    ...(panes.feed ? [["resize-pane", "-t", panes.feed, "-x", String(sizes.feedWidth)]] : []),
     ["resize-pane", "-t", panes.left, "-x", String(sizes.statusWidth)],
-    ["resize-pane", "-t", panes.right, "-x", String(sizes.agentsWidth)],
+  ];
+  if (!panes.feed) {
+    return [...resizes, ["resize-pane", "-t", panes.right, "-x", String(sizes.agentsWidth)]];
+  }
+  const others = sizes.statusWidth + sizes.agentsWidth + sizes.feedWidth + borders(true);
+  return [
+    ...resizes,
+    ["resize-pane", "-t", panes.feed, "-x", String(sizes.feedWidth)],
+    ["run-shell", "-C", `resize-pane -t ${panes.main} -x #{e|-:#{window_width},${others}}`],
   ];
 }
 
@@ -189,12 +206,10 @@ export async function fixFrame(
 ): Promise<void> {
   const resizes = frameResizes(panes, sizes);
   for (const args of resizes) await run(args);
-  await run([
-    "set-hook",
-    "-g",
-    "window-resized",
-    resizes.map((args) => args.join(" ")).join(" ; "),
-  ]);
+  const hook = resizes
+    .map((args) => args.map((arg) => (/[\s#{}]/.test(arg) ? tmuxQuote(arg) : arg)).join(" "))
+    .join(" ; ");
+  await run(["set-hook", "-g", "window-resized", hook]);
 }
 
 /** Moves the feed from the pool to the right of the agents pane, leaving the focus where it is. */

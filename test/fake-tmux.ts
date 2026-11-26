@@ -78,6 +78,7 @@ export class FakeTmux {
         this.require(option(args, "-t"));
         return "";
       case "set-hook":
+      case "run-shell":
       case "display-message":
       case "display-popup":
       case "detach-client":

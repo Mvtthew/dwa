@@ -604,7 +604,7 @@ export class Workspace {
       if (!frame) throw new WorkspaceError("This workspace has no room for the feed; restart it.");
       if (state.feed?.open) {
         await returnToPool(run, { agent: store.getMeta(META_FEED_PANE) ?? "", name: FEED_NAME });
-        await fixFrame(run, frame, frame.sizes);
+        await fixFrame(run, { ...frame, main: state.main.paneId }, frame.sizes);
         return { open: false };
       }
       let pane = state.feed ? store.getMeta(META_FEED_PANE) : null;
@@ -617,7 +617,7 @@ export class Workspace {
         store.setMeta(META_FEED_PANE, pane);
       }
       await showFeed(run, { feed: pane, right: frame.right, width: frame.sizes.feedWidth });
-      await fixFrame(run, { ...frame, feed: pane }, frame.sizes);
+      await fixFrame(run, { ...frame, main: state.main.paneId, feed: pane }, frame.sizes);
       return { open: true };
     });
   }

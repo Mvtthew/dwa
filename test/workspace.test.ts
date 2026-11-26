@@ -234,16 +234,24 @@ describe("config", () => {
   test("layout sizes from the config are applied", async () => {
     config.layout = { status_width: 24, agents_width: 40, agent_height: 55 };
     await workspace.up();
-    // The top bar keeps its one row, the side columns and the feed their widths, now and on
-    // every resize.
+    // The top bar keeps its one row, the status pane and the feed their widths, and the agents
+    // pane its width through main's, now and on every resize: the agents pane and the feed
+    // share a border, so sizing one would undo the other.
     expect(tmux.commands("resize-pane").map((command) => command.at(-1))).toEqual([
       "1",
-      "40",
       "24",
       "40",
     ]);
+    const main = (await workspace.state()).main?.paneId;
+    expect(tmux.commands("run-shell").at(-1)).toEqual([
+      "run-shell",
+      "-C",
+      `resize-pane -t ${main} -x #{e|-:#{window_width},107}`,
+    ]);
     const hook = tmux.commands("set-hook").find((command) => command.includes("window-resized"));
-    expect(hook?.at(-1)).toMatch(/-y 1 ; resize-pane .* -x 40 ; resize-pane .* -x 24 ; .* -x 40$/);
+    expect(hook?.at(-1)).toContain(
+      `-x 40 ; run-shell -C 'resize-pane -t ${main} -x #{e|-:#{window_width},107}'`,
+    );
     // Full width, above the columns, running the bar.
     const bar = tmux.commands("split-window").find((command) => command.includes("-f"));
     expect(bar).toEqual(expect.arrayContaining(["-v", "-b", "-l", "1", "ui", "topbar"]));

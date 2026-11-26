@@ -48,7 +48,9 @@ export function createTopbarView(
     }
     text.content = styled([line]);
   };
-  text.onMouseDown = (event) => {
+  // On release, not on press: a menu opened while the button is held closes again when it is
+  // let go outside the menu.
+  text.onMouseUp = (event) => {
     const hit = topbarHit(segments, event.x - text.screenX);
     if (hit?.action) run(hit.action, hit.x);
   };
