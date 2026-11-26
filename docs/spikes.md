@@ -293,6 +293,7 @@ Run on 2026-11-26 with tmux 3.8 in a private server (`tmux -L dwaspike -f /dev/n
 - `-x` and `-y` take absolute columns and rows. As the manual describes it, tmux places the menu so that `-y` is the row under its last line, which is why `menuArgs` adds the menu's height to the row its top should be at.
 
 - **A menu opened on a mouse press closes on the release** when the release is outside the menu, which it is for a menu under a button. The top bar opens menus on the release.
+- **Such a menu takes clicks only with `-M`.** Driven through a real client in a pty (with `mouse on`): a click on an item ran nothing without `-M` and ran the item's command with it; the item's key worked either way.
 - **Two neighbouring panes cannot both be sized with `resize-pane -x`.** tmux moves the right border of a pane, or the left one of the last pane in a row, so the agents pane and the feed both move the border they share and the second resize undoes the first (the feed came out 8 columns wide). The agents pane is sized through main's width instead: `run-shell -C 'resize-pane -t <main> -x #{e|-:#{window_width},<others>}'` expands the format first, and works in the `window-resized` hook as well (checked at 200 and 170 columns).
 
 Not tested: where the menu appears on the screen (an overlay is not part of `capture-pane`), and two clients attached at once.

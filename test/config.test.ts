@@ -487,9 +487,18 @@ describe("tmux helpers", () => {
 
   test("a category's menu lists its shortcuts with their keys, under the given row", () => {
     const args = menuArgs("dwa", "Agents", 12, 2);
-    expect(args.slice(0, 7)).toEqual(["display-menu", "-x", "12", "-y", "9", "-T", " Agents "]);
+    expect(args.slice(0, 8)).toEqual([
+      "display-menu",
+      "-M",
+      "-x",
+      "12",
+      "-y",
+      "9",
+      "-T",
+      " Agents ",
+    ]);
     // Four items and the hint, two border lines: the menu's last row is 2 + 7.
-    expect(args.slice(7, 10)).toEqual(["New agent", "a", expect.stringContaining("New agent")]);
+    expect(args.slice(8, 11)).toEqual(["New agent", "a", expect.stringContaining("New agent")]);
     expect(args.slice(-3)).toEqual(["-Open agent  1-9", "", ""]);
     expect(menuArgs("dwa", "Panes", 0, 2)).toContain("run-shell -b 'dwa key shell'");
   });

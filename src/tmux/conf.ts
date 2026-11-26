@@ -96,6 +96,9 @@ export function menuArgs(
   const height = lines + 2;
   return [
     "display-menu",
+    // Without it, a menu not opened by a tmux mouse binding takes keys only: clicks on its
+    // items do nothing (docs/spikes.md, S10).
+    "-M",
     "-x",
     String(Math.max(0, x)),
     "-y",
