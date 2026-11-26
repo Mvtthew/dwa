@@ -55,6 +55,7 @@ export type RoleFields = Capabilities & {
   when_to_use?: string;
   role_list?: boolean;
   in_role_list?: boolean;
+  profile?: string;
   prompt?: string;
 };
 

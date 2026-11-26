@@ -52,11 +52,14 @@ export const CONFIG_TEMPLATE = `# ${APP_NAME} project configuration. Personal se
 # effort = "high"
 # task = "Wait for review requests."
 
-# The main session. It runs as the role "main" when .dwa/roles/main.toml exists; name another
-# with role = "...". Model and effort set here win over the role's and over the profile's.
+# The main session. It runs as the role "main" (the project's file, or the one built in); name
+# another with role = "...". Model and effort set here win over the role's and over the profile's.
+# It leads: it is told to hand work to agents and is given the roles and workflows to do it
+# with. leader = false makes it an ordinary session that does the work itself.
 [main]
 model = "opus"
 effort = "medium"       # low, medium, high, xhigh or max
+# leader = false
 
 # What every session gets unless its role says otherwise. A role's own value wins, and a value
 # given for one agent or workflow step wins over the role.
@@ -153,7 +156,7 @@ export function initCommand(projectRoot: string, args: string[]): number {
   for (const path of result.skipped) console.log(`kept     ${path}`);
   if (!args.includes("--roles")) {
     console.log(
-      `\nAdd example roles (main, explore, developer, reviewer, workflow-author, role-author), a skill and workflows that use them with: ${APP_NAME} init --roles`,
+      `\nThe project uses the roles built into ${APP_NAME} (see: ${APP_NAME} role list). Copy them, a skill and example workflows into the project, to change them, with: ${APP_NAME} init --roles`,
     );
   }
   return 0;

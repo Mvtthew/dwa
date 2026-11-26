@@ -25,6 +25,7 @@ import {
   saveValues,
   scopeWarnings,
 } from "../shared/role-edit.ts";
+import { guideEntries } from "../shared/role-guide.ts";
 import {
   capabilityLines,
   checkSessions,
@@ -427,6 +428,19 @@ export async function configProblems(projectRoot: string): Promise<string[]> {
   return [...checkSessions(config, ctx), ...checkWorkflows(projectRoot, ctx)];
 }
 
+/** Roles that name a profile the config does not define: they are not offered for handing work to. */
+async function profileNotes(projectRoot: string): Promise<string[]> {
+  const ctx: RoleContext = { projectRoot };
+  const config = await loadConfig(projectRoot).catch(() => null);
+  if (!config) return [];
+  const profiles = Object.keys(config.profiles);
+  return guideEntries(ctx, { profiles })
+    .filter((entry) => entry.unavailable)
+    .map(
+      (entry) => `Role "${entry.name}" is not offered for handing work to: ${entry.unavailable}.`,
+    );
+}
+
 export async function configCommand(projectRoot: string, args: string[]): Promise<number> {
   if (args[0] !== "check") {
     console.error(`Usage: ${APP_NAME} config check`);
@@ -434,7 +448,7 @@ export async function configCommand(projectRoot: string, args: string[]): Promis
   }
   const problems = await configProblems(projectRoot);
   // Worth knowing, but nothing is broken by them: they never change the result.
-  const notes = scopeNotes({ projectRoot });
+  const notes = [...scopeNotes({ projectRoot }), ...(await profileNotes(projectRoot))];
   if (problems.length === 0) {
     const count = listRoles({ projectRoot }).length;
     console.log(`Configuration is fine: ${count} role${count === 1 ? "" : "s"} checked.`);

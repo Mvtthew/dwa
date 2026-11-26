@@ -48,7 +48,12 @@ import type {
   WorkspaceState,
 } from "../shared/protocol.ts";
 import { describeTarget, noticeEdits, saveValues } from "../shared/role-edit.ts";
-import { guideEntries, roleGuideList, roleGuidePrompt } from "../shared/role-guide.ts";
+import {
+  guideEntries,
+  roleGuideList,
+  roleGuidePrompt,
+  workflowGuidePrompt,
+} from "../shared/role-guide.ts";
 import {
   diskFiles,
   findRole,
@@ -61,6 +66,7 @@ import {
   type RoleFiles,
   resolveLayers,
   resolveSession,
+  roleProfile,
   type SessionSummary,
   summarizeSession,
   UnknownRoleError,
@@ -78,6 +84,7 @@ import {
   type ToolSources,
   toolView,
 } from "../shared/tools.ts";
+import { listWorkflows, type WorkflowSummary } from "../shared/workflow.ts";
 import { menuArgs, popupArgs, selfCommand, tmuxQuote } from "../tmux/conf.ts";
 import type { TmuxRunner } from "../tmux/driver.ts";
 import {
@@ -355,7 +362,7 @@ export class Workspace {
         sessionId,
         name: "main",
         session,
-        ...this.sessionFiles(id, "main", session, profile),
+        ...this.sessionFiles(id, "main", session, profile, Object.keys(config.profiles)),
       });
       const sizes: LayoutSizes = {
         statusWidth: config.layout.status_width ?? DEFAULT_LAYOUT.statusWidth,
@@ -433,7 +440,7 @@ export class Workspace {
       const profile = resolveProfile(
         config,
         {
-          agentProfile: request.profile,
+          agentProfile: request.profile ?? roleProfile(role, this.roleContext()),
           workspaceProfile: this.deps.store.getMeta(META_PROFILE) ?? undefined,
         },
         this.env,
@@ -472,7 +479,7 @@ export class Workspace {
         sessionId,
         name,
         session,
-        ...this.sessionFiles(id, name, session, profile),
+        ...this.sessionFiles(id, name, session, profile, Object.keys(config.profiles)),
       });
       const paneId = await spawnPoolWindow(this.deps.run, {
         cwd: this.deps.projectRoot,
@@ -766,15 +773,25 @@ export class Workspace {
     return {};
   }
 
+  /** The workflows a run can be started from, for a leader's prompt; none when they cannot be read. */
+  private workflowList(): WorkflowSummary[] {
+    try {
+      return listWorkflows(this.projectRoot, this.env);
+    } catch {
+      return [];
+    }
+  }
+
   /**
    * The roles a session can hand work to as they are now, for `list_roles`. `agentId` is the
    * session that asks; its own role is left out.
    */
-  roleList(agentId?: string): string {
+  async roleList(agentId?: string): Promise<string> {
     const launch = agentId
       ? parseJson<ResolvedSession>(this.deps.store.getLaunch(agentId))
       : undefined;
-    return roleGuideList(guideEntries(this.roleContext(), { except: launch?.role }));
+    const profiles = Object.keys((await this.deps.loadConfig()).profiles);
+    return roleGuideList(guideEntries(this.roleContext(), { except: launch?.role, profiles }));
   }
 
   /** A progress note an agent reports about its own work. */
@@ -1407,7 +1424,10 @@ export class Workspace {
     return resolveProfile(
       config,
       {
-        agentProfile: stored.profile,
+        // The main session runs with the workspace's profile, whatever its role names.
+        agentProfile:
+          stored.profile ??
+          (stored.main ? undefined : roleProfile(stored.role, this.roleContext())),
         workspaceProfile: this.deps.store.getMeta(META_PROFILE) ?? undefined,
       },
       this.env,
@@ -1439,7 +1459,7 @@ export class Workspace {
       resume,
       name: row.name,
       session,
-      ...this.sessionFiles(agentId, row.name, session, profile),
+      ...this.sessionFiles(agentId, row.name, session, profile, Object.keys(config.profiles)),
     });
     await respawnPane(this.deps.run, {
       pane: row.paneId,
@@ -1580,6 +1600,8 @@ export class Workspace {
     name: string,
     session: ResolvedSession,
     profile: ResolvedProfile,
+    /** The profiles the config defines: a role that needs another one is not offered. */
+    profiles: string[],
   ) {
     const { provider, selfArgv, runDir } = this.deps;
     const self = selfArgv.map(tmuxQuote).join(" ");
@@ -1624,13 +1646,18 @@ export class Workspace {
     );
     // The list of roles is made here and not kept with the session, so a restart gets the
     // roles as they are now and a role that changes does not make this session out of date.
-    const roleGuide = session.roleList
-      ? roleGuidePrompt(guideEntries(this.roleContext(), { except: session.role }))
-      : undefined;
+    const roleGuide =
+      session.roleList || session.leader
+        ? roleGuidePrompt(guideEntries(this.roleContext(), { except: session.role, profiles }))
+        : undefined;
     const skillGuide = session.agentSkills
       ? skillGuidePrompt(skillGuideEntries(session.agentSkills, this.roleContext()))
       : undefined;
-    write(systemPromptPath, provider.systemPrompt(name, session, { roleGuide, skillGuide }));
+    const workflowGuide = session.leader ? workflowGuidePrompt(this.workflowList()) : undefined;
+    write(
+      systemPromptPath,
+      provider.systemPrompt(name, session, { roleGuide, workflowGuide, skillGuide }),
+    );
     // Read by the session's hook on every call of the Skill tool (`skillVerdict`).
     write(join(dir, SKILLS_FILE), JSON.stringify(session.allowedSkills));
     return {

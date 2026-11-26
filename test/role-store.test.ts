@@ -31,13 +31,18 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 describe("the role store on disk", () => {
   test("lists both places, with the personal role the project hides", () => {
     expect(places()).toEqual([
+      ["designer", "project", false],
       ["developer", "project", false],
       ["explore", "project", false],
       ["explore", "user", true],
       ["main", "project", false],
       ["mine", "user", false],
+      ["planner", "project", false],
+      ["quick", "project", false],
       ["reviewer", "project", false],
       ["role-author", "project", false],
+      ["runner", "project", false],
+      ["web-research", "project", false],
       ["workflow-author", "project", false],
     ]);
     const hidden = store.list().find((role) => role.hidden);
@@ -204,6 +209,10 @@ describe("the role store on disk", () => {
     ]);
     expect(store.warnings("move", "explore")).toEqual([
       'Others who use this project will no longer have role "explore".',
+      'Role "designer" is in the project but starts from your personal role "explore", ' +
+        "which others who use this project do not have.",
+      'Role "planner" is in the project but starts from your personal role "explore", ' +
+        "which others who use this project do not have.",
       'Role "reviewer" is in the project but starts from your personal role "explore", ' +
         "which others who use this project do not have.",
     ]);

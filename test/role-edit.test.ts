@@ -164,6 +164,8 @@ describe("roles as files", () => {
       '[main]\nrole = "main"\n\n[[agents]]\nname = "r"\nrole = "explore"\n',
     );
     expect(roleUsers("explore", ctx)).toEqual([
+      "role designer extends it",
+      "role planner extends it",
       "role reviewer extends it",
       "[[agents]] in config.toml",
       "workflow bugfix, step diagnose",
@@ -465,6 +467,8 @@ describe("roles in the project and in the personal folder", () => {
   test("roleUsers reports the personal config next to the project's", () => {
     personalConfig('[main]\nrole = "explore"\n\n[[agents]]\nname = "r"\nrole = "explore"\n');
     expect(roleUsers("explore", ctx)).toEqual([
+      "role designer extends it",
+      "role planner extends it",
       "role reviewer extends it",
       "the main session ([main] in your personal config.toml)",
       "[[agents]] in your personal config.toml",
@@ -489,6 +493,8 @@ describe("roles in the project and in the personal folder", () => {
     workflow("mine", '[steps.look]\nrole = "explore"\nprompt = "x"\n');
     workflow("feature", '[steps.hidden]\nrole = "explore"\nprompt = "x"\n');
     expect(roleUsers("explore", ctx)).toEqual([
+      "role designer extends it",
+      "role planner extends it",
       "role reviewer extends it",
       "workflow bugfix, step diagnose",
       "workflow feature, step explore",
@@ -567,6 +573,10 @@ describe("roles in the project and in the personal folder", () => {
     expect(scopeWarnings("save", "reviewer", ctx)).toEqual([]);
     expect(scopeWarnings("move", "explore", ctx)).toEqual([
       'Others who use this project will no longer have role "explore".',
+      'Role "designer" is in the project but starts from your personal role "explore", ' +
+        "which others who use this project do not have.",
+      'Role "planner" is in the project but starts from your personal role "explore", ' +
+        "which others who use this project do not have.",
       'Role "reviewer" is in the project but starts from your personal role "explore", ' +
         "which others who use this project do not have.",
     ]);

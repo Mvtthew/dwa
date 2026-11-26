@@ -109,6 +109,10 @@ describe("a session another session starts", () => {
     expect(store.handover(dev.id)).toMatchObject({ spawnedBy: MAIN, keep: 0, finishedAt: null });
     const task = store.getRunning(dev.id)?.task ?? "";
     expect(task).toStartWith('Do dev\n\n---\n[dwa] "main" started you for this task');
+    // Only the session the user talks to leads: an agent does its task itself.
+    expect(task).toContain(
+      "Do the task yourself, in this session: do not start agents of your own",
+    );
     expect(task).toContain('call the dwa tool "finish_task" with the result');
     expect(task).toContain("Your session ends after that.");
 

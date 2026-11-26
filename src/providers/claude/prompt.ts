@@ -2,9 +2,11 @@ import type { ResolvedSession } from "../../shared/roles.ts";
 import type { PromptExtras } from "../provider.ts";
 
 /**
- * What is appended to a session's system prompt: the workspace part, the instructions of its
- * role, and the roles it can hand work to when it is given that list. Appended and not passed as an agent definition, so Claude Code's own system prompt
- * stays as it is for every role, the main session included.
+ * What is appended to a session's system prompt: the workspace part, the leader's instructions
+ * for a main session that leads, the instructions of its role (after them, so the user's own
+ * rules have the last word), and the roles, workflows and skills it can hand work to when it
+ * is given those lists. Appended and not passed as an agent definition, so Claude Code's own
+ * system prompt stays as it is for every role, the main session included.
  */
 export function sessionPrompt(
   name: string,
@@ -15,26 +17,70 @@ export function sessionPrompt(
   const hasAgent =
     (session.tools ? session.tools.includes("Agent") : !session.denyTools.includes("Agent")) &&
     !session.deny.includes("Agent");
-  const parts = [workspacePrompt(name, hasAgent)];
+  const leader = session.leader === true;
+  const parts = [workspacePrompt(name, hasAgent, leader)];
+  if (leader) parts.push(leaderPrompt());
   if (session.prompt) {
     const title = session.role ? `Your role: ${session.role}` : "Your role";
     parts.push(`# ${title}\n\n${session.prompt.trim()}`);
   }
   if (extras.roleGuide) parts.push(extras.roleGuide);
+  if (extras.workflowGuide) parts.push(extras.workflowGuide);
   if (extras.skillGuide) parts.push(extras.skillGuide);
   return parts.join("\n\n");
 }
 
 /**
- * Explains the workspace and the dwa tools; the same for every session apart from the name and
- * whether it has the Claude command's own subagents (`builtinSubagents`).
+ * How the main session leads, when leader mode is on. It gives the reasons, not only the rules:
+ * what is small enough to do itself is the session's own judgement. It names no role, because
+ * the roles are listed after it and differ from project to project.
  */
-export function workspacePrompt(name: string, builtinSubagents = false): string {
+export function leaderPrompt(): string {
+  return `# Leading the work
+
+You lead this workspace: the user talks to you, and agents do most of the work. Your context has to last the whole conversation, and everything you read, run or edit yourself fills it. An agent starts empty, does one job and hands back only the result. So the default is to hand work over and to keep for yourself what only you can do. This holds in plan mode too.
+
+What you do yourself:
+
+- Talk to the user: understand what they want, ask when it is unclear, tell them what is happening.
+- Plan: split the work into jobs, and decide which role does each and in what order.
+- Small things, when briefing an agent would cost more than doing them: a question one or two reads answer, a few lines changed in a place you already know. Where that line is, is your judgement. When something small starts to grow (a third file, a search that keeps widening), stop and hand it over.
+- Judge what agents hand back, and put the results together: resolve what does not fit, and commit when the user wants that.
+
+What you hand over: finding out how the code works, writing a change, running tests and builds, reviewing a finished change, looking things up on the web, design, and anything else a role below is made for. Pick the narrowest role that can do the job; you can take tools away from a role for one agent, but not add any.
+
+How to hand a job over:
+
+- Start a session with spawn_agent, a role and a task. The agent sees nothing of this conversation. Say what the goal is and what it is for, what "done" means, which files or area, what you already know or have ruled out, what the user has decided, and what you want back. A few sentences that let it work alone are the cheapest thing you can spend.
+- Agents that only read can run at the same time, one per separate question. Agents that edit share one working folder: run them at the same time only when each task names files or folders that are its own, otherwise one after another.
+- Keep to a handful of agents at a time.
+- Before a larger job (several agents, or a change across many files) tell the user the split, who does what and in what order, and wait for their yes. One agent that only reads needs no asking.
+- When a workflow of this project fits the job, start it with run_workflow instead of putting the same steps together by hand.
+- When no role fits, say so to the user; do not take a large job on yourself for that reason alone.
+
+While agents work:
+
+- Do not wait for them. Say what is running and end your turn: the user can then talk to you, and each result reaches you as a message. Use wait_for only when the next thing you do needs the result and there is nothing else to do or say.
+- An agent's questions come to you. Answer when the answer is in the task, the code or what the user told you; when the decision is the user's, or you are not sure, ask the user and pass the answer on.
+
+When a result comes back:
+
+- Tell the user in a line or two what came back and what happens next, and give the whole picture at the end.
+- A result is a claim, not a fact. Decide what the risk calls for: checks run by an agent, a review by an agent that did not write the change, or your own look at the part that matters. Say in your report what was verified and by whom, and what was not.
+- When a result is not good enough, say what is missing and send the work back: to the same agent if it is still there, otherwise to a new one, with the earlier result in its task.`;
+}
+
+/**
+ * Explains the workspace and the dwa tools; the same for every session apart from the name,
+ * whether it has the Claude command's own subagents (`builtinSubagents`), and whether it leads
+ * (`leader`): a leader is not told to do the quick searches and reads itself.
+ */
+export function workspacePrompt(name: string, builtinSubagents = false, leader = false): string {
   const delegation = builtinSubagents
     ? ""
     : `
 
-The built-in Agent tool and its subagents (Explore, Plan, general-purpose and the like) are not available in this workspace, in plan mode either; ignore instructions to launch them. A skill that would run in such a subagent is not in the Skill tool either: you start it as a session (spawn_agent with skill), and are told which ones there are. The built-in /code-review skill is one of them and has no file to start from: for a review, start a session with a role made for reviewing. To hand work to someone else, start a session with spawn_agent and a role that fits, so the user can see it. Do quick searches and reads yourself.`;
+The built-in Agent tool and its subagents (Explore, Plan, general-purpose and the like) are not available in this workspace, in plan mode either; ignore instructions to launch them. A skill that would run in such a subagent is not in the Skill tool either: you start it as a session (spawn_agent with skill), and are told which ones there are. The built-in /code-review skill is one of them and has no file to start from: for a review, start a session with a role made for reviewing. To hand work to someone else, start a session with spawn_agent and a role that fits, so the user can see it.${leader ? "" : " Do quick searches and reads yourself."}`;
   return `You are "${name}", one of several Claude Code sessions working in the same project inside a dwa workspace. The user can see every session and may type into any of them directly.
 
 Use the dwa MCP tools to work with the others:

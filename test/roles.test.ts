@@ -429,6 +429,24 @@ describe("resolveSession", () => {
     );
   });
 
+  test("only the main session leads, and not when the config turns that off", () => {
+    const ctx = context(FILES);
+    expect(resolveSession({ config: CONFIG, main: true }, ctx).leader).toBe(true);
+    const on = mergeConfig(CONFIG, parseConfig("[main]\nleader = true", "c"));
+    expect(resolveSession({ config: on, main: true }, ctx).leader).toBe(true);
+    // Absent, not false: the stored session is compared with a new one.
+    const off = mergeConfig(CONFIG, parseConfig("[main]\nleader = false", "c"));
+    expect("leader" in resolveSession({ config: off, main: true }, ctx)).toBe(false);
+    expect("leader" in resolveSession({ config: CONFIG, role: "explore" }, ctx)).toBe(false);
+    expect("leader" in resolveSession({ config: CONFIG }, ctx)).toBe(false);
+    // The project's value wins over the personal one.
+    const personal = parseConfig("[main]\nleader = false", "c");
+    const project = parseConfig("[main]\nleader = true", "c");
+    expect(resolveSession({ config: mergeConfig(personal, project), main: true }, ctx).leader).toBe(
+      true,
+    );
+  });
+
   test("the role list is inherited like the prompt and is absent when it is off", () => {
     const files = {
       [`${ROOT}/.dwa/roles/lead.toml`]: 'role_list = true\nwhen_to_use = "Never."',

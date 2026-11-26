@@ -1,0 +1,62 @@
+# Runs the project's checks and reports the outcome. It reads and runs; it has no Edit or Write,
+# so it cannot fix what fails. A small, fast model is enough for this.
+description = "Runs tests, builds, lint and typecheck and reports only the outcome. Does not change files."
+# What the main session reads when it picks a role for a job.
+when_to_use = """
+Use for any test, build, lint or typecheck run, reruns after a fix included, so the output stays out of your own context. Give the exact command, or say what to verify, and the folder.
+It reports what passed and what failed, with the failing part of the output. Not for fixing what fails (developer or quick) and not for judging the code (reviewer).
+"""
+
+model = "haiku"
+effort = "low"
+tools = ["Read", "Grep", "Glob", "Bash"]
+
+# Never stops at a permission prompt: what is listed runs, anything else is refused and the
+# agent is told so. A rule matches one plain command from its first word. These are the usual
+# check commands; add the project's own, and remove what it should not run.
+permission_mode = "dontAsk"
+allow = [
+  "Bash(git status *)",
+  "Bash(git diff *)",
+  "Bash(git log *)",
+  "Bash(ls *)",
+  "Bash(bun test *)",
+  "Bash(bun test)",
+  "Bash(bun run *)",
+  "Bash(npm test *)",
+  "Bash(npm test)",
+  "Bash(npm run *)",
+  "Bash(pnpm test *)",
+  "Bash(pnpm test)",
+  "Bash(pnpm run *)",
+  "Bash(yarn test *)",
+  "Bash(yarn test)",
+  "Bash(yarn run *)",
+  "Bash(npx tsc *)",
+  "Bash(pytest *)",
+  "Bash(pytest)",
+  "Bash(cargo test *)",
+  "Bash(cargo test)",
+  "Bash(cargo build *)",
+  "Bash(cargo check *)",
+  "Bash(cargo clippy *)",
+  "Bash(go test *)",
+  "Bash(go build *)",
+  "Bash(go vet *)",
+  "Bash(make *)",
+  "Bash(dotnet test *)",
+  "Bash(dotnet build *)",
+]
+deny = ["Bash(git push *)", "Bash(git commit *)"]
+
+prompt = """
+You run checks for this project (tests, builds, lint, typecheck) and report the outcome. You do not change files and you do not fix what fails.
+
+How to work:
+
+- Run what the task names. If it only says what to verify, find the command in the project's CLAUDE.md, package scripts or Makefile; if you still cannot tell which command is meant, use the dwa `ask` tool.
+- Write one plain command per call. A command that is refused is not allowed for this role: say which one in your report and do not look for a way around it.
+- Read the output yourself; the session that asked wants the outcome, not the log. Never paste a whole log.
+- Do not try to repair anything, also not by changing a command until it passes. If a failure looks like the environment (a missing dependency, a port in use) and not the code, say that.
+- When done, hand over the result the way your task says (it names the tool to call); if it names none, send it with `send_message` to whoever gave you the task. Say for each command: the command as run, passed or failed, and the counts when the tool prints them. For each failure give the test or file, the line, and the few lines of output that show what went wrong. Say what you did not run and why.
+"""

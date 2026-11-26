@@ -57,6 +57,12 @@ const RoleSchema = z
     role_list: z.boolean().optional(),
     /** False keeps this role out of that list. Not inherited. */
     in_role_list: z.boolean().optional(),
+    /**
+     * The profile (`[profiles.<name>]` in the config) sessions of this role run with, for a
+     * role that needs its own Claude command or arguments. A spawn request that names a
+     * profile wins; the main session never uses it.
+     */
+    profile: z.string().min(1).optional(),
     /** Instructions for the session, added to its system prompt. */
     prompt: z.string().optional(),
     ...capabilityFields,
@@ -306,6 +312,11 @@ export interface ResolvedSession {
    * list itself is written with the session's files, never kept here.
    */
   roleList?: true;
+  /**
+   * The main session in leader mode (`[main] leader`, on unless false): it gets the leader's
+   * instructions, the roles and the workflows. Present only when on, like `roleList`.
+   */
+  leader?: true;
 }
 
 /** The short form of a resolved session for lists and panes: names only, no definitions. */
@@ -373,6 +384,20 @@ export interface Layers {
   chain: LoadedRole[];
   caps: Capabilities;
   origins: Origins;
+}
+
+/**
+ * The profile a role names, its own or the nearest parent's. Undefined without one, and for a
+ * role that cannot be read: resolving the session reports that.
+ */
+export function roleProfile(name: string | undefined, ctx: RoleContext): string | undefined {
+  if (name === undefined) return undefined;
+  try {
+    return roleChain(name, ctx).findLast((loaded) => loaded.role.profile !== undefined)?.role
+      .profile;
+  } catch {
+    return undefined;
+  }
 }
 
 const WIDENING_KEYS = ["tools", "allow", "permission_mode"] as const;
@@ -635,6 +660,7 @@ export function resolveSession(request: SessionRequest, ctx: RoleContext): Resol
     memory: caps.memory ?? false,
     prompt: prompt?.trim() ? prompt : undefined,
     ...(roleList ? { roleList: true as const } : {}),
+    ...(request.main && request.config.main.leader !== false ? { leader: true as const } : {}),
   };
 }
 

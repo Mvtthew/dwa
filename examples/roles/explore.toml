@@ -5,8 +5,8 @@
 description = "Investigates the codebase and reports findings. Reads and searches; does not change files."
 # What the main session reads when it picks a role for a job.
 when_to_use = """
-Use for questions about how the code works and where things are, when answering takes more than a few reads.
-Not for changes: it cannot edit files.
+Use for questions about how the code works and where things are, when answering takes more than a few reads: it reads so that you do not have to, and hands back the answer with files and lines. Several can run at the same time on separate questions.
+Not for changes (it cannot edit files), not for planning a change (planner) and not for what is on the web (web-research).
 """
 
 model = "sonnet"

@@ -723,7 +723,7 @@ skills = ["review", "house-style"]
       "--tools",
       "Read,Bash,WaitForMcpServers",
     ]);
-    expect(session("id-1").prompt.endsWith("# Your role: main\n\nYou lead.")).toBe(true);
+    expect(session("id-1").prompt).toContain("# Your role: main\n\nYou lead.");
     expect(main?.capabilities?.tools).toEqual(["Read", "Bash"]);
   });
 
@@ -785,14 +785,81 @@ skills = ["review", "house-style"]
     expect((await workspace.state()).agents).toHaveLength(2);
   });
 
+  test("the main session leads unless the config turns that off", async () => {
+    roles = { explore: 'description = "Reads the code."', main: 'prompt = "My rules."' };
+    await workspace.up();
+    const prompt = files.get("/project/.dwa/run/agents/id-1/prompt.md") ?? "";
+    // Workspace, leader, the role's own rules, then what there is to hand work to.
+    const order = ['You are "main"', "# Leading the work", "# Your role: main", "# Roles you can"];
+    const at = order.map((text) => prompt.indexOf(text));
+    expect(at.every((index) => index >= 0)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+    expect(prompt).toContain("- explore: Reads the code.");
+    expect(prompt).not.toContain("Do quick searches and reads yourself.");
+
+    // An agent is not a leader: no leader text, no list, and it does its own quick reads.
+    const explore = await workspace.spawn({ role: "explore", task: "Look." });
+    const other = files.get(`/project/.dwa/run/agents/${explore.id}/prompt.md`) ?? "";
+    expect(other).not.toContain("# Leading the work");
+    expect(other).not.toContain("# Roles you can");
+    expect(other).toContain("Do quick searches and reads yourself.");
+  });
+
+  test("with leader mode off the main session is an ordinary one", async () => {
+    config = { ...config, main: { leader: false } };
+    roles = { explore: 'description = "Reads the code."', main: 'prompt = "My rules."' };
+    await workspace.up();
+    const prompt = files.get("/project/.dwa/run/agents/id-1/prompt.md") ?? "";
+    expect(prompt).not.toContain("# Leading the work");
+    expect(prompt).not.toContain("# Roles you can");
+    expect(prompt).toContain("Do quick searches and reads yourself.");
+    expect(prompt.endsWith("# Your role: main\n\nMy rules.")).toBe(true);
+  });
+
+  test("a role's profile is used unless the spawn names one, and survives a restart", async () => {
+    roles = { browser: 'profile = "work"', main: 'profile = "work"' };
+    await workspace.up();
+    // The main session runs with the workspace's profile, whatever its role names.
+    expect(store.getRunning("id-1")?.profile).toBe("me");
+    const command = (agent: { paneId: string }) => tmux.panes.get(agent.paneId)?.argv[0];
+    const byRole = await workspace.spawn({ role: "browser" });
+    expect(byRole.profile).toBe("work");
+    expect(command(byRole)).toBe("/bin/claude_work");
+    const asked = await workspace.spawn({ role: "browser", profile: "me" });
+    expect(command(asked)).toBe("/bin/claude_me");
+    expect(await workspace.restart(byRole.name)).toBe("restarted");
+    expect(command(byRole)).toBe("/bin/claude_work");
+  });
+
+  test("a role whose profile is not defined is not offered", async () => {
+    roles = {
+      main: "role_list = true\nin_role_list = false",
+      explore: 'description = "Reads the code."',
+      browser: 'description = "Looks at pages."\nprofile = "chrome"',
+    };
+    await workspace.up();
+    const prompt = files.get("/project/.dwa/run/agents/id-1/prompt.md") ?? "";
+    expect(prompt).toContain("- explore: Reads the code.");
+    expect(prompt).not.toContain("browser");
+    expect(await workspace.roleList("id-1")).toBe(
+      [
+        '- browser: cannot be started here, it runs with the profile "chrome", which the config does not define ([profiles.chrome])',
+        "- explore: Reads the code.",
+      ].join("\n"),
+    );
+    await expect(workspace.spawn({ role: "browser" })).rejects.toThrow('Unknown profile "chrome"');
+  });
+
   test("list_roles gives the roles as they are now, without the asking session's own", async () => {
     roles = { main: "in_role_list = false", explore: 'description = "Reads the code."' };
     await workspace.up();
     const explore = await workspace.spawn({ role: "explore" });
-    expect(workspace.roleList("id-1")).toBe("- explore: Reads the code.");
+    expect(await workspace.roleList("id-1")).toBe("- explore: Reads the code.");
     roles = { ...roles, helper: 'when_to_use = "Odd jobs."' };
-    expect(workspace.roleList("id-1")).toBe("- explore: Reads the code.\n- helper: Odd jobs.");
-    expect(workspace.roleList(explore.id)).toBe("- helper: Odd jobs.");
+    expect(await workspace.roleList("id-1")).toBe(
+      "- explore: Reads the code.\n- helper: Odd jobs.",
+    );
+    expect(await workspace.roleList(explore.id)).toBe("- helper: Odd jobs.");
   });
 
   test("an agent that names a role that does not exist is pointed to list_roles", async () => {

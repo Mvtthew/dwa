@@ -59,6 +59,11 @@ const MainSchema = z.strictObject({
   role: z.string().regex(NAME_PATTERN).optional(),
   model: ModelSchema.optional(),
   effort: EffortSchema.optional(),
+  /**
+   * Whether the main session leads: it is told to hand work to agents and is given the roles
+   * and workflows to do it with. On unless this is false.
+   */
+  leader: z.boolean().optional(),
 });
 
 /** An MCP server roles can list by name. The fields are those of Claude Code's MCP config. */

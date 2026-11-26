@@ -3,8 +3,8 @@
 description = "Implements a change that has already been scoped, with tests, and reports what was done."
 # What the main session reads when it picks a role for a job.
 when_to_use = """
-Use for a change that is already scoped: what to build or fix and what "done" means are known.
-Not for open questions about the code (explore) or for judging a finished change (reviewer).
+Use for a change that is already scoped: what to build or fix and what "done" means are known. It writes the code and its tests and runs the checks. Name the files or folders it may touch when another agent edits at the same time.
+Not for open questions about the code (explore), for a change whose design is still open (planner), for purely mechanical edits (quick) or for judging a finished change (reviewer).
 """
 
 model = "sonnet"

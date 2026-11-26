@@ -26,7 +26,7 @@ export function reportSuffix(spawner: string, keep: boolean): string {
     "",
     "",
     "---",
-    `[dwa] "${spawner}" started you for this task and is waiting for its result. When the work is finished, call the dwa tool "finish_task" with the result; make it complete and self-contained, it is all "${spawner}" gets. ${after} If you cannot finish, call "finish_task" and say what stopped you. If you need a decision first, put the question to "${spawner}" with "ask", not to the user: "${spawner}" answers it or takes it to the user. Ending your turn does not finish the task.`,
+    `[dwa] "${spawner}" started you for this task and is waiting for its result. When the work is finished, call the dwa tool "finish_task" with the result; make it complete and self-contained, it is all "${spawner}" gets. ${after} If you cannot finish, call "finish_task" and say what stopped you. Do the task yourself, in this session: do not start agents of your own for it, and when it needs something outside what you were asked or can do, say so to "${spawner}" with "ask" instead of widening the job. If you need a decision first, put the question to "${spawner}" with "ask", not to the user: "${spawner}" answers it or takes it to the user. Ending your turn does not finish the task.`,
   ].join("\n");
 }
 

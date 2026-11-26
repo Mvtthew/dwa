@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { guideEntries, roleGuideList, roleGuidePrompt } from "../src/shared/role-guide.ts";
+import {
+  guideEntries,
+  roleGuideList,
+  roleGuidePrompt,
+  workflowGuidePrompt,
+} from "../src/shared/role-guide.ts";
 import type { RoleContext, RoleFiles } from "../src/shared/roles.ts";
 
 const ROOT = "/p";
@@ -80,5 +85,43 @@ describe("the roles a session can hand work to", () => {
     expect(roleGuideList(guideEntries(only))).toBe("No roles to hand work to (.dwa/roles/*.toml).");
     const broken = context({ [`${ROLES}/broken.toml`]: "colour = 1" });
     expect(roleGuidePrompt(guideEntries(broken))).toBe("");
+  });
+});
+
+describe("the workflows a leader can start", () => {
+  test("are listed by name and description, without the ones that do not parse", () => {
+    expect(
+      workflowGuidePrompt([
+        { name: "feature", description: "Plan, build, review.", error: null },
+        { name: "bare", description: null, error: null },
+        { name: "broken", description: null, error: "bad" },
+      ]),
+    ).toBe(
+      [
+        "# Workflows you can start",
+        "",
+        "Start one with run_workflow (name, input) when it fits the job. This list is from the start of your session; list_workflows gives the current one.",
+        "",
+        "- feature: Plan, build, review.",
+        "- bare",
+      ].join("\n"),
+    );
+    expect(workflowGuidePrompt([])).toBe("");
+    expect(workflowGuidePrompt([{ name: "broken", description: null, error: "bad" }])).toBe("");
+  });
+
+  test("a role whose profile the config does not define is marked", () => {
+    const files = {
+      [`${ROLES}/browser.toml`]: 'description = "Looks."\nprofile = "chrome"',
+      [`${ROLES}/child.toml`]: 'extends = "browser"',
+    };
+    const lines = (profiles?: string[]) =>
+      roleGuideList(guideEntries(context(files), { profiles }));
+    expect(lines(["chrome"])).toBe("- browser: Looks.\n- child");
+    expect(lines()).toBe("- browser: Looks.\n- child");
+    expect(lines([])).toContain(
+      '- child: cannot be started here, it runs with the profile "chrome"',
+    );
+    expect(roleGuidePrompt(guideEntries(context(files), { profiles: [] }))).toBe("");
   });
 });

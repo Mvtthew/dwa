@@ -94,7 +94,7 @@ export function startServer(options: ServerOptions) {
         return json(await workspace.spawn(await body<SpawnRequest>(request)));
       case "POST /roles/list": {
         const input = await body<{ from?: string }>(request);
-        return json({ roles: workspace.roleList(input.from) });
+        return json({ roles: await workspace.roleList(input.from) });
       }
       case "POST /agents/open":
         return json(await workspace.open(requireTarget(await body(request))));
