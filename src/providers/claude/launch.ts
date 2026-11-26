@@ -57,8 +57,7 @@ export function buildClaudeLaunch(request: LaunchRequest): Launch {
     "--setting-sources",
     "project,local",
   ];
-  // These two take a list of values, so they come before an option that ends the list and
-  // never right before the task.
+  // These two take a list of values, so they come before an option that ends the list.
   if (session.tools) argv.push("--tools", allowedTools(session).join(","));
   if (session.denyTools.length > 0) argv.push("--disallowedTools", session.denyTools.join(","));
   // A restart continues the conversation. The session id cannot be given next to it, and
@@ -79,15 +78,28 @@ export function buildClaudeLaunch(request: LaunchRequest): Launch {
   // After the profile's own arguments, so these win over a model set there.
   if (session.model) argv.push("--model", session.model);
   if (session.effort) argv.push("--effort", session.effort);
-  if (request.task) argv.push(request.task);
+  // No first prompt here: one given as an argument is taken before the MCP servers have
+  // connected, and the session then starts without the dwa tools (docs/spikes.md, S8). The
+  // workspace types the task in once the tools are there (`Workspace.ready`).
   return { argv, env: { ...NO_TOOL_TIMEOUT_ENV, ...request.profile.env } };
 }
 
-/** The role's allow list, plus the Skill tool when the role lists skills, which need it. */
+/** Waits for MCP servers that are still connecting; a session with a tool list has it only when named. */
+const WAIT_TOOL = "WaitForMcpServers";
+
+/**
+ * The role's allow list, plus the Skill tool when the role lists skills, which need it, and the
+ * tool that waits for MCP servers: a server of the role can connect after the first prompt, and
+ * without `ToolSearch` this is the only way to get its tools in the same turn (docs/spikes.md, S8).
+ */
 function allowedTools(session: ResolvedSession): string[] {
   const tools = session.tools ?? [];
   const needsSkill = (session.skills?.length ?? 0) > 0 && !tools.includes("Skill");
-  return needsSkill ? [...tools, "Skill"] : tools;
+  const extra = [
+    ...(needsSkill ? ["Skill"] : []),
+    ...(tools.includes(WAIT_TOOL) ? [] : [WAIT_TOOL]),
+  ];
+  return [...tools, ...extra];
 }
 
 /** Events after which a session may sit idle, so the mailbox hook is (re)armed on them. */

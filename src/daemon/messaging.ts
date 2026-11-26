@@ -144,11 +144,12 @@ export class Messaging {
    * an empty list when a newer hook has taken over.
    */
   waitMailbox(agentId: string, signal?: AbortSignal): Promise<string[]> {
-    const ready = this.take(agentId);
+    const ready = this.prompted(agentId) ? this.take(agentId) : [];
     if (ready.length > 0) return Promise.resolve(ready);
     return new Promise((resolve) => {
       this.mailboxes.get(agentId)?.([]);
       this.mailboxes.set(agentId, resolve);
+      if (!this.prompted(agentId)) this.flush(agentId);
       signal?.addEventListener("abort", () => {
         if (this.mailboxes.get(agentId) === resolve) this.mailboxes.delete(agentId);
       });
@@ -198,7 +199,7 @@ export class Messaging {
   /** Hands pending messages to the agent's mailbox hook, or arranges the paste fallback. */
   flush(agentId: string): void {
     const waiter = this.mailboxes.get(agentId);
-    if (waiter) {
+    if (waiter && this.prompted(agentId)) {
       const messages = this.take(agentId);
       if (messages.length === 0) return;
       this.mailboxes.delete(agentId);
@@ -206,6 +207,15 @@ export class Messaging {
       return;
     }
     this.schedule(() => void this.pasteIfIdle(agentId), PASTE_FALLBACK_MS);
+  }
+
+  /**
+   * Whether the session has had a prompt from its prompt box. Until then nothing goes through
+   * the hook: a first turn started by it does not list the session's deferred tools, the dwa
+   * tools among them (docs/spikes.md, S8), so the message is pasted instead.
+   */
+  private prompted(agentId: string): boolean {
+    return this.deps.store.hadTurn(agentId);
   }
 
   /** Marks the agent's pending messages delivered and returns them as display text. */
@@ -233,15 +243,24 @@ export class Messaging {
 
   /** Fallback when no mailbox hook is connected: type the message into an idle session. */
   private async pasteIfIdle(agentId: string): Promise<void> {
-    if (this.mailboxes.has(agentId)) return this.flush(agentId);
+    if (this.mailboxes.has(agentId) && this.prompted(agentId)) return this.flush(agentId);
     const agent: AgentRow | null = this.deps.store.getRunning(agentId);
     if (agent?.activity !== "idle") return; // stays queued for the next hook
     const messages = this.take(agentId);
     if (messages.length === 0) return;
+    await this.prompt(agent, messages.join("\n\n"));
+  }
+
+  /**
+   * Types a prompt into a session's prompt box and submits it. Unlike a hook, a prompt given
+   * this way lets the session see the tools of MCP servers that connected after its last one
+   * (docs/spikes.md, S8).
+   */
+  async prompt(agent: { id: string; name: string; paneId: string }, text: string): Promise<void> {
     const { run } = this.deps;
-    const buffer = `dwa-${agentId}`;
+    const buffer = `dwa-${agent.id}`;
     try {
-      await run(["set-buffer", "-b", buffer, "--", messages.join("\n\n")]);
+      await run(["set-buffer", "-b", buffer, "--", text]);
       await run(["paste-buffer", "-p", "-d", "-b", buffer, "-t", agent.paneId]);
       await Bun.sleep(300);
       await run(["send-keys", "-t", agent.paneId, "Enter"]);

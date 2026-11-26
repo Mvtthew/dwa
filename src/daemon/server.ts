@@ -186,6 +186,11 @@ export function startServer(options: ServerOptions) {
           messages: await messaging.waitMailbox(text(input.agentId, "agentId"), request.signal),
         });
       }
+      case "POST /agents/ready": {
+        const input = await body<{ agentId?: string }>(request);
+        workspace.ready(text(input.agentId, "agentId"));
+        return json({ ok: true });
+      }
       case "POST /progress": {
         const input = await body<{ agentId?: string; summary?: string; percent?: number }>(request);
         workspace.progress(text(input.agentId, "agentId"), input.summary ?? "", input.percent);

@@ -22,6 +22,7 @@ export const BUILTIN_TOOLS: readonly string[] = [
   // There when named in an allow list (or when Bash is denied).
   "Glob",
   "Grep",
+  "WaitForMcpServers",
   // Loaded when first needed.
   "NotebookEdit",
   "WebSearch",

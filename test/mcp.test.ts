@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { type Api, ApiError, createMcpServer } from "../src/mcp/server.ts";
+import { type Api, ApiError, createMcpServer, reportReady } from "../src/mcp/server.ts";
 import type { AgentInfo, WorkflowRunInfo } from "../src/shared/protocol.ts";
 
 interface Call {
@@ -114,6 +114,25 @@ describe("the dwa tools", () => {
     const result = await use("workflow_status", { run_id: "four" });
     expect(result.isError).toBe(true);
     expect(calls).toEqual([]);
+  });
+});
+
+describe("the connection", () => {
+  test("the daemon is told when a session has connected, and only then", async () => {
+    const seen: Call[] = [];
+    const api: Api = async <T>(method: string, path: string, body?: unknown) => {
+      seen.push({ method, path, body });
+      return {} as T;
+    };
+    const server = createMcpServer("agent-2", api);
+    reportReady(server, "agent-2", api);
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    expect(seen).toEqual([]);
+
+    await new Client({ name: "test", version: "0" }).connect(clientSide);
+    await Bun.sleep(0);
+    expect(seen).toEqual([{ method: "POST", path: "/agents/ready", body: { agentId: "agent-2" } }]);
   });
 });
 

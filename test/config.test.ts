@@ -18,7 +18,7 @@ import {
   parseConfig,
   resolveProfile,
 } from "../src/shared/config.ts";
-import { cleanEnv } from "../src/shared/env.ts";
+import { cleanEnv, spawnOrigin } from "../src/shared/env.ts";
 import { type ResolvedSession, resolveSession } from "../src/shared/roles.ts";
 import { buildTmuxConf, tmuxQuote } from "../src/tmux/conf.ts";
 import { parsePaneList } from "../src/tmux/layout.ts";
@@ -160,7 +160,7 @@ describe("buildClaudeLaunch", () => {
     ...values,
   });
 
-  test("puts profile arguments first, keeps the user's settings out and the task last", () => {
+  test("puts profile arguments first, keeps the user's settings out and gives no first prompt", () => {
     const launch = buildClaudeLaunch({
       profile,
       sessionId: "sid",
@@ -169,7 +169,6 @@ describe("buildClaudeLaunch", () => {
       settingsPath: "/run/settings.json",
       mcpConfigPath: "/run/mcp.json",
       systemPromptPath: "/run/prompt.md",
-      task: "fix it",
     });
     expect(launch.argv).toEqual([
       "/bin/cw",
@@ -187,7 +186,6 @@ describe("buildClaudeLaunch", () => {
       "/run/mcp.json",
       "--append-system-prompt-file",
       "/run/prompt.md",
-      "fix it",
     ]);
   });
 
@@ -197,9 +195,8 @@ describe("buildClaudeLaunch", () => {
       sessionId: "sid",
       name: "dev",
       session: session({ model: "opus", effort: "high" }),
-      task: "fix it",
     });
-    expect(launch.argv.slice(-5)).toEqual(["--model", "opus", "--effort", "high", "fix it"]);
+    expect(launch.argv.slice(-4)).toEqual(["--model", "opus", "--effort", "high"]);
   });
 
   test("passes what the role allows: tools, permission mode and plugins", () => {
@@ -210,7 +207,6 @@ describe("buildClaudeLaunch", () => {
         name: "dev",
         session: session(values),
         skillPluginPath,
-        task: "go",
       }).argv;
     const skill = { name: "style", source: "dwa" as const, path: "/p/.dwa/skills/style" };
 
@@ -226,23 +222,23 @@ describe("buildClaudeLaunch", () => {
       "dev",
       "--permission-mode",
       "plan",
-      "go",
     ]);
-    // A list of tools is followed by another option, never by the task, which it would swallow.
+    // A list of tools is followed by another option, which ends the list.
     const limited = argv({ tools: ["Read", "Grep"] });
-    expect(limited.slice(3, 6)).toEqual(["--tools", "Read,Grep", "--session-id"]);
+    expect(limited.slice(3, 6)).toEqual(["--tools", "Read,Grep,WaitForMcpServers", "--session-id"]);
     // Skills need the Skill tool, so a role that lists skills keeps it.
-    expect(argv({ tools: ["Read"], skills: [skill] })[4]).toBe("Read,Skill");
-    expect(argv({ tools: ["Read", "Skill"], skills: [skill] })[4]).toBe("Read,Skill");
-    expect(argv({ tools: [] })[4]).toBe("");
+    expect(argv({ tools: ["Read"], skills: [skill] })[4]).toBe("Read,Skill,WaitForMcpServers");
+    expect(argv({ tools: ["Read", "Skill"], skills: [skill] })[4]).toBe(
+      "Read,Skill,WaitForMcpServers",
+    );
+    expect(argv({ tools: [] })[4]).toBe("WaitForMcpServers");
 
     const plugins = argv({ plugins: [{ name: "lint", path: "/p/tools/lint" }] }, "/run/skills");
-    expect(plugins.slice(-5)).toEqual([
+    expect(plugins.slice(-4)).toEqual([
       "--plugin-dir",
       "/p/tools/lint",
       "--plugin-dir",
       "/run/skills",
-      "go",
     ]);
   });
 
@@ -254,7 +250,6 @@ describe("buildClaudeLaunch", () => {
         sessionId: "sid",
         name: "dev",
         session: resolveSession({ config: parseConfig(toml, "config.toml") }, ctx),
-        task: "go",
       }).argv;
     const value = (list: string[], flag: string) => list[list.indexOf(flag) + 1];
 
@@ -267,12 +262,12 @@ describe("buildClaudeLaunch", () => {
     );
     // An allow list simply does not name them.
     const only = argv('[defaults]\ntools = ["Read", "Agent"]');
-    expect(value(only, "--tools")).toBe("Read");
+    expect(value(only, "--tools")).toBe("Read,WaitForMcpServers");
     expect(only).not.toContain("--disallowedTools");
     // With subagents nothing is taken away.
     expect(argv("[defaults]\nsubagents = true")).not.toContain("--disallowedTools");
     expect(value(argv('[defaults]\nsubagents = true\ntools = ["Read", "Agent"]'), "--tools")).toBe(
-      "Read,Agent",
+      "Read,Agent,WaitForMcpServers",
     );
   });
 
@@ -413,6 +408,18 @@ describe("generated session files", () => {
     expect(prompt('[defaults]\ntools = ["Read", "Agent"]')).toContain(paragraph);
     expect(prompt("[defaults]\nsubagents = true")).not.toContain(paragraph);
     expect(prompt('[defaults]\nsubagents = true\ntools = ["Read"]')).toContain(paragraph);
+  });
+});
+
+describe("spawnOrigin", () => {
+  test("a spawn from inside a session is the session's own, and may only narrow", () => {
+    expect(spawnOrigin({ DWA_AGENT_ID: "a1", DWA_PROJECT: "/p" })).toEqual({
+      from: "a1",
+      narrowOnly: true,
+    });
+    // The user's terminal, the shell pane and the popups.
+    expect(spawnOrigin({ DWA_PROJECT: "/p" })).toEqual({});
+    expect(spawnOrigin({ DWA_AGENT_ID: "" })).toEqual({});
   });
 });
 

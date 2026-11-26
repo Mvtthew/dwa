@@ -21,6 +21,8 @@ let tmux: FakeTmux;
 let store: Store;
 let workspace: Workspace;
 let clock: number;
+/** Timers for giving a session its task; a test runs them by hand. */
+const taskTimers: (() => void)[] = [];
 
 const roleText = (name: string) => readFileSync(join(dir, ".dwa", "roles", `${name}.toml`), "utf8");
 const argvOf = (agent: AgentInfo) => tmux.panes.get(agent.paneId)?.argv ?? [];
@@ -47,6 +49,7 @@ beforeEach(() => {
     JSON.stringify({ mcpServers: { notes: { command: "notes-mcp" } } }),
   );
   tmux = new FakeTmux();
+  taskTimers.length = 0;
   store = new Store(":memory:");
   clock = 1_000_000;
   let id = 0;
@@ -65,6 +68,7 @@ beforeEach(() => {
     },
     wrapperConfigDir: () => null,
     schedule: () => undefined,
+    taskTimer: (run) => taskTimers.push(run),
     env,
     newId: () => `id-${++id}`,
     // Every look at the clock is ten seconds later, so nothing is served from a cache.
@@ -156,7 +160,7 @@ describe("save for one session", () => {
 
     // Only this session: the next explore agent has Bash.
     const other = await workspace.spawn({ name: "ex2", role: "explore" });
-    expect(flag(other, "--tools")).toBe("Read,Grep,Glob,Bash");
+    expect(flag(other, "--tools")).toBe("Read,Grep,Glob,Bash,WaitForMcpServers");
 
     // Giving it back is live too, because the session never lost the tool itself.
     const back = await workspace.saveTools({
@@ -191,7 +195,7 @@ describe("save for one session", () => {
       "--system-prompt-snapshot",
       "off",
     ]);
-    expect(flag(agent, "--tools")).toBe("Read,Grep,Glob,Bash,Edit");
+    expect(flag(agent, "--tools")).toBe("Read,Grep,Glob,Bash,Edit,WaitForMcpServers");
     // Same pane, same agent.
     const state = await workspace.state();
     expect(state.agents.map((entry) => [entry.id, entry.paneId, entry.activity])).toEqual([
@@ -225,8 +229,12 @@ describe("save for one session", () => {
 
     // One that was given a task and restarted before it took it up gets the task again.
     const tasked = await workspace.spawn({ name: "t", role: "explore", task: "count the files" });
+    taskTimers.length = 0;
     await workspace.restart("t");
-    expect(argvOf(tasked).at(-1)).toBe("count the files");
+    expect(argvOf(tasked)).not.toContain("count the files");
+    taskTimers[0]?.();
+    await Bun.sleep(400);
+    expect(tmux.commands("set-buffer").at(-1)?.at(-1)).toBe("count the files");
   });
 
   test("a restart works for a session with a dwa skill, and a failed one leaves nothing saved", async () => {
@@ -279,7 +287,7 @@ describe("save for one session", () => {
     expect(result.applied).toBe("live");
     expect(event(agent, "PreToolUse", { tool_name: "Glob" }).deny).toBeDefined();
     const next = await workspace.spawn({ name: "ex2", role: "explore" });
-    expect(flag(next, "--tools")).toBe("Read,Grep,Bash");
+    expect(flag(next, "--tools")).toBe("Read,Grep,Bash,WaitForMcpServers");
   });
 
   test("a working session is not interrupted unless told to; it can restart when its turn ends", async () => {
@@ -300,7 +308,7 @@ describe("save for one session", () => {
     const state = await workspace.state();
     expect(respawns()).toBe(1);
     expect(state.agents[0]?.pendingRestart).toBeUndefined();
-    expect(flag(agent, "--tools")).toBe("Read,Grep,Glob,Bash,Edit");
+    expect(flag(agent, "--tools")).toBe("Read,Grep,Glob,Bash,Edit,WaitForMcpServers");
 
     working(agent);
     const now = await workspace.saveTools({
@@ -350,15 +358,15 @@ describe("save for the role until the workspace stops", () => {
     expect(event(running, "PreToolUse", { tool_name: "Bash" })).toEqual({});
 
     const next = await workspace.spawn({ name: "ex-new", role: "explore" });
-    expect(flag(next, "--tools")).toBe("Read,Grep,Glob");
+    expect(flag(next, "--tools")).toBe("Read,Grep,Glob,WaitForMcpServers");
     const reviewer = await workspace.spawn({ name: "rev", role: "reviewer" });
-    expect(flag(reviewer, "--tools")).toBe("Read,Grep,Glob,Bash,Skill");
+    expect(flag(reviewer, "--tools")).toBe("Read,Grep,Glob,Bash,Skill,WaitForMcpServers");
     expect(roleText("explore")).toContain('tools = ["Read", "Grep", "Glob", "Bash"]');
 
     await workspace.down();
     await workspace.up();
     const fresh = await workspace.spawn({ name: "ex", role: "explore" });
-    expect(flag(fresh, "--tools")).toBe("Read,Grep,Glob,Bash");
+    expect(flag(fresh, "--tools")).toBe("Read,Grep,Glob,Bash,WaitForMcpServers");
 
     // The main session has no agents coming after it to save for.
     expect(

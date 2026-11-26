@@ -156,8 +156,20 @@ export interface WorkspaceDeps {
   newId?: () => string;
   /** Timer used for the paste fallback of message delivery; replaced in tests. */
   schedule?: (callback: () => void, ms: number) => void;
+  /** Timer used for giving a session its task; replaced in tests. */
+  taskTimer?: (callback: () => void, ms: number) => void;
   now?: () => number;
 }
+
+/**
+ * How long after a session's dwa tools connected its task is typed in. In the spike a prompt
+ * pasted right at the connection had the tools in every run (docs/spikes.md, S8); this adds
+ * a margin.
+ */
+const TASK_SETTLE_MS = 500;
+
+/** When a session gets its task although its dwa tools never reported in. */
+const TASK_FALLBACK_MS = 20_000;
 
 /** In the middle of a turn, or not ready yet: a restart now would interrupt it. */
 function isBusy(agent: { activity: string }): boolean {
@@ -221,11 +233,16 @@ export class Workspace {
   private readonly newId: () => string;
   private readonly now: () => number;
   private readonly listeners: Array<(event: AgentEvent) => void> = [];
+  /** Ids of the sessions that were started for a task and have not been given it yet. */
+  private readonly awaitingTask = new Set<string>();
+  private readonly taskTimer: (callback: () => void, ms: number) => void;
 
   constructor(private readonly deps: WorkspaceDeps) {
     this.env = deps.env ?? process.env;
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.now = deps.now ?? Date.now;
+    // Not kept alive for: a daemon that is shutting down does not wait to hand out a task.
+    this.taskTimer = deps.taskTimer ?? ((callback, ms) => void setTimeout(callback, ms).unref());
     this.messaging = new Messaging({
       store: deps.store,
       run: deps.run,
@@ -258,6 +275,7 @@ export class Workspace {
     this.deps.store.markStopped(agentId, this.now());
     this.telemetry.delete(agentId);
     this.capabilities.delete(agentId);
+    this.awaitingTask.delete(agentId);
     this.messaging.agentStopped(agentId);
     this.emit({ type: "stopped", agentId });
   }
@@ -409,7 +427,6 @@ export class Workspace {
         sessionId,
         name,
         session,
-        task,
         ...this.sessionFiles(id, name, session, profile),
       });
       const paneId = await spawnPoolWindow(this.deps.run, {
@@ -432,6 +449,7 @@ export class Workspace {
         stored,
       );
       if (spawner) this.deps.store.setSpawner(row.id, spawner.id, keep);
+      if (task) this.awaitTask(row.id);
       return {
         ...row,
         telemetry: null,
@@ -566,6 +584,28 @@ export class Workspace {
       this.markStopped(agent.id);
       return { ...agent, state: "stopped", open: false };
     });
+  }
+
+  /**
+   * A session started for a task gets it as its first prompt, but not as a launch argument:
+   * it is typed in once the session's dwa tools have connected (`ready`), or after a while
+   * when they never report in, so that the task is not lost with them.
+   */
+  private awaitTask(agentId: string): void {
+    this.awaitingTask.add(agentId);
+    this.taskTimer(() => this.giveTask(agentId), TASK_FALLBACK_MS);
+  }
+
+  /** A session's dwa MCP server reports that the session has connected to it. */
+  ready(agentId: string): void {
+    if (!this.awaitingTask.has(agentId)) return;
+    this.taskTimer(() => this.giveTask(agentId), TASK_SETTLE_MS);
+  }
+
+  private giveTask(agentId: string): void {
+    if (!this.awaitingTask.delete(agentId)) return;
+    const row = this.deps.store.getRunning(agentId);
+    if (row?.task) void this.messaging.prompt(row, row.task);
   }
 
   /** Applies a lifecycle event reported by a session's hook. Unknown or stopped agents are ignored. */
@@ -804,7 +844,7 @@ export class Workspace {
     this.deps.store.insertAgent(row);
     this.deps.store.setLaunch(row.id, JSON.stringify(session));
     this.deps.store.setRequest(row.id, JSON.stringify(request));
-    // A session started with a task has its first prompt at once; the hook then says so.
+    // Its first prompt, the task included, is typed in later; the hook then says so.
     this.deps.store.setHadTurn(row.id, false);
     this.capabilities.set(row.id, summarizeSession(session));
     return row;
@@ -1241,8 +1281,6 @@ export class Workspace {
       resume,
       name: row.name,
       session,
-      // Started afresh, it gets its task again: the first start never took it up.
-      task: resume ? undefined : (row.task ?? undefined),
       ...this.sessionFiles(agentId, row.name, session, profile),
     });
     await respawnPane(this.deps.run, {
@@ -1264,7 +1302,11 @@ export class Workspace {
     this.capabilities.set(agentId, summarizeSession(session));
     this.telemetry.delete(agentId);
     this.behind.at = 0;
-    if (!resume) return;
+    if (!resume) {
+      // Started afresh, it gets its task again: the first start never took it up.
+      if (row.task) this.awaitTask(agentId);
+      return;
+    }
     // The model still remembers the tools it had before, so it is told what it has now, once
     // the new process reports in.
     // Exactly what the launch gives it: the Skill tool a role with skills gets, and every

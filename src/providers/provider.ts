@@ -11,8 +11,6 @@ export interface LaunchRequest {
   name: string;
   /** What the session may use and how it is tuned, after all layers of configuration. */
   session: ResolvedSession;
-  /** First prompt, given when the agent is spawned with a task. */
-  task?: string;
   /** Path of the per-session settings file written from `buildSettings`. */
   settingsPath?: string;
   /** Path of the per-session MCP config written from `buildMcpConfig`. */

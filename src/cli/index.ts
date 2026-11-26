@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import pkg from "../../package.json" with { type: "json" };
 import { APP_NAME } from "../shared/constants.ts";
-import { cleanEnv } from "../shared/env.ts";
+import { cleanEnv, spawnOrigin } from "../shared/env.ts";
 import { findProjectRoot, runDir, tmuxSocketName } from "../shared/paths.ts";
 import type { AgentInfo, WorkspaceState } from "../shared/protocol.ts";
 import { tmuxArgv } from "../tmux/driver.ts";
@@ -31,8 +31,11 @@ Agents
               [--permission-mode <mode>] [--tools <a,b>] [--deny-tools <a,b>]
               [--allow <rule>]... [--deny <rule>]... [--mcp <a,b>] [--plugins <a,b>]
               [--skills <a,b>] [--off-plugins <a,b>] [--off-skills <a,b>] [--memory]
-              [--subagents]
-                                        These replace what the role says, for this agent
+              [--subagents] [--keep]
+                                        These replace what the role says, for this agent.
+                                        Run inside a session it works like its spawn_agent tool:
+                                        it can only take away from the role, and the new agent
+                                        reports to that session (--keep: stays open afterwards)
   agent list [--json]
   agent open <name|number>              Show an agent's session under the main session
   agent close                           Hide the open agent (it keeps running)
@@ -139,6 +142,7 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
       "off-skills": { type: "string" },
       memory: { type: "boolean" },
       subagents: { type: "boolean" },
+      keep: { type: "boolean" },
       json: { type: "boolean" },
       block: { type: "string", multiple: true },
       unblock: { type: "string", multiple: true },
@@ -173,6 +177,9 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
         off_skills: list(values["off-skills"]),
         memory: values.memory,
         subagents: values.subagents,
+        keep: values.keep,
+        // From inside a session this is the same as its spawn_agent tool: narrow only.
+        ...spawnOrigin(process.env),
       });
       console.log(`Started agent ${agent.name} (profile ${agent.profile}).`);
       return 0;

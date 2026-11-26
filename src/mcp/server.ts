@@ -529,5 +529,17 @@ export async function runMcp(env: Env = process.env): Promise<void> {
     return data;
   };
 
-  await createMcpServer(agentId, api).connect(new StdioServerTransport());
+  const server = createMcpServer(agentId, api);
+  reportReady(server, agentId, api);
+  await server.connect(new StdioServerTransport());
+}
+
+/**
+ * Tells the daemon when the session has connected to this server. Only from then on can a
+ * prompt reach the session with the dwa tools in it, so the daemon holds the task until this.
+ */
+export function reportReady(server: McpServer, agentId: string, api: Api): void {
+  server.server.oninitialized = () => {
+    api("POST", "/agents/ready", { agentId }).catch(() => undefined);
+  };
 }

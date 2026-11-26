@@ -107,14 +107,14 @@ describe("a session another session starts", () => {
   test("is told in its task to report, and who started it is recorded", async () => {
     const dev = await handOver("dev");
     expect(store.handover(dev.id)).toMatchObject({ spawnedBy: MAIN, keep: 0, finishedAt: null });
-    const task = [...tmux.panes.values()].at(-1)?.argv.at(-1) ?? "";
+    const task = store.getRunning(dev.id)?.task ?? "";
     expect(task).toStartWith('Do dev\n\n---\n[dwa] "main" started you for this task');
     expect(task).toContain('call the dwa tool "finish_task" with the result');
     expect(task).toContain("Your session ends after that.");
 
     const kept = await handOver("kept", MAIN, { keep: true });
     expect(store.handover(kept.id)).toMatchObject({ keep: 1 });
-    expect([...tmux.panes.values()].at(-1)?.argv.at(-1)).toContain(
+    expect(store.getRunning(kept.id)?.task).toContain(
       "Your session stays open after that; report each later task the same way.",
     );
   });
@@ -122,7 +122,7 @@ describe("a session another session starts", () => {
   test("the user's own agents and workflow steps owe nothing", async () => {
     const mine = await workspace.spawn({ name: "mine", task: "Do it", keep: true });
     expect(store.handover(mine.id)).toBeNull();
-    expect([...tmux.panes.values()].at(-1)?.argv.at(-1)).toBe("Do it");
+    expect(store.getRunning(mine.id)?.task).toBe("Do it");
     // Someone who is not running cannot be owed anything either.
     const orphan = await workspace.spawn({ name: "orphan", task: "Do it", from: "gone" });
     expect(store.handover(orphan.id)).toBeNull();

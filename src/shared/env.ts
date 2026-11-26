@@ -29,3 +29,18 @@ export function cleanEnv(env: Record<string, string | undefined>): Record<string
   }
   return result;
 }
+
+/**
+ * What a spawn request made with the CLI carries when the command runs inside a session of the
+ * workspace (its shell has the session's `DWA_AGENT_ID`): the same as the `spawn_agent` tool
+ * sends, so the new session can only be narrower than its role and owes its result to the
+ * caller. The user's own terminal, the workspace's shell pane and the popups have no such
+ * variable. This keeps a session from going around `spawn_agent` by accident; it is not a
+ * barrier against one that sets out to, which can change its environment.
+ */
+export function spawnOrigin(
+  env: Record<string, string | undefined>,
+): { from: string; narrowOnly: true } | Record<string, never> {
+  const from = env.DWA_AGENT_ID;
+  return from ? { from, narrowOnly: true } : {};
+}

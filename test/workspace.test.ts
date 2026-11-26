@@ -31,6 +31,8 @@ let files: Map<string, string>;
 let links: Map<string, string>;
 /** Paste-fallback timers the workspace asked for; a test runs them by hand. */
 let scheduled: (() => void)[];
+/** Timers for giving a session its task, with their delay; a test runs them by hand. */
+let taskTimers: { run: () => void; ms: number }[];
 /** The text of role files; a role not listed here has an empty file. */
 let roles: Record<string, string>;
 /** Other files the workspace can see, by full path, and the commands on PATH. */
@@ -43,6 +45,7 @@ beforeEach(() => {
   files = new Map();
   links = new Map();
   scheduled = [];
+  taskTimers = [];
   roles = {};
   disk = {};
   commands = [];
@@ -68,6 +71,7 @@ beforeEach(() => {
     linkDir: (target, path) => links.set(path, target),
     wrapperConfigDir: () => "/home/me/.claude-me",
     schedule: (callback) => scheduled.push(callback),
+    taskTimer: (run, ms) => taskTimers.push({ run, ms }),
     env: {},
     newId: () => `id-${++id}`,
     now: () => 1000 + id,
@@ -222,8 +226,49 @@ describe("agents", () => {
     ]);
     expect(argv[10]).toBe("/project/.dwa/run/agents/id-3/settings.json");
     expect(files.get("/project/.dwa/run/agents/id-3/prompt.md")).toContain('You are "explore"');
-    // The task comes last, after everything dwa adds.
-    expect(argv.at(-1)).toBe("find the bug");
+    // The task is not a launch argument: it would be taken before the dwa tools are there.
+    expect(argv).not.toContain("find the bug");
+    expect(agent.task).toBe("find the bug");
+  });
+
+  test("the task is typed in once the session's dwa tools have connected", async () => {
+    await workspace.up();
+    const agent = await workspace.spawn({ role: "explore", task: "find the bug" });
+    expect(tmux.commands("paste-buffer")).toHaveLength(0);
+
+    workspace.ready(agent.id);
+    // The fallback from the start, then the short wait after the connection.
+    expect(taskTimers.map((timer) => timer.ms)).toEqual([20_000, 500]);
+    taskTimers[1]?.run();
+    await Bun.sleep(400);
+    expect(tmux.commands("set-buffer").at(-1)?.at(-1)).toBe("find the bug");
+    expect(tmux.commands("paste-buffer").at(-1)).toContain(agent.paneId);
+    expect(tmux.commands("send-keys").at(-1)).toEqual(["send-keys", "-t", agent.paneId, "Enter"]);
+
+    // Given once: not again by the fallback, nor when the server connects again.
+    taskTimers[0]?.run();
+    workspace.ready(agent.id);
+    await Bun.sleep(400);
+    expect(tmux.commands("paste-buffer")).toHaveLength(1);
+    expect(taskTimers).toHaveLength(2);
+  });
+
+  test("the task is typed in after a while when the dwa tools never report in", async () => {
+    await workspace.up();
+    const agent = await workspace.spawn({ role: "explore", task: "find the bug" });
+    taskTimers[0]?.run();
+    await Bun.sleep(400);
+    expect(tmux.commands("set-buffer").at(-1)?.at(-1)).toBe("find the bug");
+
+    // A session without a task waits for nothing, and one that is gone gets nothing.
+    const idle = await workspace.spawn({ name: "idle" });
+    workspace.ready(idle.id);
+    const gone = await workspace.spawn({ name: "gone", task: "too late" });
+    await workspace.stop(gone.id);
+    for (const timer of taskTimers.slice(1)) timer.run();
+    await Bun.sleep(400);
+    expect(tmux.commands("paste-buffer")).toHaveLength(1);
+    expect(agent.task).toBe("find the bug");
   });
 
   test("a per-agent profile wins over the workspace profile", async () => {
@@ -521,7 +566,6 @@ skills = ["review", "house-style"]
       "/project/tools/lint",
       "--plugin-dir",
       `${dir}/skills-plugin`,
-      "review it",
     ]);
 
     const { settings, mcp, prompt } = session("id-3");
@@ -571,7 +615,10 @@ skills = ["review", "house-style"]
     roles.main = 'tools = ["Read", "Bash"]\nprompt = "You lead."';
     const { main } = await workspace.up();
     expect(main?.role).toBe("main");
-    expect(argvOf(main?.paneId ?? "").slice(3, 5)).toEqual(["--tools", "Read,Bash"]);
+    expect(argvOf(main?.paneId ?? "").slice(3, 5)).toEqual([
+      "--tools",
+      "Read,Bash,WaitForMcpServers",
+    ]);
     expect(session("id-1").prompt.endsWith("# Your role: main\n\nYou lead.")).toBe(true);
     expect(main?.capabilities?.tools).toEqual(["Read", "Bash"]);
   });
@@ -848,6 +895,11 @@ describe("messaging", () => {
     const { main } = await workspace.up();
     const dev = await workspace.spawn({ name: "dev" });
     const rev = await workspace.spawn({ name: "rev" });
+    // Each has had a prompt and is idle again: only then do messages go through the hook.
+    for (const agentId of [main?.id ?? "", dev.id, rev.id]) {
+      workspace.hook({ agentId, event: "UserPromptSubmit", input: {} });
+      workspace.hook({ agentId, event: "Stop", input: {} });
+    }
     return { main: main?.id ?? "", dev: dev.id, rev: rev.id, m: workspace.messaging };
   }
 
@@ -885,6 +937,39 @@ describe("messaging", () => {
     abort.abort();
     m.send("user", "rev", "hi");
     expect(store.pendingMessages(rev)).toHaveLength(1);
+  });
+
+  test("a session that never had a prompt gets its first message pasted, not through the hook", async () => {
+    await workspace.up();
+    const fresh = await workspace.spawn({ name: "fresh" });
+    const m = workspace.messaging;
+    workspace.hook({ agentId: fresh.id, event: "SessionStart", input: {} });
+    let handed: string[] | null = null;
+    void m.waitMailbox(fresh.id).then((messages) => {
+      handed = messages;
+    });
+    m.send("user", "fresh", "hello");
+    await Bun.sleep(0);
+    // The hook is waiting, and still the message stays for the paste.
+    expect(handed).toBeNull();
+    expect(store.pendingMessages(fresh.id)).toHaveLength(1);
+    scheduled.at(-1)?.();
+    await Bun.sleep(400);
+    expect(tmux.commands("set-buffer").at(-1)?.at(-1)).toBe("[dwa] Message from the user:\nhello");
+    expect(handed).toBeNull();
+
+    // A message that was waiting when the hook connects is pasted too.
+    const late = await workspace.spawn({ name: "late" });
+    workspace.hook({ agentId: late.id, event: "SessionStart", input: {} });
+    m.send("user", "late", "early bird");
+    scheduled.length = 0;
+    void m.waitMailbox(late.id);
+    expect(store.pendingMessages(late.id)).toHaveLength(1);
+    scheduled.at(-1)?.();
+    await Bun.sleep(400);
+    expect(tmux.commands("set-buffer").at(-1)?.at(-1)).toBe(
+      "[dwa] Message from the user:\nearly bird",
+    );
   });
 
   test("without a hook, a message is pasted into an idle session and queued for a busy one", async () => {
