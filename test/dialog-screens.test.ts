@@ -268,6 +268,8 @@ function fakeStore(
       : role.name;
   };
   const store: RoleStore = {
+    builtins: () => [],
+    adopt: () => undefined,
     list: () =>
       Object.entries(roles).map(([key, role]) => {
         const hidden = key.startsWith("personal:");

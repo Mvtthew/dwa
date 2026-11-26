@@ -12,6 +12,7 @@ import { switchTo, versionText } from "../shared/history.ts";
 import { runDir } from "../shared/paths.ts";
 import type { WorkspaceState } from "../shared/protocol.ts";
 import {
+  adoptRole,
   createRole,
   deleteRole,
   duplicateRole,
@@ -34,22 +35,25 @@ import {
   parseRole,
   type ResolvedSession,
   type RoleContext,
+  type RoleEntry,
   resolveSession,
   scopeNotes,
+  sourceLabel,
   summarizeSession,
 } from "../shared/roles.ts";
-import { parseRef, type Scope, scopeLabel } from "../shared/scope.ts";
+import { parseRef, type Scope } from "../shared/scope.ts";
 import { listWorkflows, loadWorkflow } from "../shared/workflow.ts";
 import { call } from "./client.ts";
 import { openEditor } from "./editor.ts";
 import { printDiff, printHistory, versionNumber } from "./versions.ts";
 
 const ROLE_USAGE = `Usage:
-  ${APP_NAME} role list [--json]            Roles of this project and your personal ones
+  ${APP_NAME} role list [--json]            Roles of this project, your personal ones and the built-in ones
   ${APP_NAME} role show <role> [--json]     What a session of this role is started with
   ${APP_NAME} role show --main [--json]     The same for the main session
   ${APP_NAME} role new <name> [--description <text>] [--personal]
   ${APP_NAME} role copy <role> <new name> [--to personal|project]
+  ${APP_NAME} role adopt <role> [--personal]  Make a file of a built-in role, to change it
   ${APP_NAME} role move <role> --to personal|project   With its history; the name stays
   ${APP_NAME} role rename <role> <new name> Also changes every file that names the role
   ${APP_NAME} role delete <role>            Refused while something uses the role
@@ -60,7 +64,8 @@ const ROLE_USAGE = `Usage:
   ${APP_NAME} role switch <role> <vN>       Give the file the content of that version
 
 A role name means the role sessions here use: the project's before a personal one of the same
-name. --personal or --project (or personal:<role>, project:<role>) names one file exactly.`;
+name, and either before a role built into ${APP_NAME}. --personal or --project (or personal:<role>,
+project:<role>) names one file exactly.`;
 
 /** "personal" or "project" as a place; undefined for anything else. */
 function placeOf(text: string | undefined): Scope | undefined {
@@ -91,6 +96,28 @@ async function roleFileCommand(
       personal: values.personal,
     });
     console.log(`Created ${entry.path}`);
+    return 0;
+  }
+  if (action === "adopt" && word) {
+    const entry = adoptRole(word, ctx, { personal: values.personal });
+    console.log(`Created ${entry.path}`);
+    return 0;
+  }
+  // A built-in role has no file to name by place: it is copied by its bare name.
+  const fileless =
+    word !== undefined &&
+    !values.personal &&
+    !values.project &&
+    !parseRef(word).source &&
+    !listAllRoles(ctx).some((role) => role.name === word);
+  if (action === "copy" && word && second && fileless) {
+    const to = placeOf(values.to);
+    if (values.to !== undefined && !to) {
+      console.error(ROLE_USAGE);
+      return 1;
+    }
+    const copy = duplicateRole(word, second, ctx, to ? { personal: to === "user" } : {});
+    console.log(`Created ${copy.path}`);
     return 0;
   }
   const FILE_ACTIONS = [
@@ -299,7 +326,14 @@ export async function roleCommand(projectRoot: string, args: string[]): Promise<
   }
 
   if (action === "list") {
-    const roles = listAllRoles(ctx).map((entry) => {
+    // Every file, and the built-in roles no file stands in for: sessions use those as they are.
+    const entries: (RoleEntry & { hidden: boolean })[] = [
+      ...listAllRoles(ctx),
+      ...listRoles(ctx)
+        .filter((role) => role.source === "builtin")
+        .map((role) => ({ ...role, hidden: false })),
+    ];
+    const roles = entries.map((entry) => {
       try {
         const role = findRoleIn(entry, ctx)?.role;
         return {
@@ -335,7 +369,7 @@ export async function roleCommand(projectRoot: string, args: string[]): Promise<
     for (const role of roles) {
       const where = role.hidden
         ? "personal, hidden by the project's role"
-        : scopeLabel(role.source);
+        : sourceLabel(role.source);
       const text = role.error ? `BROKEN: ${role.error}` : (role.description ?? "");
       console.log(`${role.name.padEnd(width)}  ${where.padEnd(8)}  ${text}`.trimEnd());
     }

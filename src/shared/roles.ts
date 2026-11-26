@@ -22,6 +22,8 @@ import {
 import type { Config, McpServerConfig } from "./config.ts";
 import { APP_NAME } from "./constants.ts";
 import {
+  builtinRolesDir,
+  builtinSkillsDir,
   expandPath,
   projectSkillsDir,
   rolesDir,
@@ -29,7 +31,7 @@ import {
   userRolesDir,
   userSkillsDir,
 } from "./paths.ts";
-import { type ItemEntry, type ItemKind, type ItemRef, listItems, type Scope } from "./scope.ts";
+import { type ItemEntry, type ItemKind, listItems, type Scope } from "./scope.ts";
 import { runsAsAgent, SKILL_FILE } from "./skill-file.ts";
 
 export { EFFORT_LEVELS, type Effort };
@@ -102,7 +104,8 @@ export interface RoleContext {
   files?: RoleFiles;
 }
 
-export type RoleSource = Scope;
+/** Where a role's file is. A built-in one is part of dwa and is never written to. */
+export type RoleSource = Scope | "builtin";
 
 export interface RoleEntry {
   name: string;
@@ -110,15 +113,34 @@ export interface RoleEntry {
   path: string;
 }
 
+/** A role with a file of the project or of the user: one that can be edited. */
+export type RoleFile = RoleEntry & { source: Scope };
+
+export function isRoleFile<T extends RoleEntry>(entry: T): entry is T & { source: Scope } {
+  return entry.source !== "builtin";
+}
+
+/** How a role's place is named to the user. */
+export function sourceLabel(source: RoleSource): "project" | "personal" | "built in" {
+  return source === "builtin" ? "built in" : source === "user" ? "personal" : "project";
+}
+
 export interface LoadedRole extends RoleEntry {
   role: Role;
 }
 
+/** The places a role is looked for in, in that order: the first that has the name wins. */
 function roleDirs(ctx: RoleContext): [RoleSource, string][] {
+  const builtin = builtinRolesDir(ctx.env);
   return [
     ["project", rolesDir(ctx.projectRoot)],
     ["user", userRolesDir(ctx.env)],
+    ...(builtin === null ? [] : [["builtin", builtin] as [RoleSource, string]]),
   ];
+}
+
+function roleDir(source: RoleSource, ctx: RoleContext): string | null {
+  return roleDirs(ctx).find(([place]) => place === source)?.[1] ?? null;
 }
 
 /** Role files as a kind of file kept in the project and in the personal folder. */
@@ -137,22 +159,51 @@ export function listAllRoles(ctx: RoleContext): ItemEntry[] {
   return listItems(roleKind, { ...ctx, files: ctx.files ?? diskFiles });
 }
 
-/** Every role a session in this project can run as. A project role hides a personal one of the same name. */
+/** The roles dwa carries, whether a file of the project or of the user takes their place or not. */
+export function listBuiltinRoles(ctx: RoleContext): RoleEntry[] {
+  const dir = builtinRolesDir(ctx.env);
+  if (dir === null) return [];
+  return (ctx.files ?? diskFiles)
+    .list(dir)
+    .filter((file) => file.endsWith(".toml"))
+    .map((file) => file.slice(0, -".toml".length))
+    .filter((name) => NAME_PATTERN.test(name))
+    .sort()
+    .map((name) => ({ name, source: "builtin" as const, path: join(dir, `${name}.toml`) }));
+}
+
+/**
+ * Every role a session in this project can run as. A project role hides a personal one of the
+ * same name, and either hides a built-in one.
+ */
 export function listRoles(ctx: RoleContext): RoleEntry[] {
-  return listAllRoles(ctx)
+  const files: RoleEntry[] = listAllRoles(ctx)
     .filter((entry) => !entry.hidden)
     .map(({ name, source, path }) => ({ name, source, path }));
+  const taken = new Set(files.map((entry) => entry.name));
+  const builtin = listBuiltinRoles(ctx).filter((entry) => !taken.has(entry.name));
+  return [...files, ...builtin].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Reads the role file in one place, hidden or not. Null when that place has none of the name. */
-export function findRoleIn(ref: ItemRef, ctx: RoleContext): LoadedRole | null {
+export function findRoleIn(
+  ref: { name: string; source: RoleSource },
+  ctx: RoleContext,
+): LoadedRole | null {
   if (!NAME_PATTERN.test(ref.name)) return null;
-  const path = join(roleKind.dir(ref.source, ctx), `${ref.name}.toml`);
+  const dir = roleDir(ref.source, ctx);
+  if (dir === null) return null;
+  const path = join(dir, `${ref.name}.toml`);
   const text = (ctx.files ?? diskFiles).read(path);
-  return text === null ? null : { ...ref, path, role: parseRole(text, path) };
+  return text === null
+    ? null
+    : { name: ref.name, source: ref.source, path, role: parseRole(text, path) };
 }
 
-/** Reads a role: the project's file, otherwise the personal one. Null when there is neither. */
+/**
+ * Reads a role: the project's file, otherwise the personal one, otherwise the one built into
+ * dwa. Null when there is none of the name.
+ */
 export function findRole(name: string, ctx: RoleContext): LoadedRole | null {
   if (!NAME_PATTERN.test(name)) return null;
   const files = ctx.files ?? diskFiles;
@@ -201,7 +252,7 @@ function roleChain(name: string, ctx: RoleContext): LoadedRole[] {
   return chain;
 }
 
-export type SkillSource = "project" | "dwa" | "user";
+export type SkillSource = "project" | "dwa" | "user" | "builtin";
 
 export interface ResolvedSkill {
   name: string;
@@ -340,13 +391,18 @@ function projectSkillNames(ctx: RoleContext): string[] {
     .sort();
 }
 
-/** The skill of that name: the project's own first, then dwa's folder, then the personal one. */
+/**
+ * The skill of that name: the project's own first, then dwa's folder, then the personal one,
+ * then the ones dwa carries for its built-in roles.
+ */
 export function findSkill(name: string, ctx: RoleContext): ResolvedSkill | null {
   const files = ctx.files ?? diskFiles;
+  const builtin = builtinSkillsDir(ctx.env);
   const places: [SkillSource, string][] = [
     ["project", projectSkillsDir(ctx.projectRoot)],
     ["dwa", skillsDir(ctx.projectRoot)],
     ["user", userSkillsDir(ctx.env)],
+    ...(builtin === null ? [] : [["builtin", builtin] as [SkillSource, string]]),
   ];
   for (const [source, dir] of places) {
     const path = join(dir, name);

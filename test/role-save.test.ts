@@ -55,7 +55,7 @@ describe("a role written by an agent", () => {
     mkdirSync(file(), { recursive: true });
     writeFileSync(file(`${ROLE_AUTHOR_ROLE}.toml`), 'tools = ["Read"]\n');
     writeFileSync(file("explore.toml"), 'tools = ["Read"]\n');
-    const env = { XDG_CONFIG_HOME: join(dir, "home") };
+    const env = { XDG_CONFIG_HOME: join(dir, "home"), DWA_BUILTIN_DIR: "" };
     workspace = new Workspace({
       store,
       run: tmux.run,

@@ -2,6 +2,7 @@
 // creating, copying, renaming and deleting roles. The files are reached through `RoleStore`,
 // so the screens are tested without a disk.
 import { EFFORT_LEVELS, PERMISSION_MODES } from "../shared/capabilities.ts";
+import { APP_NAME } from "../shared/constants.ts";
 import type { History } from "../shared/history.ts";
 import { formatTime } from "../shared/history.ts";
 import type { WorkspaceState } from "../shared/protocol.ts";
@@ -22,6 +23,13 @@ export interface RoleListEntry {
   error: string | null;
 }
 
+/** A role dwa carries that no file here takes the place of. */
+export interface BuiltinRoleEntry {
+  name: string;
+  description: string | null;
+  whenToUse: string | null;
+}
+
 /**
  * What the role settings need from the files. Every method may throw with a message to show.
  * A role is named by place and name; a bare name is the role sessions here use.
@@ -29,6 +37,10 @@ export interface RoleListEntry {
 export interface RoleStore {
   /** Every role file in both places, the hidden personal ones included. */
   list(): RoleListEntry[];
+  /** The roles built into dwa that sessions here use as they are: no file has their name. */
+  builtins(): BuiltinRoleEntry[];
+  /** Makes a file of a built-in role, with the same text, so it can be changed. */
+  adopt(name: string, where: Scope): void;
   /** The role's own file content as values; nothing inherited. */
   load(role: RoleRef): RoleFields;
   /** Returns the version the file is at afterwards. */
@@ -793,11 +805,35 @@ export function describeRoleScreen(api: WizardApi, store: RoleStore): Screen {
   };
 }
 
+/** A built-in role: what it is for, and the copy that makes it a file to change. */
+function builtinRoleScreen(api: WizardApi, store: RoleStore, role: BuiltinRoleEntry): Screen {
+  const adopt = (where: Scope) => () => {
+    store.adopt(role.name, where);
+    return { to: roleScreen(api, store, { name: role.name, source: where }) };
+  };
+  return {
+    title: `Role: ${role.name} (built in)`,
+    rows: [
+      { kind: "note", text: role.description ?? "No description." },
+      ...(role.whenToUse ? [gap, { kind: "note" as const, text: role.whenToUse.trim() }] : []),
+      gap,
+      {
+        kind: "note",
+        text: `This role is part of ${APP_NAME} and is used as it is. A copy is a file you can change; it takes the built-in role's place, and deleting it brings the built-in one back.`,
+      },
+      { kind: "button", label: "Copy into the project to change it…", run: adopt("project") },
+      { kind: "button", label: "Copy to your personal folder to change it…", run: adopt("user") },
+      back,
+    ],
+  };
+}
+
 /** The roles, and a way to add one. */
 export function rolesScreen(api: WizardApi, store: RoleStore): Screen {
   const roles = store.list();
+  const builtins = store.builtins();
   const rows: Row[] = [];
-  if (roles.length === 0) {
+  if (roles.length === 0 && builtins.length === 0) {
     rows.push({ kind: "note", text: "No roles yet. `dwa init --roles` adds a set to start from." });
   }
   for (const role of roles) {
@@ -807,6 +843,14 @@ export function rolesScreen(api: WizardApi, store: RoleStore): Screen {
       hint: role.error ?? [scopeHint(role, "role"), role.description].filter(Boolean).join(" · "),
       tone: role.error ? "bad" : undefined,
       run: () => ({ to: roleScreen(api, store, { name: role.name, source: role.source }) }),
+    });
+  }
+  for (const role of builtins) {
+    rows.push({
+      kind: "button",
+      label: role.name,
+      hint: ["built in", role.description].filter(Boolean).join(" · "),
+      run: () => ({ to: builtinRoleScreen(api, store, role) }),
     });
   }
   rows.push(

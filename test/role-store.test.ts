@@ -19,7 +19,7 @@ const places = () => store.list().map((role) => [role.name, role.source, role.hi
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "dwa-role-store-"));
   // A personal folder of its own: the real one is never read or written.
-  env = { XDG_CONFIG_HOME: join(dir, "home") };
+  env = { XDG_CONFIG_HOME: join(dir, "home"), DWA_BUILTIN_DIR: "" };
   initProject(dir, { roles: true });
   mkdirSync(home("roles"), { recursive: true });
   writeFileSync(home("roles", "mine.toml"), 'description = "Mine"\n');

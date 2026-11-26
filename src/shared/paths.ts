@@ -58,6 +58,29 @@ export function userRolesDir(env: Env = process.env): string {
   return join(userDir(env), "roles");
 }
 
+/**
+ * What dwa carries itself: the roles every project has without a file of its own, and the
+ * skills those roles name. They are the files of `examples/`, which `init --roles` also copies.
+ * `$DWA_BUILTIN_DIR` names another folder (with `roles/` and `skills/`); empty means none.
+ */
+function builtinDir(env: Env): string | null {
+  const override = env.DWA_BUILTIN_DIR;
+  if (override !== undefined) return override === "" ? null : resolve(override);
+  return join(import.meta.dir, "..", "..", "examples");
+}
+
+/** Built-in roles, used when neither the project nor the user has a role of that name. */
+export function builtinRolesDir(env: Env = process.env): string | null {
+  const dir = builtinDir(env);
+  return dir === null ? null : join(dir, "roles");
+}
+
+/** Skills of the built-in roles, used when no other place has one of that name. */
+export function builtinSkillsDir(env: Env = process.env): string | null {
+  const dir = builtinDir(env);
+  return dir === null ? null : join(dir, "skills");
+}
+
 /** Skills kept for dwa sessions, one directory each: `<project>/.dwa/skills`. */
 export function skillsDir(projectRoot: string): string {
   return join(projectDir(projectRoot), "skills");

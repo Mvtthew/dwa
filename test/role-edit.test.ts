@@ -40,7 +40,7 @@ const configText = () => readFileSync(join(dir, ".dwa", "config.toml"), "utf8");
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "dwa-role-edit-"));
   // A personal folder of its own, so the roles of whoever runs the tests stay out.
-  ctx = { projectRoot: dir, env: { XDG_CONFIG_HOME: join(dir, "home") } };
+  ctx = { projectRoot: dir, env: { XDG_CONFIG_HOME: join(dir, "home"), DWA_BUILTIN_DIR: "" } };
   initProject(dir, { roles: true });
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));

@@ -5,6 +5,7 @@ import type { Config } from "../shared/config.ts";
 import { diffLines, readHistory, switchTo, versionText } from "../shared/history.ts";
 import { projectSkillsDir, skillsDir, userSkillsDir } from "../shared/paths.ts";
 import {
+  adoptRole,
   createRole,
   deleteRole,
   duplicateRole,
@@ -18,7 +19,13 @@ import {
   saveValues,
   scopeWarnings,
 } from "../shared/role-edit.ts";
-import { findRoleIn, listAllRoles, parseRole, type RoleContext } from "../shared/roles.ts";
+import {
+  findRoleIn,
+  listAllRoles,
+  listRoles,
+  parseRole,
+  type RoleContext,
+} from "../shared/roles.ts";
 import type { RoleStore } from "./role-screens.ts";
 
 function skillNames(dir: string): string[] {
@@ -55,6 +62,24 @@ export function diskRoleStore(
           return { name, source, hidden, description: null, error: (error as Error).message };
         }
       }),
+    builtins: () =>
+      listRoles(ctx)
+        .filter((entry) => entry.source === "builtin")
+        .map((entry) => {
+          try {
+            const role = findRoleIn(entry, ctx)?.role;
+            return {
+              name: entry.name,
+              description: role?.description ?? null,
+              whenToUse: role?.when_to_use ?? null,
+            };
+          } catch {
+            return { name: entry.name, description: null, whenToUse: null };
+          }
+        }),
+    adopt: (name, where) => {
+      adoptRole(name, ctx, { personal: where === "user" });
+    },
     load: (role) => {
       const loaded = findRoleIn(requireRole(role, ctx), ctx);
       if (!loaded) throw new Error("The role file is gone.");

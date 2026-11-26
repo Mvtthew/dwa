@@ -42,7 +42,7 @@ const open = (config: Config | null = null) => diskWorkflowStore(dir, config, en
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "dwa-workflow-store-"));
   // A personal folder of its own: the real one is never read or written.
-  env = { XDG_CONFIG_HOME: join(dir, "home") };
+  env = { XDG_CONFIG_HOME: join(dir, "home"), DWA_BUILTIN_DIR: "" };
   mkdirSync(project("workflows"), { recursive: true });
   mkdirSync(home("workflows"), { recursive: true });
   writeFileSync(project("workflows", "feature.toml"), workflow("Ours", ["explore", "build"]));
@@ -84,7 +84,10 @@ describe("the workflow store on disk", () => {
   test("an empty project has nothing to list", () => {
     const empty = mkdtempSync(join(tmpdir(), "dwa-workflow-store-empty-"));
     try {
-      const none = diskWorkflowStore(empty, null, { XDG_CONFIG_HOME: join(empty, "home") });
+      const none = diskWorkflowStore(empty, null, {
+        XDG_CONFIG_HOME: join(empty, "home"),
+        DWA_BUILTIN_DIR: "",
+      });
       expect(none.list()).toEqual([]);
       expect(none.draft({ kind: "run", id: 1, name: "x" })).toBeNull();
     } finally {

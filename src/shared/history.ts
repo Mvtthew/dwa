@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { historyDir, projectConfigPath, userConfigPath, userHistoryDir } from "./paths.ts";
-import type { RoleEntry } from "./roles.ts";
+import type { RoleFile } from "./roles.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -61,7 +61,7 @@ export function trackedItem(
   return { path: entry.path, dir: join(base, kind, entry.name) };
 }
 
-export function trackedRole(entry: RoleEntry, projectRoot: string, env?: Env): Tracked {
+export function trackedRole(entry: RoleFile, projectRoot: string, env?: Env): Tracked {
   return trackedItem("roles", entry, projectRoot, env);
 }
 

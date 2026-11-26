@@ -53,6 +53,7 @@ import {
   diskFiles,
   findRole,
   findSkill,
+  isRoleFile,
   missingOnThisMachine,
   type ResolvedSession,
   type ResolvedSkill,
@@ -1157,10 +1158,11 @@ export class Workspace {
     );
     const chain = [...layers.chain].reverse();
     // Every target says where its file is: one is in the repository, the other is the user's own.
-    const files: ToolsInfo["files"] = chain.map(({ name, source }, index) => ({
+    // A role built into dwa has no file to save in until it is copied into one of the two.
+    const files: ToolsInfo["files"] = chain.filter(isRoleFile).map(({ name, source }) => ({
       label:
         `Role ${name}  (${scopeLabel(source)}` +
-        (index === 0 ? ")" : `; ${chain[0]?.name} starts from it; changes both)`),
+        (name === chain[0]?.name ? ")" : `; ${chain[0]?.name} starts from it; changes both)`),
       file: { kind: "role", name, source },
     }));
     files.push({

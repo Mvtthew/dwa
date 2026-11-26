@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs
 import { dirname, join } from "node:path";
 import { CAPABILITY_KEYS, type Capabilities, ConfigError, NAME_PATTERN } from "./capabilities.ts";
 import { type Config, parseConfig } from "./config.ts";
+import { APP_NAME } from "./constants.ts";
 import {
   BY_HAND,
   moveHistory,
@@ -19,14 +20,16 @@ import {
   diskFiles,
   findRole,
   findRoleIn,
+  isRoleFile,
   listAllRoles,
+  listBuiltinRoles,
   listRoles,
   PERSONAL_DEFAULTS,
   parseRole,
   personalParentNote,
   type Role,
   type RoleContext,
-  type RoleEntry,
+  type RoleFile,
   resolveSession,
   roleKind,
 } from "./roles.ts";
@@ -78,9 +81,34 @@ export function describeTarget(target: FileTarget): string {
   return target.source === "user" ? `your personal role ${target.name}` : `role ${target.name}`;
 }
 
-/** The role's file, hidden or not. Throws when there is none. */
+/** The built-in role of that name, whether a file takes its place or not. */
+export function builtinRole(name: string, ctx: RoleContext) {
+  return listBuiltinRoles(ctx).find((role) => role.name === name) ?? null;
+}
+
+/** The built-in role a bare name means here: the one no file of that name stands in for. */
+function unshadowedBuiltin(ref: RoleRef, ctx: RoleContext) {
+  const name = typeof ref === "string" ? ref : ref.name;
+  return listAllRoles(ctx).some((role) => role.name === name) ? null : builtinRole(name, ctx);
+}
+
+/**
+ * The role's file, hidden or not. Throws when there is none: a role built into dwa has no
+ * file to change until it is copied into the project or the personal folder.
+ */
 export function requireRole(ref: RoleRef, ctx: RoleContext): ItemEntry {
-  return requireItem(roleKind, ref, ctx);
+  try {
+    return requireItem(roleKind, ref, ctx);
+  } catch (error) {
+    const { name, source } = typeof ref === "string" ? { name: ref, source: undefined } : ref;
+    if (source === undefined && builtinRole(name, ctx)) {
+      throw new ConfigError(
+        `Role "${name}" is built into ${APP_NAME} and cannot be changed there. ` +
+          `Copy it first: ${APP_NAME} role adopt ${name}`,
+      );
+    }
+    throw error;
+  }
 }
 
 function tracked(target: FileTarget, ctx: RoleContext): Tracked {
@@ -230,13 +258,29 @@ export function createRole(
   source: string,
   ctx: RoleContext,
   options: { personal?: boolean; now?: Date } = {},
-): RoleEntry {
+): RoleFile {
   const path = newRolePath(name, ctx, options.personal ?? false);
   const role = parseRole(text, path);
   if (role.extends !== undefined) checkParents(name, role.extends, ctx);
-  const entry: RoleEntry = { name, source: options.personal ? "user" : "project", path };
+  const entry: RoleFile = { name, source: options.personal ? "user" : "project", path };
   saveTracked(trackedRole(entry, ctx.projectRoot, ctx.env), text, source, options.now);
   return entry;
+}
+
+/**
+ * Makes a file of a role built into dwa, with the same text, so it can be changed. From then
+ * on the file is the role here; deleting it brings the built-in one back.
+ */
+export function adoptRole(
+  name: string,
+  ctx: RoleContext,
+  options: { personal?: boolean; now?: Date } = {},
+): RoleFile {
+  const builtin = builtinRole(name, ctx);
+  if (!builtin) throw new ConfigError(`There is no built-in role "${name}".`);
+  const text = (ctx.files ?? diskFiles).read(builtin.path);
+  if (text === null) throw new ConfigError(`The built-in role "${name}" cannot be read.`);
+  return createRole(name, text, "copy of the built-in role", ctx, options);
 }
 
 /** What a new, empty role file starts with. */
@@ -253,7 +297,13 @@ export function duplicateRole(
   to: string,
   ctx: RoleContext,
   options: { personal?: boolean } = {},
-): RoleEntry {
+): RoleFile {
+  // A built-in role no file stands in for is copied from dwa's own text, into the project.
+  const builtin = typeof from === "string" || !from.source ? unshadowedBuiltin(from, ctx) : null;
+  if (builtin) {
+    const text = (ctx.files ?? diskFiles).read(builtin.path) ?? "";
+    return createRole(to, text, `copy of ${builtin.name}`, ctx, { personal: options.personal });
+  }
   const origin = requireRole(from, ctx);
   return createRole(to, readFileSync(origin.path, "utf8"), `copy of ${origin.name}`, ctx, {
     personal: options.personal ?? origin.source === "user",
@@ -264,7 +314,7 @@ export function duplicateRole(
  * Moves a role between the project and the personal folder, with its history. The name stays,
  * so what refers to it still finds it.
  */
-export function moveRole(ref: RoleRef, to: Scope, ctx: RoleContext): RoleEntry {
+export function moveRole(ref: RoleRef, to: Scope, ctx: RoleContext): RoleFile {
   const { name, source, path } = moveItem(roleKind, requireRole(ref, ctx), to, ctx);
   return { name, source, path };
 }
@@ -323,7 +373,8 @@ export function roleUsers(ref: RoleRef, ctx: RoleContext): string[] {
 /** Deletes a role file. Refused while files refer to it. Its history stays. */
 export function deleteRole(ref: RoleRef, ctx: RoleContext): void {
   const entry = requireRole(ref, ctx);
-  const users = roleUsers(entry, ctx);
+  // A file that stands in for a built-in role leaves that role behind: the name still means one.
+  const users = builtinRole(entry.name, ctx) ? [] : roleUsers(entry, ctx);
   if (users.length > 0) {
     throw new ConfigError(`Role "${entry.name}" is still used: ${users.join("; ")}.`);
   }
@@ -336,11 +387,11 @@ export function deleteRole(ref: RoleRef, ctx: RoleContext): void {
  * the two configs and the project's workflows. The history moves with the file. A hidden
  * personal role is only renamed: what names it here means the project's role.
  */
-export function renameRole(ref: RoleRef, to: string, ctx: RoleContext): RoleEntry {
+export function renameRole(ref: RoleRef, to: string, ctx: RoleContext): RoleFile {
   const entry = requireRole(ref, ctx);
   const from = entry.name;
   const path = newRolePath(to, ctx, entry.source === "user");
-  const renamed: RoleEntry = { name: to, source: entry.source, path };
+  const renamed: RoleFile = { name: to, source: entry.source, path };
   const oldHistory = trackedRole(entry, ctx.projectRoot, ctx.env);
   record(oldHistory, BY_HAND);
 
@@ -352,7 +403,8 @@ export function renameRole(ref: RoleRef, to: string, ctx: RoleContext): RoleEntr
     saveTracked(file, text, `role ${from} renamed to ${to}`);
   };
   if (!entry.hidden) {
-    for (const role of listRoles(ctx)) {
+    // A built-in role that names it cannot follow; it goes on meaning the built-in of that name.
+    for (const role of listRoles(ctx).filter(isRoleFile)) {
       if (role.name !== from) follow(trackedRole(role, ctx.projectRoot, ctx.env));
     }
     for (const { file } of configFiles(ctx)) follow(file);

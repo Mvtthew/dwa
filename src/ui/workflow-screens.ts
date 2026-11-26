@@ -502,6 +502,8 @@ function stepSettingsScreen(deps: DesignDeps, designer: DesignerHandle, step: St
   // The role form, shown for a step: it only loads and saves, into the workflow's text.
   const store: RoleStore = {
     list: () => [],
+    builtins: () => [],
+    adopt: refuse,
     load: () => fields,
     save: (_role, changes) => {
       designer.apply({ op: "setFields", id: step.id, changes: changes as StepChanges });

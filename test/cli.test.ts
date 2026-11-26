@@ -137,6 +137,7 @@ function dwa(...args: string[]): { code: number; out: string; err: string } {
         // Never the real home: the personal files are the scratch ones.
         HOME: join(dir, "home"),
         XDG_CONFIG_HOME: join(dir, "home"),
+        DWA_BUILTIN_DIR: "",
         DWA_PROJECT: dir,
       },
       stdout: "pipe",
