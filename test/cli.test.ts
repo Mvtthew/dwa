@@ -48,11 +48,12 @@ describe("init", () => {
       "reviewer",
       "role-author",
       "runner",
+      "web-chrome",
       "web-research",
       "workflow-author",
     ]);
     expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("node_modules/\n.dwa/run/\n");
-    expect(result.created).toHaveLength(18);
+    expect(result.created).toHaveLength(19);
     // Every workflow that comes with the roles can be run with exactly those roles.
     expect(listWorkflows(dir).map((workflow) => [workflow.name, workflow.error])).toEqual([
       ["bugfix", null],
@@ -188,6 +189,7 @@ describe("the role command with a personal folder", () => {
       "reviewer",
       "role-author",
       "runner",
+      "web-chrome",
       "web-research",
       "workflow-author",
     ]);
@@ -307,8 +309,9 @@ describe("the role command with a personal folder", () => {
     expect(fine.code).toBe(0);
     expect(fine.err).toBe("");
     expect(fine.out).toBe(
-      "Configuration is fine: 12 roles checked.\n\nNotes:\n" +
-        '  Your personal role "explore" is not used here: the project has a role of the same name.\n',
+      "Configuration is fine: 13 roles checked.\n\nNotes:\n" +
+        '  Your personal role "explore" is not used here: the project has a role of the same name.\n' +
+        '  Role "web-chrome" is not offered for handing work to: it runs with the profile "chrome", which the config does not define ([profiles.chrome]).\n',
     );
 
     writeFileSync(
@@ -317,7 +320,7 @@ describe("the role command with a personal folder", () => {
     );
     const noted = dwa("config", "check");
     expect(noted.code).toBe(0);
-    expect(noted.out).toContain("Configuration is fine: 13 roles checked.");
+    expect(noted.out).toContain("Configuration is fine: 14 roles checked.");
     expect(noted.out).toContain(
       '  Role "child" is in the project but starts from your personal role "mine", ' +
         "which others who use this project do not have.",
@@ -336,7 +339,9 @@ describe("the role command with a personal folder", () => {
     rmSync(home("roles", "explore.toml"));
     expect(dwa("config", "check")).toMatchObject({
       code: 0,
-      out: "Configuration is fine: 12 roles checked.\n",
+      out:
+        "Configuration is fine: 13 roles checked.\n\nNotes:\n" +
+        `  Role "web-chrome" is not offered for handing work to: it runs with the profile "chrome", which the config does not define ([profiles.chrome]).\n`,
     });
   });
 });

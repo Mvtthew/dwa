@@ -22,6 +22,12 @@ export const CONFIG_TEMPLATE = `# ${APP_NAME} project configuration. Personal se
 # [profiles.work]
 # command = "~/claude_work"
 # args = ["--model", "sonnet"]
+#
+# The built-in role web-chrome runs with a profile of this name, which starts the command with
+# its browser integration; without it that role is not offered.
+# [profiles.chrome]
+# command = "~/claude_me"
+# args = ["--chrome"]
 
 # Sessions do not load your own Claude Code setup (plugins, MCP servers, skills, settings,
 # personal CLAUDE.md). They get the project's own Claude files and what is set here and in the

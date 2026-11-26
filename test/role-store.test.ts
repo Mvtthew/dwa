@@ -42,6 +42,7 @@ describe("the role store on disk", () => {
       ["reviewer", "project", false],
       ["role-author", "project", false],
       ["runner", "project", false],
+      ["web-chrome", "project", false],
       ["web-research", "project", false],
       ["workflow-author", "project", false],
     ]);

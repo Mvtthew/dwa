@@ -4,18 +4,19 @@ Experiments run on 2026-11-24 with Claude Code 2.1.331, tmux 3.8, Bun 1.4.3 on m
 
 ## Summary
 
-| Spike | Question                                                                                          | Result                                                                                                  |
-| ----- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| S1    | Does Claude Code run well in the private tmux server, and can an agent pane be opened under main? | Yes for everything that can be checked from a script. Real-keyboard checks still to do by hand.         |
-| S2    | Can agent state come from hooks and the statusline alone?                                         | Yes.                                                                                                    |
-| S3    | Can a message be delivered to a running session, including an idle one?                           | Yes, three ways. The raw inbox socket is not usable.                                                    |
-| S4    | Can an `ask` tool call block with no timeout?                                                     | Yes for the 35 minutes tested, past both default limits. The longest possible wait is still unmeasured. |
-| S5    | Can a session be cut off from the user-level Claude setup and given only chosen capabilities?     | Yes, with flags plus four keys in the generated settings. Built-in skills and plugins need a decision.  |
-| S6    | Can what a running session may use be changed, live or by restarting it with its conversation?    | Live only through the PreToolUse hook. Everything else by a resume restart, with one extra flag.        |
-| S7    | Does a program in a dwa popup get mouse presses, drags and the wheel?                             | Yes, with popup-relative coordinates. A release outside the popup is lost.                              |
-| S8    | When do the tools of an MCP server that connects after the first request reach the session?       | Only with a prompt from the prompt box or a tool result, never on a turn started by a hook.             |
-| S9    | What does a short list of built-in tools save, and can built-in skills be kept out for good?      | About 16k tokens per session. All 20 skills switch off by id; the hook sees the name of any other.      |
-| S11   | Can a hook hand the model a reminder without refusing the tool call?                              | Yes: `additionalContext` after a tool call, also a failed one. Nothing is shown on screen.              |
+| Spike | Question                                                                                          | Result                                                                                                                 |
+| ----- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| S1    | Does Claude Code run well in the private tmux server, and can an agent pane be opened under main? | Yes for everything that can be checked from a script. Real-keyboard checks still to do by hand.                        |
+| S2    | Can agent state come from hooks and the statusline alone?                                         | Yes.                                                                                                                   |
+| S3    | Can a message be delivered to a running session, including an idle one?                           | Yes, three ways. The raw inbox socket is not usable.                                                                   |
+| S4    | Can an `ask` tool call block with no timeout?                                                     | Yes for the 35 minutes tested, past both default limits. The longest possible wait is still unmeasured.                |
+| S5    | Can a session be cut off from the user-level Claude setup and given only chosen capabilities?     | Yes, with flags plus four keys in the generated settings. Built-in skills and plugins need a decision.                 |
+| S6    | Can what a running session may use be changed, live or by restarting it with its conversation?    | Live only through the PreToolUse hook. Everything else by a resume restart, with one extra flag.                       |
+| S7    | Does a program in a dwa popup get mouse presses, drags and the wheel?                             | Yes, with popup-relative coordinates. A release outside the popup is lost.                                             |
+| S8    | When do the tools of an MCP server that connects after the first request reach the session?       | Only with a prompt from the prompt box or a tool result, never on a turn started by a hook.                            |
+| S9    | What does a short list of built-in tools save, and can built-in skills be kept out for good?      | About 16k tokens per session. All 20 skills switch off by id; the hook sees the name of any other.                     |
+| S11   | Can a hook hand the model a reminder without refusing the tool call?                              | Yes: `additionalContext` after a tool call, also a failed one. Nothing is shown on screen.                             |
+| S12   | Does the Claude command's browser integration work under dwa's isolation flags?                   | Yes, with `--chrome` alone. Its tools run without asking in `dontAsk`, so only deny rules and the hook hold them back. |
 
 ## S1. tmux composition
 
@@ -318,3 +319,20 @@ Also seen: a top-level `systemMessage` is shown to the user and not sent to the 
 Not tried: other models than Haiku, MCP tools, other permission modes, a size limit of the text, whether it survives compaction or a resume.
 
 What dwa does with it: the reminders for a main session that leads (`src/shared/nudge.ts`) are printed by `dwa hook` as `additionalContext` on `PostToolUse` and `PostToolUseFailure` only (`reminderOutput`), once per kind and turn, so several calls in one message cannot repeat one.
+
+## S12. The browser integration under the isolation flags
+
+Run on 2026-11-26 with Claude Code 2.1.332, six real interactive sessions (`~/claude_me --model haiku`) in a private tmux server (`tmux -L dwa-spike12`), in a scratch project. Scripts are in `spikes/s12/`. The browser was the user's own Chrome, so only one tool that lists the connected browsers was called (twice, and refused once by the hook); nothing was opened, clicked or read there.
+
+| Question                                               | What was done                                                                                                                                                    | Result                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Are the browser tools there under the product's flags? | `--setting-sources project,local --strict-mcp-config --mcp-config <empty> --settings <generated> --tools Read,Grep,Glob,Bash --permission-mode dontAsk --chrome` | Yes: 20 tools named `mcp__claude-in-chrome__*`. `--strict-mcp-config` and a `--tools` list that does not name them do not remove them. Without `--chrome` there are none. Nothing from the user's own settings is needed, only the extension installed and connected. |
+| Do permission rules hold them back?                    | The same call with `allow: ["mcp__claude-in-chrome"]`, with no allow rule, with a `PreToolUse` refusal, and deny rules.                                          | The call ran without asking in `dontAsk` with and without the allow rule. A `PreToolUse` refusal stops it. A deny rule for one tool removes that tool from the session, one for `mcp__claude-in-chrome` removes all of them.                                          |
+| What does a session show about the browser?            | Start screens, `SessionStart` input.                                                                                                                             | Nothing. Whether a browser is connected is only known from the result of `list_connected_browsers`.                                                                                                                                                                   |
+| What do the tools cost?                                | `/context all`                                                                                                                                                   | About 10k tokens for the 20 definitions and 1.4k more of system prompt, which stays even when the tools are denied. With `ToolSearch` in the `--tools` list they are loaded on demand.                                                                                |
+
+Not tried, because it would have meant acting in the browser: whether the tools that act (`navigate`, `computer`, `javascript_tool`) also run without asking, what other permission modes do, and what a session shows when the extension is missing.
+
+Also seen, and not about the browser: a plugin MCP server (`easel`, one tool) and an `advisor` tool were in every session in spite of `--strict-mcp-config`, `--setting-sources project,local` and `--tools`. Where they come from is still to be found out.
+
+What dwa does with it: the built-in `web-chrome` role names the profile `chrome` (a profile with `args = ["--chrome"]`), has a short `tools` list, and takes away with deny rules what it must not do in the browser. An allow rule for the browser tools would be for show, so it has none.
