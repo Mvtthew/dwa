@@ -23,10 +23,12 @@ tools = ["Read", "Grep", "Glob", "Bash"]
 
 # Never stops at a permission prompt. Of the shell only what is listed runs; add the command
 # that starts your app (for example "Bash(npm run dev)") to let it start a local server.
-# The browser tools are not held back by this: they run without asking in every mode, so what
-# the role must not do in the browser is taken away with deny rules, and the rest is its prompt.
+# The browser tools are allowed as a whole: without the rule the ones that only look still run,
+# but those that act (a new tab, a click) are refused in this mode. What the role must not do
+# in the browser is taken away with deny rules, and the rest is its prompt.
 permission_mode = "dontAsk"
 allow = [
+  "mcp__claude-in-chrome",
   "Bash(git status *)",
   "Bash(git diff *)",
   "Bash(git log *)",
