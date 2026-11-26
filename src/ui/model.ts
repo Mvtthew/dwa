@@ -156,6 +156,31 @@ export function agentsHeader(
   return `AGENTS ${first}–${first + visible - 1} of ${total}`;
 }
 
+/**
+ * The agents by what they are doing, what needs the user first: "1 needs you · 2 working · 3 idle".
+ * Only the states some agent is in, so it is empty without agents.
+ */
+export function agentsSummary(state: WorkspaceState): string {
+  const order: AgentActivity[] = ["needs_user", "error", "working", "starting", "idle"];
+  const labels = order.map((activity) => activityStyle(activity).label);
+  // An agent blocked on another agent's answer is neither working nor idle.
+  labels.splice(3, 0, "waiting");
+  const counts = new Map<string, number>();
+  for (const agent of state.agents) {
+    const label =
+      agent.waitingOn === "user"
+        ? activityStyle("needs_user").label
+        : agent.waitingOn
+          ? "waiting"
+          : activityStyle(agent.activity).label;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return labels
+    .filter((label) => counts.has(label))
+    .map((label) => `${counts.get(label)} ${label}`)
+    .join(" · ");
+}
+
 /** Shortens text to `max` characters, ending in an ellipsis when something was cut. */
 export function fit(text: string, max: number): string {
   if (max <= 0) return "";
@@ -282,13 +307,12 @@ export interface StatusModel {
   cost: string | null;
   context: Meter;
   limits: Meter[];
-  counts: { working: number; idle: number; needsYou: number; total: number };
   /** Agents (and main) waiting for the user, by name. */
   waiting: { name: string; detail: string | null }[];
   /** Open questions, oldest first. */
   questions: { id: number; forUser: boolean; heading: string; text: string }[];
   /** Latest messages to the user, newest first. */
-  inbox: { from: string; age: string; text: string }[];
+  inbox: { from: string; age: string }[];
   /** Workflow runs, newest first. */
   workflows: WorkflowLine[];
 }
@@ -326,12 +350,6 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
       limitMeter("5 hours", main?.fiveHour, nowMs),
       limitMeter("7 days", main?.sevenDay, nowMs),
     ],
-    counts: {
-      working: state.agents.filter((agent) => agent.activity === "working").length,
-      idle: state.agents.filter((agent) => agent.activity === "idle").length,
-      needsYou: state.agents.filter((agent) => agent.activity === "needs_user").length,
-      total: state.agents.length,
-    },
     waiting: everyone
       .filter((agent) => agent.activity === "needs_user")
       .map((agent) => ({ name: agent.name, detail: agent.detail })),
@@ -344,7 +362,6 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
     inbox: state.inbox.map((message) => ({
       from: message.from,
       age: ago(message.createdAt, nowMs),
-      text: message.body,
     })),
     workflows: state.workflows.map(workflowLine),
   };

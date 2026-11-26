@@ -83,6 +83,8 @@ export async function runUi(view: UiView, projectRoot: string): Promise<never> {
           toggle: (agentId) => post("/agents/toggle", { target: agentId }),
           close: () => post("/agents/close"),
           tools: (agentId) => post("/popup", { kind: "tools", subject: agentId }),
+          open: (kind, subject) => post("/popup", { kind, subject }),
+          clearMessages: () => post("/inbox/clear"),
         })
       : createStatusView(renderer, {
           version: pkg.version,
@@ -92,7 +94,6 @@ export async function runUi(view: UiView, projectRoot: string): Promise<never> {
             if (action === "focus") return post("/focus");
             if (action === "zoom") return post("/zoom");
             if (action === "detach") return post("/detach");
-            if (action === "clear-messages") return post("/inbox/clear");
             return post("/popup", { kind: action, subject });
           },
         });

@@ -5,6 +5,7 @@ import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../src/shared/p
 import { createAgentsView } from "../src/ui/agents.ts";
 import {
   agentsHeader,
+  agentsSummary,
   bar,
   formatKey,
   moveCursor,
@@ -18,6 +19,7 @@ import {
 import { createStatusView } from "../src/ui/status.ts";
 
 const noActions = { run() {}, version: "1.2.3" };
+const quiet = { toggle() {}, close() {}, tools() {}, open() {}, clearMessages() {} };
 
 function agent(name: string, overrides: Partial<AgentInfo> = {}): AgentInfo {
   return {
@@ -182,7 +184,19 @@ describe("model", () => {
       [19, "in 2h 5m"],
       [92, "in 2d 14h"],
     ]);
-    expect(model.counts).toEqual({ working: 1, idle: 0, needsYou: 1, total: 2 });
+    // The counts of the agents pane: what needs the user first, and no state nobody is in.
+    expect(agentsSummary(state)).toBe("1 needs you · 1 working");
+    expect(
+      agentsSummary(
+        workspace([
+          agent("a"),
+          agent("b"),
+          agent("c", { activity: "working", waitingOn: "a" }),
+          agent("d", { activity: "working", waitingOn: "user" }),
+        ]),
+      ),
+    ).toBe("1 needs you · 1 waiting · 2 idle");
+    expect(agentsSummary(workspace([]))).toBe("");
     expect(model.waiting).toEqual([{ name: "b", detail: null }]);
   });
 });
@@ -226,9 +240,15 @@ describe("questions and messages", () => {
     ]);
   });
 
-  test("the status pane lists open questions and recent messages", async () => {
+  test("the agents pane lists open questions and recent messages under the agents", async () => {
     const harness = await createTestRenderer({ width: 30, height: 40 });
-    const view = createStatusView(harness.renderer, noActions);
+    const opened: [string, string | undefined][] = [];
+    let cleared = 0;
+    const view = createAgentsView(harness.renderer, {
+      ...quiet,
+      open: (kind, subject) => opened.push([kind, subject]),
+      clearMessages: () => cleared++,
+    });
     view.update(
       {
         ...workspace([agent("dev", { waitingOn: "user" })]),
@@ -239,17 +259,40 @@ describe("questions and messages", () => {
     );
     await harness.renderOnce();
     const frame = harness.captureCharFrame();
-    harness.renderer.destroy();
     expect(frame).toContain("QUESTIONS 2");
     expect(frame).toContain("◆ #3 dev → you");
     expect(frame).toContain("Which database should I u…");
     expect(frame).toContain("◷ #4 rev → dev");
     expect(frame).toContain("click, or Ctrl+Q q for all");
     expect(frame).toContain("MESSAGES TO YOU 1");
-    expect(frame).toContain("click to read");
     expect(frame).toContain("▸ Clear messages");
     expect(frame).toContain("from dev  just now");
-    expect(frame).toContain("The fix is ready for revi…");
+    // Neither a preview of the text nor a hint: the line itself opens the messages.
+    expect(frame).not.toContain("The fix is ready");
+    expect(frame).not.toContain("click to read");
+    // At the bottom: after the agent, and the last rows are still the hint for the keys.
+    const lines = frame.split("\n");
+    const row = (part: string) => lines.findIndex((line) => line.includes(part));
+    expect(row("QUESTIONS 2")).toBeGreaterThan(row("1 dev"));
+    expect(row("enter: show / hide")).toBeGreaterThan(row("Clear messages"));
+    for (const part of [
+      "#3 dev → you",
+      "Which database",
+      "q for all",
+      "from dev",
+      "Clear messages",
+    ]) {
+      await harness.mockMouse.click(4, row(part));
+    }
+    await harness.renderOnce();
+    harness.renderer.destroy();
+    expect(opened).toEqual([
+      ["questions", "3"],
+      ["questions", "3"],
+      ["questions", undefined],
+      ["messages", undefined],
+    ]);
+    expect(cleared).toBe(1);
   });
 });
 
@@ -333,7 +376,7 @@ describe("panes", () => {
 
   test("the agents pane lists running agents with their state", async () => {
     const harness = await setup(34, 20);
-    const view = createAgentsView(harness.renderer, { toggle() {}, close() {}, tools() {} });
+    const view = createAgentsView(harness.renderer, quiet);
     view.update(
       workspace([
         agent("explore", { activity: "working", detail: "Bash" }),
@@ -344,10 +387,13 @@ describe("panes", () => {
           open: true,
         }),
       ]),
+      NOW,
     );
     await harness.renderOnce();
     const frame = harness.captureCharFrame();
     expect(frame).toContain("AGENTS 2");
+    // The counts under the title: only the states some agent is in.
+    expect(frame).toContain("1 needs you · 1 working");
     expect(frame).toContain("1 explore");
     expect(frame).toContain("● working · Bash");
     expect(frame).toContain("▸2 dev developer");
@@ -356,14 +402,15 @@ describe("panes", () => {
 
   test("the agents pane keeps what the selected agent may use on its last rows", async () => {
     const harness = await setup(34, 60);
-    const view = createAgentsView(harness.renderer, { toggle() {}, close() {}, tools() {} });
-    view.update(workspace([agent("explore"), agent("dev")]));
+    const view = createAgentsView(harness.renderer, quiet);
+    view.update(workspace([agent("explore"), agent("dev")]), NOW);
     await harness.renderOnce();
     const lines = harness.captureCharFrame().trimEnd().split("\n");
     expect(lines.length).toBe(60);
     expect(lines[59]).toContain("enter: show / hide");
-    expect(lines[2]).toContain("1 explore");
-    expect(lines[5]).toContain("2 dev");
+    expect(lines[1]).toContain("2 idle");
+    expect(lines[3]).toContain("1 explore");
+    expect(lines[6]).toContain("2 dev");
   });
 
   test("the status pane shows the status alone, and a click on it does nothing", async () => {
@@ -384,8 +431,8 @@ describe("panes", () => {
 
   test("an empty list says how to start an agent", async () => {
     const harness = await setup(34, 12);
-    const view = createAgentsView(harness.renderer, { toggle() {}, close() {}, tools() {} });
-    view.update(workspace([]));
+    const view = createAgentsView(harness.renderer, quiet);
+    view.update(workspace([]), NOW);
     await harness.renderOnce();
     const frame = harness.captureCharFrame();
     expect(frame).toContain("AGENTS 0");
@@ -401,8 +448,10 @@ describe("panes", () => {
       toggle: (id) => opened.push(id),
       close: () => closed++,
       tools: (id) => tooled.push(id),
+      open() {},
+      clearMessages() {},
     });
-    view.update(workspace([agent("a"), agent("b"), agent("c")]));
+    view.update(workspace([agent("a"), agent("b"), agent("c")]), NOW);
     await harness.renderOnce();
 
     harness.mockInput.pressKey("j");
@@ -421,11 +470,10 @@ describe("panes", () => {
     const harness = await setup(34, 20);
     const opened: string[] = [];
     const view = createAgentsView(harness.renderer, {
+      ...quiet,
       toggle: (id) => opened.push(id),
-      close() {},
-      tools() {},
     });
-    view.update(workspace([agent("a"), agent("b")]));
+    view.update(workspace([agent("a"), agent("b")]), NOW);
     await harness.renderOnce();
     const row = harness
       .captureCharFrame()
@@ -451,7 +499,7 @@ describe("panes", () => {
     expect(roomy.slice(-2)).toEqual([" │____╱  ╲_╱╲_╱_╱   ╲_╲", " dwa 1.2.3"]);
     expect(roomy.at(-6)).toBe("  ______        ___");
     // Too narrow or too short: the version alone, and the shortcuts stay.
-    for (const rows of [await draw(20, 50), await draw(30, 36)]) {
+    for (const rows of [await draw(20, 50), await draw(30, 41)]) {
       expect(rows.at(-1)).toBe(" dwa 1.2.3");
       expect(rows.join("\n")).not.toContain("╲_╲");
       expect(rows.join("\n")).toContain("Detach");
@@ -459,7 +507,7 @@ describe("panes", () => {
   });
 
   test("the status pane ends with clickable actions and shortcuts, and the version", async () => {
-    const harness = await setup(30, 38);
+    const harness = await setup(30, 42);
     const pressed: string[] = [];
     const view = createStatusView(harness.renderer, {
       run: (action) => pressed.push(action),
@@ -468,46 +516,52 @@ describe("panes", () => {
     view.update(workspace([agent("dev")]), NOW);
     await harness.renderOnce();
     let lines = harness.captureCharFrame().split("\n");
-    expect(lines.slice(21, 38).map((line) => line.trim())).toEqual([
+    // The prefix once, then the shortcuts in sections.
+    expect(lines.slice(18, 42).map((line) => line.trim())).toEqual([
+      "SHORTCUTS  Ctrl+Q, then",
+      "",
+      "Workflows",
       "▸ Workflows  w",
       "▸ Workflow designer  g",
+      "",
+      "Agents",
       "▸ New agent  a",
       "▸ Agent tools  t",
       "▸ Role settings  r",
-      "▸ Shell  s",
-      "",
-      "KEYS  Ctrl+Q, then",
-      "▸ Open agent  1-9",
-      "▸ Close pane  x",
-      "▸ Focus main  0",
       "▸ Answer  q",
-      "▸ Menu  p",
+      "▸ Open agent  1-9",
+      "",
+      "Panes",
+      "▸ Shell  s",
+      "▸ Focus main  0",
       "▸ Zoom main  z",
+      "▸ Close pane  x",
+      "",
+      "Workspace",
+      "▸ Menu  p",
       "▸ Detach  d",
       "",
       "dwa 1.2.3",
     ]);
 
-    for (const row of [21, 22, 23, 24, 25, 26, 29, 30, 31, 32, 33, 34, 35]) {
-      await harness.mockMouse.click(4, row);
-    }
+    for (let row = 18; row < 42; row++) await harness.mockMouse.click(4, row);
     harness.mockInput.pressKey("w");
     harness.mockInput.pressKey("0");
     harness.mockInput.pressKey("d");
     await harness.renderOnce();
+    // Titles, gaps and the hint for opening an agent are not buttons.
     expect(pressed).toEqual([
       "workflows",
       "design",
       "agent",
       "tools",
       "roles",
-      "shell",
-      // Row 29 is the hint for opening an agent: not a button.
-      "close",
-      "focus",
       "questions",
-      "palette",
+      "shell",
+      "focus",
       "zoom",
+      "close",
+      "palette",
       "detach",
       "workflows",
       "focus",
@@ -517,27 +571,32 @@ describe("panes", () => {
     view.update({ ...workspace([]), shell: { open: true }, keyPrefix: "C-a" }, NOW);
     await harness.renderOnce();
     lines = harness.captureCharFrame().split("\n");
-    // One line less above, which is the room the name drawn large needed: the buttons move up.
-    const shell = lines.findIndex((line) => line.trim() === "▸ Hide shell  s");
-    expect(shell).toBeGreaterThan(-1);
-    expect(lines[shell + 2]?.trim()).toBe("KEYS  Ctrl+A, then");
+    expect(lines.some((line) => line.trim() === "▸ Hide shell  s")).toBe(true);
+    expect(lines.some((line) => line.trim() === "SHORTCUTS  Ctrl+A, then")).toBe(true);
   });
 
-  test("a short status pane drops the shortcut buttons, not what needs the user", async () => {
-    const harness = await setup(30, 28);
+  test("a short status pane drops the last sections of shortcuts, not what needs the user", async () => {
+    const harness = await setup(30, 35);
     const view = createStatusView(harness.renderer, noActions);
     view.update(workspace([agent("dev", { activity: "needs_user", detail: "permission" })]), NOW);
     await harness.renderOnce();
     const lines = harness.captureCharFrame().split("\n");
     expect(lines.join("\n")).toContain("NEEDS YOU");
-    expect(lines.join("\n")).not.toContain("KEYS");
-    expect(lines.slice(20, 28).map((line) => line.trim())).toEqual([
+    expect(lines.join("\n")).not.toContain("Panes");
+    expect(lines.join("\n")).not.toContain("Workspace");
+    expect(lines.slice(21, 35).map((line) => line.trim())).toEqual([
+      "SHORTCUTS  Ctrl+Q, then",
+      "",
+      "Workflows",
       "▸ Workflows  w",
       "▸ Workflow designer  g",
+      "",
+      "Agents",
       "▸ New agent  a",
       "▸ Agent tools  t",
       "▸ Role settings  r",
-      "▸ Shell  s",
+      "▸ Answer  q",
+      "▸ Open agent  1-9",
       "",
       "dwa 1.2.3",
     ]);
@@ -545,9 +604,9 @@ describe("panes", () => {
 
   test("more than twelve agents shows a range and scrolls to the cursor", async () => {
     const harness = await setup(34, 45);
-    const view = createAgentsView(harness.renderer, { toggle() {}, close() {}, tools() {} });
+    const view = createAgentsView(harness.renderer, quiet);
     const many = Array.from({ length: 15 }, (_, i) => agent(`agent${i + 1}`));
-    view.update(workspace(many));
+    view.update(workspace(many), NOW);
     await harness.renderOnce();
     let frame = harness.captureCharFrame();
     expect(frame).toContain("AGENTS 1–12 of 15");
@@ -556,7 +615,7 @@ describe("panes", () => {
 
     for (let i = 0; i < 14; i++) harness.mockInput.pressKey("j");
     await harness.renderOnce();
-    view.update(workspace(many));
+    view.update(workspace(many), NOW);
     await harness.renderOnce();
     frame = harness.captureCharFrame();
     expect(frame).toContain("15 agent15");
@@ -630,7 +689,7 @@ describe("clicking lines of the status pane", () => {
     createdAt: NOW,
   };
 
-  test("a run, a step and a question open that item, the hint the whole queue", async () => {
+  test("a run and a step open that run, other lines nothing", async () => {
     const harness = await createTestRenderer({ width: 30, height: 50 });
     const pressed: [string, string | undefined][] = [];
     const view = createStatusView(harness.renderer, {
@@ -656,26 +715,11 @@ describe("clicking lines of the status pane", () => {
     };
     await click("#3 feature");
     await click("● build");
-    await click("#7 dev → you");
-    await click("Which database?");
-    await click("q for all");
-    await click("from dev  just now");
-    await click("The fix is ready");
-    await click("click to read");
-    await click("Clear messages");
     await click("USAGE");
-    await click("AGENTS 1");
     harness.renderer.destroy();
     expect(pressed).toEqual([
       ["design", "run:3"],
       ["design", "run:3"],
-      ["questions", "7"],
-      ["questions", "7"],
-      ["questions", undefined],
-      ["messages", undefined],
-      ["messages", undefined],
-      ["messages", undefined],
-      ["clear-messages", undefined],
     ]);
   });
 

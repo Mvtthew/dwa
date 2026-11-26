@@ -16,15 +16,13 @@ export type StatusAction =
   | "close"
   | "focus"
   | "questions"
-  | "messages"
-  | "clear-messages"
   | "palette"
   | "zoom"
   | "detach";
 
 export interface StatusOptions {
   /**
-   * The subject is what a clicked line is about: `run:<id>` for a workflow run, a question's id.
+   * The subject is what a clicked line is about: `run:<id>` for a workflow run.
    */
   run(action: StatusAction, subject?: string): void;
   /** Shown at the very bottom. */
@@ -35,39 +33,65 @@ interface Button {
   /** The key that does the same: after the prefix anywhere, or alone while this pane has the focus. */
   key: string;
   label: (state: WorkspaceState | null) => string;
-  action: StatusAction;
+  /** Without one the line is a hint in the same shape, not a button: the key needs a choice. */
+  action?: StatusAction;
 }
 
-/** The actions: things that open or show something. */
-const ACTIONS: Button[] = [
-  { key: "w", label: () => "Workflows", action: "workflows" },
-  { key: "g", label: () => "Workflow designer", action: "design" },
-  { key: "a", label: () => "New agent", action: "agent" },
-  { key: "t", label: () => "Agent tools", action: "tools" },
-  { key: "r", label: () => "Role settings", action: "roles" },
-  { key: "s", label: (state) => (state?.shell?.open ? "Hide shell" : "Shell"), action: "shell" },
+interface Section {
+  title: string;
+  buttons: Button[];
+}
+
+/**
+ * The shortcuts as buttons, by what they are about. Every key comes after the prefix. A pane too
+ * short for them and the text above loses them from the last section up.
+ */
+const SECTIONS: Section[] = [
+  {
+    title: "Workflows",
+    buttons: [
+      { key: "w", label: () => "Workflows", action: "workflows" },
+      { key: "g", label: () => "Workflow designer", action: "design" },
+    ],
+  },
+  {
+    title: "Agents",
+    buttons: [
+      { key: "a", label: () => "New agent", action: "agent" },
+      { key: "t", label: () => "Agent tools", action: "tools" },
+      { key: "r", label: () => "Role settings", action: "roles" },
+      { key: "q", label: () => "Answer", action: "questions" },
+      { key: "1-9", label: () => "Open agent" },
+    ],
+  },
+  {
+    title: "Panes",
+    buttons: [
+      {
+        key: "s",
+        label: (state) => (state?.shell?.open ? "Hide shell" : "Shell"),
+        action: "shell",
+      },
+      { key: "0", label: () => "Focus main", action: "focus" },
+      { key: "z", label: () => "Zoom main", action: "zoom" },
+      { key: "x", label: () => "Close pane", action: "close" },
+    ],
+  },
+  {
+    title: "Workspace",
+    buttons: [
+      { key: "p", label: () => "Menu", action: "palette" },
+      { key: "d", label: () => "Detach", action: "detach" },
+    ],
+  },
 ];
 
-/** The remaining shortcuts, as buttons too. */
-const KEYS: Button[] = [
-  { key: "x", label: () => "Close pane", action: "close" },
-  { key: "0", label: () => "Focus main", action: "focus" },
-  { key: "q", label: () => "Answer", action: "questions" },
-  { key: "p", label: () => "Menu", action: "palette" },
-  { key: "z", label: () => "Zoom main", action: "zoom" },
-  { key: "d", label: () => "Detach", action: "detach" },
-];
-
-/** Messages to the user the pane shows; the dialog has the rest. */
-const INBOX_LINES = 3;
+/** Rows of a section: a gap, its title, its buttons. */
+const rows = (section: Section) => section.buttons.length + 2;
 
 export interface StatusView {
   update(state: WorkspaceState, nowMs: number): void;
   showMessage(message: string): void;
-}
-
-function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
 }
 
 /** Two rows: the label, its note and the value at the right, and a thin bar under them. */
@@ -85,8 +109,8 @@ function meter(entry: Meter, width: number): Part[][] {
 }
 
 /**
- * The status pane: the selected session, usage limits and agent counts, and at the bottom, where
- * they stay however long the text above gets, the actions and shortcuts as buttons and the version.
+ * The status pane: the selected session, usage limits and workflow runs, and at the bottom, where
+ * they stay however long the text above gets, the shortcuts as buttons in sections and the version.
  */
 export function createStatusView(renderer: CliRenderer, options: StatusOptions): StatusView {
   const root = new BoxRenderable(renderer, {
@@ -103,7 +127,7 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
     overflow: "hidden",
   });
   const text = createText(renderer, "status-text", undefined, false);
-  /** What a click on a line of the text opens, by line number: a workflow run or a question. */
+  /** What a click on a line of the text opens, by line number: a workflow run. */
   const targets = new Map<number, { action: StatusAction; subject?: string }>();
   text.onMouseDown = (event) => {
     const row = event.y - text.screenY;
@@ -121,38 +145,40 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
     flexShrink: 0,
     paddingTop: 1,
   });
-  /** The shortcuts. Left out when the pane is too short to show them and the text above. */
-  const keys = new BoxRenderable(renderer, {
-    id: "status-keys",
-    flexDirection: "column",
-    flexShrink: 0,
-    height: KEYS.length + 3,
-  });
   const addLine = (id: string, parent: BoxRenderable = bottom) => {
     const line = createText(renderer, id, 1);
     parent.add(line);
     return line;
   };
-  const addButtons = (list: Button[], parent: BoxRenderable = bottom) =>
-    list.map((button) => {
-      const box = new BoxRenderable(renderer, {
-        id: `status-button-${button.action}`,
+  // The prefix once, above all of them.
+  const title = addLine("status-keys-title");
+  const sections = SECTIONS.map((section) => {
+    const id = section.title.toLowerCase();
+    const box = new BoxRenderable(renderer, {
+      id: `status-section-${id}`,
+      flexDirection: "column",
+      flexShrink: 0,
+      height: rows(section),
+    });
+    addLine(`status-gap-${id}`, box);
+    // Dim, so it is not taken for a heading of the text above (WORKFLOWS, AGENTS).
+    addLine(`status-title-${id}`, box).content = styled([[dim(section.title)]]);
+    const buttons = section.buttons.map((button) => {
+      const { action } = button;
+      const line = new BoxRenderable(renderer, {
+        id: `status-button-${action ?? button.key}`,
         height: 1,
         flexShrink: 0,
-        onMouseDown: () => options.run(button.action),
+        onMouseDown: action ? () => options.run(action) : undefined,
       });
-      const label = createText(renderer, `status-button-text-${button.action}`, 1);
-      box.add(label);
-      parent.add(box);
+      const label = createText(renderer, `status-button-text-${action ?? button.key}`, 1);
+      line.add(label);
+      box.add(line);
       return { button, label };
     });
-
-  const actionButtons = addButtons(ACTIONS);
-  addLine("status-gap-keys", keys);
-  const keysTitle = addLine("status-keys-title", keys);
-  const agentKeys = addLine("status-keys-agents", keys);
-  const keyButtons = addButtons(KEYS, keys);
-  bottom.add(keys);
+    bottom.add(box);
+    return { section, box, buttons };
+  });
   addLine("status-gap-version");
   /** The name drawn large. The first thing left out when the pane is short, or too narrow for it. */
   const logo = createText(renderer, "status-logo", APP_LOGO.length);
@@ -160,28 +186,37 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
   bottom.add(logo);
   const version = addLine("status-version");
   version.content = styled([[dim(`${APP_NAME} ${options.version}`)]]);
-  // Opening an agent needs a number, so it is a hint in the same shape, not a button.
-  agentKeys.content = styled([[dim("▸ Open agent  1-9")]]);
-  /** Rows of the bottom part without the shortcuts: a gap, the actions, a gap, the version. */
-  const compact = ACTIONS.length + 3;
-  const full = compact + KEYS.length + 3;
+  /** Rows of the bottom part without any shortcut: a gap, a gap, the version. */
+  const bare = 3;
+  /** Rows with the first `count` sections: the line with the prefix comes with the first one. */
+  const height = (count: number) =>
+    SECTIONS.slice(0, count).reduce((total, section) => total + rows(section), bare) +
+    (count > 0 ? 1 : 0);
+  const full = height(SECTIONS.length);
   bottom.height = full + APP_LOGO.length;
   root.add(bottom);
   renderer.root.add(root);
 
   const paintButtons = (state: WorkspaceState | null) => {
-    for (const { button, label } of [...actionButtons, ...keyButtons]) {
-      label.content = styled([[accent("▸ "), bold(button.label(state)), dim(`  ${button.key}`)]]);
+    for (const { button, label } of sections.flatMap((entry) => entry.buttons)) {
+      const text = button.label(state);
+      label.content = styled([
+        button.action
+          ? [accent("▸ "), bold(text), dim(`  ${button.key}`)]
+          : [dim(`▸ ${text}  ${button.key}`)],
+      ]);
     }
-    keysTitle.content = styled([
-      [bold("KEYS"), dim(`  ${formatKey(state?.keyPrefix ?? DEFAULT_KEY_PREFIX)}, then`)],
+    title.content = styled([
+      [bold("SHORTCUTS"), dim(`  ${formatKey(state?.keyPrefix ?? DEFAULT_KEY_PREFIX)}, then`)],
     ]);
   };
   paintButtons(null);
 
   renderer.keyInput.on("keypress", (key) => {
-    const button = [...ACTIONS, ...KEYS].find((entry) => entry.key === key.name);
-    if (button) options.run(button.action);
+    const button = SECTIONS.flatMap((section) => section.buttons).find(
+      (entry) => entry.key === key.name,
+    );
+    if (button?.action) options.run(button.action);
   });
 
   return {
@@ -210,12 +245,6 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
 
       lines.push([], [bold("USAGE")]);
       for (const limit of model.limits) lines.push(...meter(limit, width));
-
-      const { counts } = model;
-      lines.push([], [bold(`AGENTS ${counts.total}`)]);
-      if (counts.total > 0) {
-        lines.push([dim(`${counts.working} working · ${counts.idle} idle`)]);
-      }
 
       if (model.workflows.length > 0) {
         lines.push([], [bold("WORKFLOWS")]);
@@ -248,43 +277,19 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
         }
       }
 
-      if (model.questions.length > 0) {
-        const mine = model.questions.some((question) => question.forUser);
-        const title = bold(`QUESTIONS ${model.questions.length}`);
-        lines.push([], [mine ? tone("attention", title) : title]);
-        for (const question of model.questions.slice(0, 4)) {
-          const id = String(question.id);
-          link(
-            [question.forUser ? tone("attention", "◆ ") : dim("◷ "), question.heading],
-            "questions",
-            id,
-          );
-          link([dim(`  ${fit(oneLine(question.text), width - 2)}`)], "questions", id);
-        }
-        link([dim(`  click, or ${formatKey(state.keyPrefix)} q for all`)], "questions");
-      }
-
-      if (model.inbox.length > 0) {
-        const more = model.inbox.length - INBOX_LINES;
-        lines.push([], [bold(`MESSAGES TO YOU ${model.inbox.length}`)]);
-        // A click on a message opens them all, each one whole.
-        for (const message of model.inbox.slice(0, INBOX_LINES)) {
-          link([`from ${message.from}`, dim(`  ${message.age}`)], "messages");
-          link([dim(`  ${fit(oneLine(message.text), width - 2)}`)], "messages");
-        }
-        link([dim(more > 0 ? `  click to read, ${more} more` : "  click to read")], "messages");
-        link([accent("▸ "), "Clear messages"], "clear-messages");
-      }
-
       text.content = styled(lines);
       // What needs the user must not be pushed out of sight by a list of shortcuts.
-      const roomy = lines.length + full <= renderer.height;
+      let shown = SECTIONS.length;
+      while (shown > 0 && lines.length + height(shown) > renderer.height) shown--;
       const drawn =
         lines.length + full + APP_LOGO.length <= renderer.height &&
         APP_LOGO.every((row) => row.length <= width);
-      keys.visible = roomy;
+      title.visible = shown > 0;
+      sections.forEach(({ box }, index) => {
+        box.visible = index < shown;
+      });
       logo.visible = drawn;
-      bottom.height = (roomy ? full : compact) + (drawn ? APP_LOGO.length : 0);
+      bottom.height = height(shown) + (drawn ? APP_LOGO.length : 0);
       paintButtons(state);
     },
     showMessage(message) {
