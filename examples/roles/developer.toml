@@ -1,4 +1,5 @@
-# Implements a change. It has every built-in tool; file edits are accepted without asking,
+# Implements a change. It has the default tools (no `tools` line: Read, Edit, Write, Bash, Glob,
+# Grep, Skill and the two for questions and plans); file edits are accepted without asking,
 # shell commands still ask unless a rule below allows them.
 description = "Implements a change that has already been scoped, with tests, and reports what was done."
 # What the main session reads when it picks a role for a job.
