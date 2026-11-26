@@ -223,6 +223,12 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
           .describe(
             "The first prompt for the new session. It does not see your conversation: give the goal, what done means and what you already know.",
           ),
+        skill: z
+          .string()
+          .optional()
+          .describe(
+            "Run this skill as the session's task: for the skills your instructions list as running as their own agent. The task is then what the skill should work on.",
+          ),
         keep: z
           .boolean()
           .optional()

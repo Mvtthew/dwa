@@ -24,6 +24,67 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number];
  */
 export const SUBAGENT_TOOLS: readonly string[] = ["Agent", "Workflow"];
 
+/**
+ * Built-in skills that start a subagent of their own through the `Skill` tool, so taking
+ * `SUBAGENT_TOOLS` away does not stop them: the Claude command runs them as a background fork
+ * (docs/spikes.md, S5, "Problems found"). Switched off with the tools, by the Claude command's own ids.
+ */
+export const SUBAGENT_SKILLS: readonly string[] = ["code-review"];
+
+/**
+ * The built-in tools a session has when no layer gives it a `tools` list. Short on purpose: a
+ * tool that is not listed does not exist for the session, so a tool a new version of the Claude
+ * command brings stays out until a role asks for it, and the definitions of the rest are not
+ * sent with every request (docs/spikes.md, S9: 21k tokens of tool definitions without a list,
+ * under 5k with this one). `subagents = true` adds `SUBAGENT_TOOLS`.
+ */
+export const DEFAULT_TOOLS: readonly string[] = [
+  "Read",
+  "Edit",
+  "Write",
+  "Bash",
+  "Glob",
+  "Grep",
+  "Skill",
+  "AskUserQuestion",
+  "ExitPlanMode",
+];
+
+/**
+ * In a `tools` list: every built-in tool the Claude command ships, known to dwa or not. The
+ * way back to a session that is limited only by `deny_tools`.
+ */
+export const ALL_TOOLS = "*";
+
+/**
+ * The skills built into the Claude command (2.1.332; docs/spikes.md, S9), by the ids it uses
+ * in `skillOverrides`. All are switched off unless named in `builtin_skills`. A skill of a
+ * later version that is missing here is not switched off, but the session's hook refuses it
+ * (`skillRefusal` in `tools.ts`).
+ */
+export const BUILTIN_SKILLS: readonly string[] = [
+  "artifact-capabilities",
+  "artifact-design",
+  "artifact-diagramming",
+  "claude-api",
+  "claude-approvals",
+  "code-review",
+  "dataviz",
+  "fewer-permission-prompts",
+  "init",
+  "keybindings-help",
+  "loop",
+  "plugin-authoring",
+  "run",
+  "schedule",
+  "security-review",
+  "ship",
+  "simplify",
+  "steward",
+  "update-config",
+  "workflow-authoring",
+];
+
 /** Model for a session, as the Claude command's `--model` takes it (an alias or a full name). */
 export const ModelSchema = z.string().min(1);
 /** Effort for a session, passed with `--effort`. */
@@ -44,9 +105,13 @@ export const capabilityFields = {
   model: ModelSchema.optional(),
   effort: EffortSchema.optional(),
   permission_mode: z.enum(PERMISSION_MODES).optional(),
-  /** Built-in tools the session has; nothing else exists for it. Not together with `deny_tools`. */
+  /**
+   * Built-in tools the session has; nothing else exists for it. Without it: `DEFAULT_TOOLS`.
+   * `"*"` (`ALL_TOOLS`) in the list stands for every tool the Claude command ships. Not together
+   * with `deny_tools` in one file.
+   */
   tools: RulesSchema.optional(),
-  /** Built-in tools removed from the session. Not together with `tools`. */
+  /** Built-in tools taken away from the list a lower layer or the default gives. */
   deny_tools: RulesSchema.optional(),
   /** Permission rules that are allowed without a prompt, such as `Bash(git log *)`. */
   allow: RulesSchema.optional(),
@@ -70,12 +135,18 @@ export const capabilityFields = {
   off_plugins: RulesSchema.optional(),
   off_skills: RulesSchema.optional(),
   /**
+   * Skills built into the Claude command that the session keeps (`BUILTIN_SKILLS`). All of them
+   * are off unless named here; one that starts a subagent needs `subagents` as well.
+   */
+  builtin_skills: NamesSchema.optional(),
+  /**
    * Lets the session read and write the Claude command's own per-project memory, which is kept
    * in the user's Claude config. Off unless set, like the rest of the user's own setup.
    */
   memory: z.boolean().optional(),
   /**
-   * Lets the session use the Claude command's own subagents (`SUBAGENT_TOOLS`). Off unless
+   * Lets the session use the Claude command's own subagents (`SUBAGENT_TOOLS` and
+   * `SUBAGENT_SKILLS`). Off unless
    * set: work is handed over to sessions of the workspace, which the user can see.
    */
   subagents: z.boolean().optional(),
@@ -117,13 +188,24 @@ export function pickCapabilities(source: Partial<Capabilities>): Capabilities {
 
 /**
  * Puts one layer on top of another. A value the upper layer sets replaces the lower one, lists
- * included. The two tool lists are one choice: setting either drops the other from below.
+ * included. A `tools` list starts afresh, so it drops what was taken away below it; a
+ * `deny_tools` list takes away from whatever list is below it, which stays.
  */
 export function layerCapabilities(lower: Capabilities, upper: Capabilities): Capabilities {
   const merged: Capabilities = { ...lower, ...pickCapabilities(upper) };
   if (upper.tools !== undefined) delete merged.deny_tools;
-  if (upper.deny_tools !== undefined) delete merged.tools;
   return merged;
+}
+
+/**
+ * The built-in tools these values give a session, before anything is taken away: the `tools`
+ * list, or the default one. `null` when the list says "every tool" (`ALL_TOOLS`), which no list
+ * of names can stand for.
+ */
+export function listedTools(caps: Capabilities): string[] | null {
+  if (caps.tools?.includes(ALL_TOOLS)) return null;
+  if (caps.tools) return caps.tools;
+  return caps.subagents === true ? [...DEFAULT_TOOLS, ...SUBAGENT_TOOLS] : [...DEFAULT_TOOLS];
 }
 
 /** Turns a zod failure into the one-line form used for every config file. */

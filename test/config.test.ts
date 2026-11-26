@@ -156,6 +156,7 @@ describe("buildClaudeLaunch", () => {
     offMcp: [],
     offPlugins: [],
     offSkills: [],
+    allowedSkills: [],
     memory: false,
     ...values,
   });
@@ -253,19 +254,28 @@ describe("buildClaudeLaunch", () => {
       }).argv;
     const value = (list: string[], flag: string) => list[list.indexOf(flag) + 1];
 
+    // The default list has neither, so nothing needs taking away.
     const plain = argv("");
-    expect(plain).toContain("--disallowedTools");
-    expect(value(plain, "--disallowedTools")).toBe("Agent,Workflow");
-    expect(plain).not.toContain("--tools");
-    expect(value(argv('[defaults]\ndeny_tools = ["Edit"]'), "--disallowedTools")).toBe(
-      "Edit,Agent,Workflow",
+    expect(value(plain, "--tools")).toBe(
+      "Read,Edit,Write,Bash,Glob,Grep,Skill,AskUserQuestion,ExitPlanMode,WaitForMcpServers",
     );
+    expect(plain).not.toContain("--disallowedTools");
+    expect(value(argv('[defaults]\ndeny_tools = ["Edit", "Skill"]'), "--tools")).toBe(
+      "Read,Write,Bash,Glob,Grep,AskUserQuestion,ExitPlanMode,WaitForMcpServers",
+    );
+    // "Every tool" is the one case without a list: there they are taken away by name.
+    const all = argv('[defaults]\ntools = ["*"]');
+    expect(all).not.toContain("--tools");
+    expect(value(all, "--disallowedTools")).toBe("Agent,Workflow");
     // An allow list simply does not name them.
     const only = argv('[defaults]\ntools = ["Read", "Agent"]');
     expect(value(only, "--tools")).toBe("Read,WaitForMcpServers");
     expect(only).not.toContain("--disallowedTools");
-    // With subagents nothing is taken away.
-    expect(argv("[defaults]\nsubagents = true")).not.toContain("--disallowedTools");
+    // With subagents the default list has them.
+    expect(value(argv("[defaults]\nsubagents = true"), "--tools")).toBe(
+      "Read,Edit,Write,Bash,Glob,Grep,Skill,AskUserQuestion,ExitPlanMode,Agent,Workflow,WaitForMcpServers",
+    );
+    expect(argv('[defaults]\nsubagents = true\ntools = ["*"]')).not.toContain("--disallowedTools");
     expect(value(argv('[defaults]\nsubagents = true\ntools = ["Read", "Agent"]'), "--tools")).toBe(
       "Read,Agent,WaitForMcpServers",
     );
@@ -298,6 +308,7 @@ describe("generated session files", () => {
     offMcp: [],
     offPlugins: [],
     offSkills: [],
+    allowedSkills: [],
     memory: false,
   };
 
@@ -573,7 +584,12 @@ describe("personal defaults", () => {
     const project = parseConfig(PROJECT, "project");
     const merged = mergeConfig(user, project);
     expect(merged.defaults).toEqual(layerCapabilities(user.defaults, project.defaults));
-    expect(merged.defaults).toEqual({ model: "sonnet", effort: "low", deny_tools: ["WebFetch"] });
+    expect(merged.defaults).toEqual({
+      model: "sonnet",
+      effort: "low",
+      tools: ["Read"],
+      deny_tools: ["WebFetch"],
+    });
     expect(merged.userDefaults).toEqual({ model: "haiku", effort: "low", tools: ["Read"] });
     expect(mergeConfig(EMPTY_CONFIG, project).userDefaults).toEqual({});
     // One file's own text never says which place it is.
@@ -595,6 +611,7 @@ describe("personal defaults", () => {
       expect(config.defaults).toEqual({
         model: "sonnet",
         effort: "low",
+        tools: ["Read"],
         deny_tools: ["WebFetch"],
       });
     } finally {

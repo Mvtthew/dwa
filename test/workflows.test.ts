@@ -162,7 +162,8 @@ describe("running a workflow", () => {
     DEFINITIONS.limited = '[steps.a]\nrole = "explore"\ndeny_tools = ["Bash"]\nprompt = "a"';
     await workspace.up();
     await workflows.start("limited", "x", "user");
-    expect((await agent("a")).capabilities?.denyTools).toEqual(["Bash", "Agent", "Workflow"]);
+    expect((await agent("a")).capabilities?.tools).not.toContain("Bash");
+    expect((await agent("a")).capabilities?.tools).toContain("Read");
   });
 
   test("starts each step as an agent when the steps before it are done", async () => {

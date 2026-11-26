@@ -4,7 +4,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { daemonSocketPath, runDir } from "../shared/paths.ts";
-import { approvesOwnTool, BLOCKED_FILE, blockedReason } from "../shared/tools.ts";
+import {
+  approvesOwnTool,
+  BLOCKED_FILE,
+  blockedReason,
+  SKILLS_FILE,
+  skillRefusal,
+} from "../shared/tools.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -60,9 +66,31 @@ export function localVerdict(
 }
 
 /**
+ * Whether a call of the Skill tool is refused: the skill is not in the list written for the
+ * session when it was started. Null when it may go ahead, and when there is no list (a session
+ * started before dwa wrote one). A list that cannot be read refuses the call.
+ */
+export function skillVerdict(projectRoot: string, agentId: string, input: unknown): string | null {
+  const skill = (input as { tool_input?: { skill?: unknown } } | null)?.tool_input?.skill;
+  if (typeof skill !== "string") return null;
+  const file = join(runDir(projectRoot), "agents", agentId, SKILLS_FILE);
+  if (!existsSync(file)) return null;
+  try {
+    const allowed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    if (!Array.isArray(allowed)) throw new Error("not a list");
+    return skillRefusal(
+      skill,
+      allowed.filter((item) => typeof item === "string"),
+    );
+  } catch {
+    return `The list of skills this session was given could not be read (${file}), so the call is refused. Tell the user.`;
+  }
+}
+
+/**
  * `dwa hook <event>`: forwards the event JSON from stdin to the daemon. Prints nothing, with
  * two exceptions, both in the form Claude Code reads: on `PreToolUse` the refusal of a tool that
- * was switched off for the session after it started, and on `PermissionRequest` the approval of
+ * was switched off for the session after it started or of a skill the session was not given, and on `PermissionRequest` the approval of
  * one of dwa's own tools in plan mode (`approvesOwnTool`). A refused call never gets that far.
  */
 export async function hookCommand(
@@ -79,7 +107,12 @@ export async function hookCommand(
       : undefined;
   const reply = (await post(env, "/hook", { agentId, event, input })) as { deny?: unknown } | null;
   // The session's own list decides; the daemon's answer only when there is no list.
-  const deny = local !== undefined ? local : typeof reply?.deny === "string" ? reply.deny : null;
+  const blocked = local !== undefined ? local : typeof reply?.deny === "string" ? reply.deny : null;
+  const deny =
+    blocked ||
+    (event === "PreToolUse" && tool === "Skill" && env.DWA_PROJECT
+      ? skillVerdict(env.DWA_PROJECT, agentId, input)
+      : null);
   if (event === "PreToolUse" && deny) {
     console.log(
       JSON.stringify({

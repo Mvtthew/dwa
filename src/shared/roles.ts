@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import {
+  BUILTIN_SKILLS,
   CAPABILITY_KEYS,
   type Capabilities,
   ConfigError,
@@ -10,13 +11,16 @@ import {
   type Effort,
   formatIssues,
   layerCapabilities,
+  listedTools,
   NAME_PATTERN,
   type PermissionMode,
   pickCapabilities,
   refuseBothToolLists,
+  SUBAGENT_SKILLS,
   SUBAGENT_TOOLS,
 } from "./capabilities.ts";
 import type { Config, McpServerConfig } from "./config.ts";
+import { APP_NAME } from "./constants.ts";
 import {
   expandPath,
   projectSkillsDir,
@@ -26,6 +30,7 @@ import {
   userSkillsDir,
 } from "./paths.ts";
 import { type ItemEntry, type ItemKind, type ItemRef, listItems, type Scope } from "./scope.ts";
+import { runsAsAgent, SKILL_FILE } from "./skill-file.ts";
 
 export { EFFORT_LEVELS, type Effort };
 
@@ -212,7 +217,7 @@ export interface ResolvedSession {
   model?: string;
   effort?: string;
   permissionMode?: PermissionMode;
-  /** Built-in tools the session is limited to; absent means all of them. */
+  /** Built-in tools the session is limited to; absent only for a list that says "every tool". */
   tools?: string[];
   denyTools: string[];
   allow: string[];
@@ -223,11 +228,24 @@ export interface ResolvedSession {
   skills?: ResolvedSkill[];
   /** Project skills this session must not use (only when `skills` is given). */
   hiddenSkills: string[];
+  /**
+   * Skills of the session that the Claude command would run in a subagent of its own
+   * (`runsAsAgent`). The session does not have them as skills: they are not in `skills`, the
+   * project's are switched off, and it is told to start each as an agent (`skillGuidePrompt`).
+   * Present only when there are any and the session is without subagents.
+   */
+  agentSkills?: ResolvedSkill[];
   /** Servers of the project's `.mcp.json` this session does not get. */
   offMcp: string[];
   /** Built-in plugins and skills of the Claude command that are switched off. */
   offPlugins: string[];
   offSkills: string[];
+  /**
+   * What the Skill tool may be called with (`skillRefusal`): the session's own skills by the
+   * names the Claude command gives them, the built-in ones it keeps, and `<plugin>:*` for the
+   * skills of each of its plugins.
+   */
+  allowedSkills: string[];
   /** Whether the session uses the Claude command's own per-project memory. */
   memory: boolean;
   prompt?: string;
@@ -310,7 +328,7 @@ const WIDENING_KEYS = ["tools", "allow", "permission_mode"] as const;
 const NARROWING_LISTS = ["deny", "off_mcp", "off_plugins", "off_skills"] as const;
 
 function isSkill(dir: string, files: RoleFiles): boolean {
-  return files.exists(join(dir, "SKILL.md"));
+  return files.exists(join(dir, SKILL_FILE));
 }
 
 function projectSkillNames(ctx: RoleContext): string[] {
@@ -322,7 +340,8 @@ function projectSkillNames(ctx: RoleContext): string[] {
     .sort();
 }
 
-function findSkill(name: string, ctx: RoleContext): ResolvedSkill | null {
+/** The skill of that name: the project's own first, then dwa's folder, then the personal one. */
+export function findSkill(name: string, ctx: RoleContext): ResolvedSkill | null {
   const files = ctx.files ?? diskFiles;
   const places: [SkillSource, string][] = [
     ["project", projectSkillsDir(ctx.projectRoot)],
@@ -398,6 +417,10 @@ function narrow(
     // Without a list the role has every project skill, and nothing from the dwa skill folders.
     requireSubset("skill", request.skills, caps.skills ?? projectSkillNames(ctx), who);
     result.skills = request.skills;
+  }
+  if (request.builtin_skills !== undefined) {
+    requireSubset("built-in skill", request.builtin_skills, caps.builtin_skills ?? [], who);
+    result.builtin_skills = request.builtin_skills;
   }
   return result;
 }
@@ -491,11 +514,43 @@ export function resolveSession(request: SessionRequest, ctx: RoleContext): Resol
   // Without `subagents` the tools that start them are taken away, in whichever of the two
   // forms the session has its tools, so no list of a role can bring them back.
   const subagents = caps.subagents === true;
-  const tools = subagents ? caps.tools : caps.tools && without(caps.tools, [...SUBAGENT_TOOLS]);
+  const taken = [...(caps.deny_tools ?? []), ...(subagents ? [] : SUBAGENT_TOOLS)];
+  // A session has a list of tools and nothing else, unless its list says "every tool": then
+  // what is taken away is all that limits it. A name that is in no list (a tool of an MCP
+  // server, say) is still passed on as taken away.
+  const listed = listedTools(caps);
+  const tools = listed === null ? undefined : without(listed, taken);
   const denyTools =
-    subagents || tools !== undefined
-      ? (caps.deny_tools ?? [])
-      : union(caps.deny_tools ?? [], [...SUBAGENT_TOOLS]);
+    listed === null
+      ? union(caps.deny_tools ?? [], subagents ? [] : [...SUBAGENT_TOOLS])
+      : without(caps.deny_tools ?? [], [...listed, ...SUBAGENT_TOOLS]);
+  // Built-in skills are off unless the session is given them by name. One that forks its own
+  // subagent needs neither subagent tool, so it stays off without `subagents` all the same.
+  const builtinSkills = without(
+    caps.builtin_skills ?? [],
+    subagents ? [] : [...SUBAGENT_SKILLS],
+  ).filter((name) => !(caps.off_skills ?? []).includes(name));
+  const offSkills = union(without([...BUILTIN_SKILLS], builtinSkills), caps.off_skills ?? []);
+  // The same goes for a skill whose file asks for a fork: the session starts it as an agent
+  // of the workspace instead, so it is taken out of what the Skill tool has.
+  const files = ctx.files ?? diskFiles;
+  const skillsDirOfProject = projectSkillsDir(ctx.projectRoot);
+  const projectSkills: ResolvedSkill[] = projectSkillNames(ctx).map((name) => ({
+    name,
+    source: "project",
+    path: join(skillsDirOfProject, name),
+  }));
+  let agentSkills: ResolvedSkill[] = [];
+  if (!subagents) {
+    agentSkills = (skills ?? projectSkills).filter((skill) =>
+      runsAsAgent(files.read(join(skill.path, SKILL_FILE)) ?? ""),
+    );
+    skills = skills?.filter((skill) => !agentSkills.includes(skill));
+  }
+  const plugins = lookup("plugin", caps.plugins ?? [], config.plugins).map(([name, plugin]) => ({
+    name,
+    path: plugin.path,
+  }));
 
   return {
     role: roleName,
@@ -507,19 +562,37 @@ export function resolveSession(request: SessionRequest, ctx: RoleContext): Resol
     allow: caps.allow ?? [],
     deny: caps.deny ?? [],
     mcp: Object.fromEntries(lookup("MCP server", caps.mcp ?? [], config.mcp)),
-    plugins: lookup("plugin", caps.plugins ?? [], config.plugins).map(([name, plugin]) => ({
-      name,
-      path: plugin.path,
-    })),
+    plugins,
     skills,
     hiddenSkills,
+    ...(agentSkills.length > 0 ? { agentSkills } : {}),
     offMcp: caps.off_mcp ?? [],
     offPlugins: caps.off_plugins ?? [],
-    offSkills: caps.off_skills ?? [],
+    offSkills,
+    allowedSkills: [
+      ...(skills ?? projectSkills.filter((skill) => !agentSkills.includes(skill))).map((skill) =>
+        skill.source === "project" ? skill.name : `${APP_NAME}:${skill.name}`,
+      ),
+      ...builtinSkills,
+      ...plugins.map((plugin) => `${pluginId(plugin, files)}:*`),
+    ],
     memory: caps.memory ?? false,
     prompt: prompt?.trim() ? prompt : undefined,
     ...(roleList ? { roleList: true as const } : {}),
   };
+}
+
+/** The name a plugin gives its skills (`<name>:<skill>`): its manifest's, else the catalogue's. */
+function pluginId(plugin: { name: string; path: string }, files: RoleFiles): string {
+  try {
+    const manifest = JSON.parse(
+      files.read(join(plugin.path, ".claude-plugin", "plugin.json")) ?? "{}",
+    ) as { name?: unknown };
+    if (typeof manifest.name === "string" && manifest.name) return manifest.name;
+  } catch {
+    // A manifest that does not parse: the Claude command reports it; the catalogue name will do.
+  }
+  return plugin.name;
 }
 
 /**

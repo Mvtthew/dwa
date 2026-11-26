@@ -31,9 +31,36 @@ describe("toolView", () => {
     expect(view.origins.tools).toBe("role explore");
   });
 
+  test("without a list of its own a session has the default tools, less what is taken away", () => {
+    const on = (caps: Parameters<typeof toolView>[0]) =>
+      toolView(caps, {}, { ...sources, seen: [] })
+        .tools.filter((tool) => tool.on)
+        .map((tool) => tool.name);
+    expect(toolView({}, {}, sources).mode).toBe("only");
+    expect(on({})).toEqual([
+      "AskUserQuestion",
+      "Bash",
+      "Edit",
+      "Read",
+      "Skill",
+      "Write",
+      "Glob",
+      "Grep",
+      "ExitPlanMode",
+    ]);
+    expect(on({ deny_tools: ["Edit", "Write"] })).not.toContain("Edit");
+    expect(on({ subagents: true })).toContain("Agent");
+    expect(on({ tools: ["*"] })).toContain("WebSearch");
+    expect(toolView({ tools: ["*"] }, {}, sources).tools.map((tool) => tool.name)).not.toContain(
+      "*",
+    );
+  });
+
   test("shows denied tools, servers of every kind and the rules", () => {
     const view = toolView(
       {
+        // Every tool the command ships, less what is taken away.
+        tools: ["*"],
         deny_tools: ["Edit"],
         deny: ["Bash", "Bash(git push *)", "mcp__github__create_issue", "mcp__docs"],
         allow: ["Bash(git log *)"],
@@ -114,6 +141,42 @@ describe("applyToolChanges", () => {
     expect(apply({ deny_tools: ["Bash"] }, { kind: "tool", name: "Bash", on: true })).toEqual({
       deny_tools: [],
     });
+  });
+
+  test("a tool that is in no list of the session gets the list written out with it", () => {
+    const defaults = [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash",
+      "Glob",
+      "Grep",
+      "Skill",
+      "AskUserQuestion",
+      "ExitPlanMode",
+    ];
+    expect(apply({}, { kind: "tool", name: "WebSearch", on: true })).toEqual({
+      tools: [...defaults, "WebSearch"],
+    });
+    // What was taken away is taken out of the list, and its key goes: a file holds one list.
+    const folded = apply({ deny_tools: ["Edit"] }, { kind: "tool", name: "WebSearch", on: true });
+    expect(folded.tools).toEqual([...defaults.filter((name) => name !== "Edit"), "WebSearch"]);
+    expect("deny_tools" in folded).toBe(true);
+    expect(folded.deny_tools).toBeUndefined();
+    // A default tool that was taken away only comes back.
+    expect(apply({ deny_tools: ["Edit"] }, { kind: "tool", name: "Edit", on: true })).toEqual({
+      deny_tools: [],
+    });
+    // With "every tool" there is no list to write: tools are taken away and given back.
+    expect(apply({ tools: ["*"] }, { kind: "tool", name: "WebSearch", on: false })).toEqual({
+      deny_tools: ["WebSearch"],
+    });
+    expect(
+      apply(
+        { tools: ["*"], deny_tools: ["WebSearch"] },
+        { kind: "tool", name: "WebSearch", on: true },
+      ),
+    ).toEqual({ deny_tools: [] });
   });
 
   test("switching a subagent tool on sets subagents and keeps the other one off", () => {
@@ -271,6 +334,7 @@ describe("liveBlocks", () => {
     offMcp: [],
     offPlugins: [],
     offSkills: [],
+    allowedSkills: [],
     memory: false,
   };
   const open: ResolvedSession = { ...base, tools: undefined };

@@ -51,8 +51,10 @@ import { guideEntries, roleGuideList, roleGuidePrompt } from "../shared/role-gui
 import {
   diskFiles,
   findRole,
+  findSkill,
   missingOnThisMachine,
   type ResolvedSession,
+  type ResolvedSkill,
   type RoleContext,
   type RoleFiles,
   resolveLayers,
@@ -62,11 +64,14 @@ import {
   UnknownRoleError,
 } from "../shared/roles.ts";
 import { type Scope, scopeLabel } from "../shared/scope.ts";
+import { SKILL_FILE, skillHeader } from "../shared/skill-file.ts";
+import { skillGuideEntries, skillGuidePrompt, skillTask } from "../shared/skill-guide.ts";
 import {
   applyToolChanges,
   BLOCKED_FILE,
   blockedReason,
   liveBlocks,
+  SKILLS_FILE,
   type ToolSources,
   toolView,
 } from "../shared/tools.ts";
@@ -380,7 +385,11 @@ export class Workspace {
   private async spawnNow(request: SpawnRequest): Promise<AgentInfo> {
     {
       const state = await this.requireUp();
-      const name = this.uniqueName(request.name ?? request.role ?? "agent", state);
+      // A skill to run as an agent: its file becomes the task, and the role it names (`agent`
+      // in its front matter) is used when the request has none and the workspace has that role.
+      const skill = request.skill === undefined ? null : this.skillToRun(request.skill);
+      const role = request.role ?? (skill ? this.roleOfSkill(skill) : undefined);
+      const name = this.uniqueName(request.name ?? skill?.name ?? role ?? "agent", state);
       const config = await this.deps.loadConfig();
       const profile = resolveProfile(
         config,
@@ -404,7 +413,7 @@ export class Workspace {
         "Agent settings",
       );
       const stored: StoredRequest = {
-        role: request.role,
+        role,
         overrides,
         narrowOnly,
         profile: request.profile,
@@ -412,13 +421,10 @@ export class Workspace {
       const session = this.resolve(name, this.sessionRequest(config, stored));
       // A session another one starts for a task owes it the result (`Delegation`). The task
       // says so, and is stored that way, so that a session started afresh reads it again.
-      const spawner =
-        request.from && request.task ? this.deps.store.getRunning(request.from) : null;
+      const asked = skill ? skillTask(skill, request.task) : request.task;
+      const spawner = request.from && asked ? this.deps.store.getRunning(request.from) : null;
       const keep = request.keep === true;
-      const task =
-        spawner && request.task
-          ? `${request.task}${reportSuffix(spawner.name, keep)}`
-          : request.task;
+      const task = spawner && asked ? `${asked}${reportSuffix(spawner.name, keep)}` : asked;
 
       const id = this.newId();
       const sessionId = this.newId();
@@ -441,7 +447,7 @@ export class Workspace {
           name,
           profile: profile.name,
           sessionId,
-          role: request.role,
+          role,
           task,
         },
         paneId,
@@ -1340,6 +1346,31 @@ export class Workspace {
     return [...new Set(roles)].filter((role) => findRole(role, ctx) === null);
   }
 
+  /** The skill a spawn request names, from the places a role's skills are looked for. */
+  private skillToRun(name: string): ResolvedSkill {
+    const skill = NAME_PATTERN.test(name) ? findSkill(name, this.roleContext()) : null;
+    if (!skill) {
+      throw new WorkspaceError(
+        `Unknown skill "${name}": there is no ${name}/${SKILL_FILE} in the project's or the workspace's skill folders. A built-in skill has no file and cannot be started this way.`,
+      );
+    }
+    return skill;
+  }
+
+  /** The role a skill names for its agent, when the workspace has a role of that name. */
+  private roleOfSkill(skill: ResolvedSkill): string | undefined {
+    const ctx = this.roleContext();
+    const text = (ctx.files ?? diskFiles).read(join(skill.path, SKILL_FILE)) ?? "";
+    const wanted = skillHeader(text).agent;
+    if (wanted === undefined) return undefined;
+    try {
+      return findRole(wanted, ctx) ? wanted : undefined;
+    } catch {
+      // A role file that does not parse: the session starts without a role instead.
+      return undefined;
+    }
+  }
+
   private roleContext(): RoleContext {
     return { projectRoot: this.deps.projectRoot, env: this.env, files: this.deps.roleFiles };
   }
@@ -1438,7 +1469,12 @@ export class Workspace {
     const roleGuide = session.roleList
       ? roleGuidePrompt(guideEntries(this.roleContext(), { except: session.role }))
       : undefined;
-    write(systemPromptPath, provider.systemPrompt(name, session, { roleGuide }));
+    const skillGuide = session.agentSkills
+      ? skillGuidePrompt(skillGuideEntries(session.agentSkills, this.roleContext()))
+      : undefined;
+    write(systemPromptPath, provider.systemPrompt(name, session, { roleGuide, skillGuide }));
+    // Read by the session's hook on every call of the Skill tool (`skillVerdict`).
+    write(join(dir, SKILLS_FILE), JSON.stringify(session.allowedSkills));
     return {
       settingsPath,
       mcpConfigPath,

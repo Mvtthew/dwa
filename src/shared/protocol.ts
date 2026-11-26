@@ -259,6 +259,11 @@ export interface SpawnRequest extends Omit<Capabilities, "effort"> {
   effort?: string;
   task?: string;
   /**
+   * A skill to run as this session's task, by name (`skillTask`): what a skill that asks for a
+   * subagent of its own becomes in the workspace. `task` is then what the skill is given.
+   */
+  skill?: string;
+  /**
    * Set for a spawn an agent asks for: the capability fields may then only take away from the
    * role, never add to it.
    */

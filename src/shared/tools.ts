@@ -1,6 +1,6 @@
 // What the "Agent tools" dialog shows and what a change in it means for a session's
 // capabilities. Pure: the daemon supplies what it knows about servers and tools in use.
-import { type Capabilities, SUBAGENT_TOOLS } from "./capabilities.ts";
+import { ALL_TOOLS, type Capabilities, listedTools, SUBAGENT_TOOLS } from "./capabilities.ts";
 import { APP_NAME } from "./constants.ts";
 import type { Origins, ResolvedSession } from "./roles.ts";
 
@@ -104,7 +104,7 @@ export interface RuleRow {
 }
 
 export interface ToolView {
-  /** "only" when the session has an allow list of built-in tools, "except" otherwise. */
+  /** "only": the session has a list of built-in tools; "except": its list says "every tool". */
   mode: "only" | "except";
   tools: ToolRow[];
   servers: ServerRow[];
@@ -124,6 +124,10 @@ function without(list: string[], item: string): string[] {
   return list.filter((entry) => entry !== item);
 }
 
+function without2(list: string[], items: string[]): string[] {
+  return list.filter((entry) => !items.includes(entry));
+}
+
 function withItem(list: string[], item: string): string[] {
   return list.includes(item) ? list : [...list, item];
 }
@@ -136,12 +140,14 @@ export function toolView(caps: Capabilities, origins: Origins, sources: ToolSour
     .filter((name) => !BUILTIN_TOOLS.includes(name))
     .sort((a, b) => a.localeCompare(b));
   // The common tools first, as listed; what only this session knows comes after them.
-  const names = [...new Set([...BUILTIN_TOOLS, ...extra])];
+  const names = [...new Set([...BUILTIN_TOOLS, ...extra])].filter((name) => name !== ALL_TOOLS);
+  const listed = listedTools(caps);
   const tools = names.map((name) => ({
     name,
     // A deny rule that is just the tool's name blocks it as well.
     on:
-      (caps.tools ? caps.tools.includes(name) : !(caps.deny_tools ?? []).includes(name)) &&
+      (listed === null || listed.includes(name)) &&
+      !(caps.deny_tools ?? []).includes(name) &&
       !deny.includes(name) &&
       // The tools that start subagents are there only with `subagents`.
       (caps.subagents === true || !SUBAGENT_TOOLS.includes(name)),
@@ -193,7 +199,7 @@ export function toolView(caps: Capabilities, origins: Origins, sources: ToolSour
       .filter((rule) => !rule.startsWith(MCP_PREFIX) && !names.includes(rule))
       .map((rule) => ({ list: "deny" as const, rule })),
   ];
-  return { mode: caps.tools ? "only" : "except", tools, servers, rules, origins };
+  return { mode: listed === null ? "except" : "only", tools, servers, rules, origins };
 }
 
 /**
@@ -214,19 +220,24 @@ export function applyToolChanges(
       if (change.on && SUBAGENT_TOOLS.includes(change.name) && next.subagents !== true) {
         // `subagents` brings all of them; the ones not asked for stay off.
         next.subagents = true;
-        if (!next.tools) {
+        if (!next.tools || next.tools.includes(ALL_TOOLS)) {
           for (const other of SUBAGENT_TOOLS) next.deny_tools = withItem(list("deny_tools"), other);
         }
       }
-      // The role's own way of saying it is kept: an allow list stays one.
-      if (next.tools) {
-        next.tools = change.on
-          ? withItem(next.tools, change.name)
-          : without(next.tools, change.name);
+      const listed = listedTools(next);
+      if (!change.on) {
+        // The role's own way of saying it is kept: a list of its own loses the name, and
+        // without one (or with "every tool") the name is taken away.
+        if (next.tools && listed !== null) next.tools = without(next.tools, change.name);
+        else next.deny_tools = withItem(list("deny_tools"), change.name);
+      } else if (listed === null || listed.includes(change.name)) {
+        if (next.deny_tools) next.deny_tools = without(next.deny_tools, change.name);
       } else {
-        next.deny_tools = change.on
-          ? without(list("deny_tools"), change.name)
-          : withItem(list("deny_tools"), change.name);
+        // Not in the list the session has, the default one included: the list is written
+        // out with the tool in it, and what was taken away is taken out of it, since one
+        // file holds either list.
+        next.tools = [...without2(listed, list("deny_tools")), change.name];
+        next.deny_tools = undefined;
       }
       // Allowing a tool also lifts a deny rule that names it.
       if (change.on && list("deny").includes(change.name))
@@ -256,6 +267,7 @@ export function applyToolChanges(
   const changed: Capabilities = {};
   for (const key of ["tools", "deny_tools", "allow", "deny", "mcp", "off_mcp"] as const) {
     if (JSON.stringify(next[key] ?? []) !== JSON.stringify(caps[key] ?? []))
+      // An `undefined` here is a key to take out (the list was folded into `tools`).
       changed[key] = next[key];
   }
   if (next.subagents !== caps.subagents) changed.subagents = next.subagents;
@@ -300,11 +312,11 @@ export function liveBlocks(before: ResolvedSession, now: ResolvedSession): strin
   if (before.tools && now.tools) {
     if (added(before.tools, now.tools).length > 0) return null;
     blocks.push(...added(now.tools, before.tools));
-    if (JSON.stringify(before.denyTools) !== JSON.stringify(now.denyTools)) return null;
-  } else {
-    if (added(now.denyTools, before.denyTools).length > 0) return null;
-    blocks.push(...added(before.denyTools, now.denyTools));
   }
+  // Names taken away outside the list (a tool the session never had, an MCP tool): one more
+  // is refused like any other, one fewer gives something back.
+  if (added(now.denyTools, before.denyTools).length > 0) return null;
+  blocks.push(...added(before.denyTools, now.denyTools));
 
   if (added(now.deny, before.deny).length > 0) return null;
   const rules = added(before.deny, now.deny);
@@ -333,6 +345,27 @@ export function isBlocked(tool: string, blocks: string[]): boolean {
       // A whole server: every one of its tools.
       (block.startsWith(MCP_PREFIX) && tool.startsWith(`${block}__`)),
   );
+}
+
+/**
+ * Name of the file in a session's run folder that lists the skills its Skill tool may be
+ * called with (`ResolvedSession.allowedSkills`), written when the session is started.
+ */
+export const SKILLS_FILE = "skills.json";
+
+/**
+ * What a session is told when it calls the Skill tool for a skill it was not given; null when
+ * the call may go ahead. This is what keeps a skill out that dwa does not know by name, such as
+ * one a new version of the Claude command brings. `allowed` holds names and `<plugin>:*`.
+ */
+export function skillRefusal(skill: string, allowed: string[]): string | null {
+  const name = skill.replace(/^\//, "");
+  const ok = allowed.some((entry) =>
+    entry.endsWith(":*") ? name.startsWith(entry.slice(0, -1)) : entry === name,
+  );
+  if (ok) return null;
+  const has = allowed.length > 0 ? `It has: ${allowed.join(", ")}.` : "It has no skills.";
+  return `The skill "${name}" is not one this session was given in ${APP_NAME}. ${has} Skills built into the Claude command are off unless the session's role names them (builtin_skills). Do the work without the skill, or say what you could not do.`;
 }
 
 /** Name of the file in a session's run folder that lists what it is refused. */

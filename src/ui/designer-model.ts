@@ -251,6 +251,7 @@ const OWN_SETTINGS = [
   "off_mcp",
   "off_plugins",
   "off_skills",
+  "builtin_skills",
   "memory",
   "subagents",
 ];

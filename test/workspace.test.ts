@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "../src/daemon/db.ts";
 import { Workspace, WorkspaceError } from "../src/daemon/workspace.ts";
 import { claudeProvider } from "../src/providers/claude/launch.ts";
+import { BUILTIN_SKILLS, DEFAULT_TOOLS } from "../src/shared/capabilities.ts";
 import type { Config } from "../src/shared/config.ts";
 import { WORKSPACE_WINDOW } from "../src/tmux/layout.ts";
 import { FakeTmux } from "./fake-tmux.ts";
@@ -78,6 +79,11 @@ beforeEach(() => {
   });
 });
 
+/** `--tools` of a session that has the default list (the launch adds the tool that waits for servers). */
+const DEFAULT_TOOL_LIST = [...DEFAULT_TOOLS, "WaitForMcpServers"].join(",");
+/** `skillOverrides` of a session that keeps no built-in skill. */
+const builtinOff = Object.fromEntries(BUILTIN_SKILLS.map((name) => [name, "off"]));
+
 describe("up", () => {
   test("creates the three columns with the main session in the middle", async () => {
     const state = await workspace.up();
@@ -94,8 +100,8 @@ describe("up", () => {
       "/bin/claude_me",
       "--setting-sources",
       "project,local",
-      "--disallowedTools",
-      "Agent,Workflow",
+      "--tools",
+      DEFAULT_TOOL_LIST,
       "--session-id",
       "id-2",
       "--name",
@@ -217,8 +223,8 @@ describe("agents", () => {
       "/bin/claude_me",
       "--setting-sources",
       "project,local",
-      "--disallowedTools",
-      "Agent,Workflow",
+      "--tools",
+      DEFAULT_TOOL_LIST,
       "--session-id",
       "id-4",
       "--name",
@@ -547,8 +553,8 @@ skills = ["review", "house-style"]
       "/bin/claude_me",
       "--setting-sources",
       "project,local",
-      "--disallowedTools",
-      "Edit,Write,Agent,Workflow",
+      "--tools",
+      "Read,Bash,Glob,Grep,Skill,AskUserQuestion,ExitPlanMode,WaitForMcpServers",
       "--session-id",
       "id-4",
       "--name",
@@ -575,7 +581,12 @@ skills = ["review", "house-style"]
     });
     // The project skill the role does not list is switched off; the personal CLAUDE.md of the
     // profile's config directory (and of the default one) is not loaded.
-    expect(settings.skillOverrides).toEqual({ deploy: "off" });
+    expect(settings.skillOverrides).toEqual({ ...builtinOff, deploy: "off" });
+    expect(JSON.parse(files.get(`${dir}/skills.json`) ?? "")).toEqual([
+      "review",
+      "dwa:house-style",
+      "lint:*",
+    ]);
     expect(settings.claudeMdExcludes).toContain("/home/me/.claude-me/CLAUDE.md");
     expect(settings.claudeMdExcludes).toHaveLength(2);
 
@@ -606,9 +617,52 @@ skills = ["review", "house-style"]
     await workspace.up();
     const agent = await workspace.spawn({ name: "ex", role: "explore" });
     expect(argvOf(agent.paneId)).not.toContain("--plugin-dir");
-    expect(session("id-3").settings).not.toHaveProperty("skillOverrides");
+    // Only the skills built into the Claude command are off.
+    expect(session("id-3").settings.skillOverrides).toEqual(builtinOff);
+    expect(JSON.parse(files.get("/project/.dwa/run/agents/id-3/skills.json") ?? "")).toEqual([
+      "deploy",
+      "review",
+    ]);
     expect(Object.keys(session("id-3").mcp)).toEqual(["db", "dwa"]);
     expect(links.size).toBe(0);
+  });
+
+  test("a skill that asks for a fork is off as a skill and started as an agent", async () => {
+    const fork = "---\ndescription: Ships it\ncontext: fork\nagent: explore\n---\nShip.";
+    disk["/project/.claude/skills/deploy/SKILL.md"] = fork;
+    disk["/project/.dwa/skills/house-style/SKILL.md"] = fork;
+    await workspace.up();
+    // The role lists house-style: it is not handed over, and the prompt says how to run it.
+    const rev = await workspace.spawn({ name: "rev", role: "reviewer" });
+    expect(argvOf(rev.paneId)).not.toContain("/project/.dwa/run/agents/id-3/skills-plugin");
+    expect(links.size).toBe(0);
+    expect(session("id-3").prompt).toContain(
+      "# Skills that run as their own agent\n\nThese skills ask for a separate agent",
+    );
+    expect(session("id-3").prompt.endsWith("- house-style: Ships it")).toBe(true);
+    // Without a list of skills the project's forking skill is switched off by name.
+    const ex = await workspace.spawn({ name: "ex", role: "explore" });
+    expect(session("id-5").settings.skillOverrides).toEqual({ ...builtinOff, deploy: "off" });
+    // The Skill tool may not be called with it either.
+    expect(JSON.parse(files.get("/project/.dwa/run/agents/id-5/skills.json") ?? "")).toEqual([
+      "review",
+    ]);
+    expect(session("id-5").prompt.endsWith("- deploy: Ships it")).toBe(true);
+
+    // Started with the skill: its file is the task, its `agent` the role, its name the name.
+    const run = await workspace.spawn({ skill: "deploy", task: "to staging", from: ex.id });
+    expect(run).toMatchObject({ name: "deploy", role: "explore" });
+    expect(run.task).toStartWith(
+      'Your task is to run the skill "deploy". Read /project/.claude/skills/deploy/SKILL.md now',
+    );
+    expect(run.task).toContain('\n\nto staging\n\n---\n[dwa] "ex" started you for this task');
+    // A role of the request wins over the skill's, and an unknown skill is refused.
+    const other = await workspace.spawn({ skill: "house-style", role: "reviewer" });
+    expect(other.role).toBe("reviewer");
+    expect(workspace.spawn({ skill: "code-review" })).rejects.toThrow(
+      /Unknown skill "code-review"/,
+    );
+    expect(workspace.spawn({ skill: "../x" })).rejects.toThrow(/Unknown skill/);
   });
 
   test("the main session runs as the main role", async () => {
@@ -629,7 +683,8 @@ skills = ["review", "house-style"]
     const expected = {
       model: "opus",
       permissionMode: "plan",
-      denyTools: ["Edit", "Write", "Agent", "Workflow"],
+      tools: DEFAULT_TOOLS.filter((tool) => tool !== "Edit" && tool !== "Write"),
+      denyTools: [],
       allow: ["Bash(git log *)"],
       deny: ["Read(.env)"],
       mcp: ["github"],
@@ -665,7 +720,7 @@ skills = ["review", "house-style"]
       skills: ["review"],
     });
     expect(narrow.capabilities).toMatchObject({
-      denyTools: ["Edit", "Write", "Bash", "Agent", "Workflow"],
+      tools: ["Read", "Glob", "Grep", "Skill", "AskUserQuestion", "ExitPlanMode"],
       mcp: [],
       skills: ["review"],
     });

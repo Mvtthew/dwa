@@ -52,6 +52,8 @@ export interface McpServerCommand {
 export interface PromptExtras {
   /** The list of roles (`roleGuidePrompt`); empty or absent when the session gets none. */
   roleGuide?: string;
+  /** The skills the session starts as agents (`skillGuidePrompt`); empty or absent without any. */
+  skillGuide?: string;
 }
 
 export interface Provider {

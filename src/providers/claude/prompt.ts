@@ -21,6 +21,7 @@ export function sessionPrompt(
     parts.push(`# ${title}\n\n${session.prompt.trim()}`);
   }
   if (extras.roleGuide) parts.push(extras.roleGuide);
+  if (extras.skillGuide) parts.push(extras.skillGuide);
   return parts.join("\n\n");
 }
 
@@ -33,7 +34,7 @@ export function workspacePrompt(name: string, builtinSubagents = false): string 
     ? ""
     : `
 
-The built-in Agent tool and its subagents (Explore, Plan, general-purpose and the like) are not available in this workspace, in plan mode either; ignore instructions to launch them. To hand work to someone else, start a session with spawn_agent and a role that fits, so the user can see it. Do quick searches and reads yourself.`;
+The built-in Agent tool and its subagents (Explore, Plan, general-purpose and the like) are not available in this workspace, in plan mode either; ignore instructions to launch them. A skill that would run in such a subagent is not in the Skill tool either: you start it as a session (spawn_agent with skill), and are told which ones there are. The built-in /code-review skill is one of them and has no file to start from: for a review, start a session with a role made for reviewing. To hand work to someone else, start a session with spawn_agent and a role that fits, so the user can see it. Do quick searches and reads yourself.`;
   return `You are "${name}", one of several Claude Code sessions working in the same project inside a dwa workspace. The user can see every session and may type into any of them directly.
 
 Use the dwa MCP tools to work with the others:

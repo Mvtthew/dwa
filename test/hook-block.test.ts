@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { localVerdict } from "../src/cli/hook.ts";
-import { approvesOwnTool } from "../src/shared/tools.ts";
+import { localVerdict, skillVerdict } from "../src/cli/hook.ts";
+import { approvesOwnTool, skillRefusal } from "../src/shared/tools.ts";
 
 let dir: string;
 const list = (text: string) => {
@@ -35,6 +35,41 @@ describe("the hook's own list of refused tools", () => {
     expect(localVerdict(dir, "id-3", "Read")).toContain("could not be read");
     list(JSON.stringify({ Bash: true }));
     expect(localVerdict(dir, "id-3", "Read")).toContain("could not be read");
+  });
+});
+
+describe("the skills a session was given", () => {
+  const skills = (text: string) => {
+    mkdirSync(join(dir, ".dwa", "run", "agents", "id-3"), { recursive: true });
+    writeFileSync(join(dir, ".dwa", "run", "agents", "id-3", "skills.json"), text);
+  };
+  const call = (skill: unknown) => skillVerdict(dir, "id-3", { tool_input: { skill } });
+
+  test("a skill by its name, a plugin's skills by the plugin, nothing else", () => {
+    const allowed = ["review", "dwa:house-style", "lint:*"];
+    expect(skillRefusal("review", allowed)).toBeNull();
+    expect(skillRefusal("/review", allowed)).toBeNull();
+    expect(skillRefusal("dwa:house-style", allowed)).toBeNull();
+    expect(skillRefusal("lint:fix", allowed)).toBeNull();
+    // A built-in skill dwa has never heard of is refused like any other.
+    const refusal = skillRefusal("brand-new", allowed);
+    expect(refusal).toContain('The skill "brand-new" is not one this session was given');
+    expect(refusal).toContain("It has: review, dwa:house-style, lint:*.");
+    expect(skillRefusal("house-style", allowed)).not.toBeNull();
+    expect(skillRefusal("linter:fix", allowed)).not.toBeNull();
+    expect(skillRefusal("simplify", [])).toContain("It has no skills.");
+  });
+
+  test("the hook reads the list from the session's run folder", () => {
+    // No list: a session from before dwa wrote one is left alone.
+    expect(call("simplify")).toBeNull();
+    skills(JSON.stringify(["review"]));
+    expect(call("review")).toBeNull();
+    expect(call("simplify")).toContain("is not one this session was given");
+    // Not a call the hook understands: left to the Claude command.
+    expect(call(undefined)).toBeNull();
+    skills("{ half");
+    expect(call("review")).toContain("could not be read");
   });
 });
 

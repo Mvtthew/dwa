@@ -44,12 +44,12 @@ Keep `prompt` as the last key. Every key is optional, and a key that is not one 
 - `role_list = true`: sessions of this role are given that list. For a role whose job is to hand work to others; leave it out otherwise.
 - `extends = "NAME"`: start from another role; what this file sets replaces the parent's value, the rest is inherited, the prompt included. Use it when the new role is an existing one with a small difference.
 - `model` (for example "sonnet", "opus", "haiku") and `effort` ("low", "medium", "high", "xhigh", "max").
-- `tools`: the built-in tools the session has, and no others (Read, Grep, Glob, Edit, Write, Bash, WebFetch, WebSearch, Agent, ...). Or `deny_tools`: built-in tools taken away from the full set. Never both in one file. Without either, the session has every built-in tool. The dwa tools (messages, questions, progress) are always there.
+- `tools`: the built-in tools the session has, and no others (Read, Grep, Glob, Edit, Write, Bash, WebFetch, WebSearch, Agent, ...). Or `deny_tools`: built-in tools taken away from the list the role would have otherwise. Never both in one file. Without either, the session has a short default list: Read, Edit, Write, Bash, Glob, Grep, Skill, AskUserQuestion, ExitPlanMode; anything else (WebSearch, NotebookEdit, ...) must be in `tools`. The dwa tools (messages, questions, progress) are always there.
 - `permission_mode`: "manual" asks for everything that needs permission; "acceptEdits" accepts file edits and asks for shell commands; "dontAsk" never stops at a prompt and refuses what no rule allows; "plan" only plans. "auto" and "bypassPermissions" take the user out of the loop.
 - `allow` and `deny`: permission rules such as "Bash(git log *)" or "Edit(docs/**)". `allow` runs without a prompt, `deny` is refused whatever else is set.
 - `mcp` and `plugins`: names from the catalogue in `.dwa/config.toml` (`[mcp.NAME]`, `[plugins.NAME]`). Only names that are defined there.
 - `skills`: skill names (a folder with a SKILL.md in `.claude/skills/` or `.dwa/skills/`). Without this key the session has every project skill.
-- `off_mcp`: servers of the project's own `.mcp.json` to leave out. `off_plugins`, `off_skills`: built-in ones to switch off.
+- `off_mcp`: servers of the project's own `.mcp.json` to leave out. `off_plugins`: built-in plugins to switch off. `builtin_skills`: skills built into the Claude command to keep (simplify, security-review, ...); all of them are off otherwise.
 - `memory = true`: lets the session use the Claude command's own per-project memory. Off unless set.
 
 How to write a good one:

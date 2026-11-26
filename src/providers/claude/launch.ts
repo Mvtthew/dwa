@@ -136,7 +136,12 @@ export function buildClaudeSettings(
       ],
     ]),
   );
-  const offSkills = [...new Set([...session.hiddenSkills, ...session.offSkills])];
+  // A project skill that is started as an agent is loaded by Claude Code all the same, so it
+  // is switched off like a hidden one; the others are simply not handed to the session.
+  const agentSkills = (session.agentSkills ?? [])
+    .filter((skill) => skill.source === "project")
+    .map((skill) => skill.name);
+  const offSkills = [...new Set([...session.hiddenSkills, ...agentSkills, ...session.offSkills])];
   return {
     hooks,
     statusLine: { type: "command", command: commands.statusline },

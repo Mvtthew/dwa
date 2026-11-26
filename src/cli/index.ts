@@ -26,12 +26,12 @@ Workspace
   down                                  Stop every session and the workspace
 
 Agents
-  agent spawn [name] [--role <role>] [--profile <name>] [--task <text>]
+  agent spawn [name] [--role <role>] [--profile <name>] [--task <text>] [--skill <name>]
               [--model <model>] [--effort <low|medium|high|xhigh|max>]
               [--permission-mode <mode>] [--tools <a,b>] [--deny-tools <a,b>]
               [--allow <rule>]... [--deny <rule>]... [--mcp <a,b>] [--plugins <a,b>]
-              [--skills <a,b>] [--off-plugins <a,b>] [--off-skills <a,b>] [--memory]
-              [--subagents] [--keep]
+              [--skills <a,b>] [--off-plugins <a,b>] [--off-skills <a,b>]
+              [--builtin-skills <a,b>] [--memory] [--subagents] [--keep]
                                         These replace what the role says, for this agent.
                                         Run inside a session it works like its spawn_agent tool:
                                         it can only take away from the role, and the new agent
@@ -138,8 +138,10 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
       mcp: { type: "string" },
       plugins: { type: "string" },
       skills: { type: "string" },
+      skill: { type: "string" },
       "off-plugins": { type: "string" },
       "off-skills": { type: "string" },
+      "builtin-skills": { type: "string" },
       memory: { type: "boolean" },
       subagents: { type: "boolean" },
       keep: { type: "boolean" },
@@ -165,6 +167,7 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
         model: values.model,
         effort: values.effort,
         task: values.task,
+        skill: values.skill,
         permission_mode: values["permission-mode"],
         tools: list(values.tools),
         deny_tools: list(values["deny-tools"]),
@@ -175,6 +178,7 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
         skills: list(values.skills),
         off_plugins: list(values["off-plugins"]),
         off_skills: list(values["off-skills"]),
+        builtin_skills: list(values["builtin-skills"]),
         memory: values.memory,
         subagents: values.subagents,
         keep: values.keep,

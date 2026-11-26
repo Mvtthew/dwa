@@ -1,5 +1,6 @@
-# Reads and searches. `tools` is an allow list: the session has these built-in tools and no
-# others (no Edit or Write, no web, no subagents), which also keeps its context small. The dwa
+# Reads and searches. `tools` is the list of built-in tools the session has, and it has no
+# others (no Edit or Write, no web, no subagents), which also keeps its context small. Without
+# the line a session has a short default list that includes Edit and Write. The dwa
 # tools are always there.
 description = "Investigates the codebase and reports findings. Reads and searches; does not change files."
 # What the main session reads when it picks a role for a job.

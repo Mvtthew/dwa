@@ -14,6 +14,7 @@ Experiments run on 2026-11-24 with Claude Code 2.1.331, tmux 3.8, Bun 1.4.3 on m
 | S6    | Can what a running session may use be changed, live or by restarting it with its conversation?    | Live only through the PreToolUse hook. Everything else by a resume restart, with one extra flag.        |
 | S7    | Does a program in a dwa popup get mouse presses, drags and the wheel?                             | Yes, with popup-relative coordinates. A release outside the popup is lost.                              |
 | S8    | When do the tools of an MCP server that connects after the first request reach the session?       | Only with a prompt from the prompt box or a tool result, never on a turn started by a hook.             |
+| S9    | What does a short list of built-in tools save, and can built-in skills be kept out for good?      | About 16k tokens per session. All 20 skills switch off by id; the hook sees the name of any other.      |
 
 ## S1. tmux composition
 
@@ -114,6 +115,7 @@ The user-level setup tested against: a status line command, seven hooks, four pe
 ### Problems found
 
 - **Built-in plugins and skills come back.** With user settings skipped, the user's `enabledPlugins` no longer applies, so built-in plugins the user had switched off are on again (one of them brought its own MCP server and tool), and about 20 built-in skills (3.2k tokens) are always present. `enabledPlugins: {"<id>": false}` and `skillOverrides` in `--settings` switch them off one by one, but the ids are Claude Code's and can change between versions. `--disable-slash-commands` removes all skills at once, the wanted ones too.
+- **A built-in skill can start a subagent without the `Agent` tool.** Seen on 2026-11-26 in a workspace session with `Agent` and `Workflow` removed: asked for a review, the session called `Skill(code-review)` and the screen showed "Running in the background". Not run as an experiment; read from the 2.1.332 executable: a skill runs as a fork when its `SKILL.md` says `context: fork`, and `code-review` is the one built-in skill that chooses a fork by itself. `skillOverrides` is what takes it away. A project skill with `context: fork` forks the same way; dwa takes such a skill out of the session and starts it as an agent of the workspace (`agentSkills`). A plugin's skill with `context: fork` is not handled.
 - **Project MCP servers need merging.** `--strict-mcp-config` is the only thing that removes the claude.ai connectors, and it removes the project's `.mcp.json` servers as well. To keep "project files stay loaded", the generated MCP file must include them.
 - **Plugin MCP servers** do not load under `--strict-mcp-config` either. A plugin that needs its server must have it copied into the generated MCP file.
 - **An allow list hides `Skill`.** With `--tools`, a role that lists skills also needs `Skill` in the list.
@@ -260,3 +262,24 @@ How a late tool arrives: not through the request's `tools`. Claude Code works ou
 - **The documented startup-wait settings did nothing for an interactive session in this version**, so they are not a fix by themselves.
 
 Not tested: Enter sooner than 300 ms after the paste, or a paste before the handshake has finished; the paste gaps in the default set; `--resume` (the documentation describes a 10 s hold for a tool call from the saved conversation); a server that fails to connect or connects after `MCP_TIMEOUT`; a server that changes its tools later (`list_changed`); more than two servers; other models than Haiku; whether a `UserPromptSubmit` or `SessionStart` hook can hold the first prompt until the server is connected; a native `SendMessage` from another session as the waking event.
+
+## S9. A short tool list and built-in skills
+
+Run on 2026-11-26 with Claude Code 2.1.332, five real interactive sessions (`~/claude_me`, Haiku) in a private tmux server (`tmux -L dwa-spike9`), in the S5 scratch project with `--setting-sources project,local --strict-mcp-config` and one MCP server. Scripts are in `spikes/s9/`: `start.sh` starts a variant and accepts the trust prompt, `probe.sh` saves the screen of a slash command, `hook-log.sh` is a `PreToolUse` hook that saves what it is given. The numbers are those of `/context all` in a session that has not been prompted yet.
+
+| Variant                                                                     | Total | System tools | MCP tools | Skills |
+| --------------------------------------------------------------------------- | ----- | ------------ | --------- | ------ |
+| No tool flags                                                               | 28.5k | 21.3k        | on demand | 3.2k   |
+| `--disallowedTools Agent,Workflow`, all 20 built-in skills `off`            | 24.8k | 20.8k        | on demand | 48     |
+| `--tools Read,Edit,Write,Bash,Glob,Grep,Skill,AskUserQuestion,ExitPlanMode` | 12.7k | 4.8k         | 1.3k      | 3.2k   |
+| The same `--tools`, all 20 built-in skills `off`                            | 12.7k | 8k           | 1.3k      | 48     |
+
+The last row's total and its parts do not add up (the screen showed the same total as the row above and a larger tools figure); the parts of the other rows do. The sizes are the screen's estimates.
+
+- **A list of nine tools costs under 5k tokens, no list costs 21k.** Without `--tools` the definitions of the tools loaded at the start are sent whole and the rest are named for `ToolSearch`; with a list nothing is deferred (S6), so every listed tool is sent whole. A long list would therefore cost more than no list: the saving comes from the list being short, not from having one.
+- **With `--tools` the MCP tools are sent whole as well** (1.3k for one server with one tool here) instead of on demand. A session with many MCP tools pays for all of them.
+- **The built-in skills are 20, and each is switched off by its id** with `skillOverrides: {"<id>": "off"}`: `artifact-capabilities`, `artifact-design`, `artifact-diagramming`, `claude-api`, `claude-approvals`, `code-review`, `dataviz`, `fewer-permission-prompts`, `init`, `keybindings-help`, `loop`, `plugin-authoring`, `run`, `schedule`, `security-review`, `ship`, `simplify`, `steward`, `update-config`, `workflow-authoring`. With all of them off the skills part of the context is the project's own skills only (48 tokens for the two of the scratch project). `/skills` lists project skills only in this version; `/context all` lists the built-in ones.
+- **The hook is given the skill's name.** On a `Skill` call the `PreToolUse` input has `tool_name: "Skill"` and `tool_input: {"skill": "<name>"}`: `projskill` for a project skill, `dwa:dwaskill` for a skill of the plugin `dwa`, `simplify` for a built-in one. So a hook can refuse any skill that is not on a list, whatever its id, which `skillOverrides` cannot do for an id dwa does not know.
+- **Tried with the real hook command** (`dwa hook PreToolUse` with a `skills.json` of `["projskill", "dwa:*"]`): `projskill` and `dwa:dwaskill` loaded, `projskill2` and `simplify` came back as "PreToolUse:Skill hook error" with dwa's text, and the model reported them as not available.
+
+Not tested: a skill typed as `/<name>` by the user (no `PreToolUse` is expected for it); skills of a plugin that is built into the Claude command; whether a later version keeps these ids; the cost of the default list on a larger model, whose tool definitions may differ.

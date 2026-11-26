@@ -14,7 +14,7 @@ effort = "high"
 # This skill comes from .dwa/skills/; the session sees it as dwa:review-checklist. A role
 # that lists skills has none of the project's .claude/skills unless they are listed too;
 # remove the line to have every project skill and no dwa skill. Skills built into the Claude
-# command stay either way; switch those off with off_skills = [...].
+# command are off either way; keep single ones with builtin_skills = [...].
 skills = ["review-checklist"]
 
 prompt = """

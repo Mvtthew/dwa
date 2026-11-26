@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { claudeProvider } from "../providers/claude/launch.ts";
-import { ConfigError } from "../shared/capabilities.ts";
+import { BUILTIN_SKILLS, ConfigError } from "../shared/capabilities.ts";
 import { type Config, loadConfig, resolveProfile } from "../shared/config.ts";
 import { APP_NAME } from "../shared/constants.ts";
 import { switchTo, versionText } from "../shared/history.ts";
@@ -255,7 +255,17 @@ function showSession(title: string, config: Config, session: ResolvedSession): v
       `  ${"hidden".padEnd(12)}${session.hiddenSkills.join(", ")} (project skills not listed)`,
     );
   }
-  const off = [...session.offPlugins, ...session.offSkills];
+  if (session.agentSkills) {
+    const names = session.agentSkills.map((skill) => skill.name).join(", ");
+    console.log(`  ${"as agents".padEnd(12)}${names} (skills started with spawn_agent)`);
+  }
+  // Every built-in skill is off unless kept, so the kept ones are what is worth a line.
+  const kept = BUILTIN_SKILLS.filter((name) => !session.offSkills.includes(name));
+  if (kept.length > 0) console.log(`  ${"built-ins".padEnd(12)}on: ${kept.join(", ")}`);
+  const off = [
+    ...session.offPlugins,
+    ...session.offSkills.filter((name) => !BUILTIN_SKILLS.includes(name)),
+  ];
   if (off.length > 0) console.log(`  ${"built-ins".padEnd(12)}off: ${off.join(", ")}`);
   const promptLines = session.prompt?.trim().split("\n").length ?? 0;
   console.log(`  ${"prompt".padEnd(12)}${promptLines > 0 ? `${promptLines} lines` : "none"}`);

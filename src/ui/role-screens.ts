@@ -76,7 +76,12 @@ const RULE_LISTS = [
 ] as const;
 const ID_LISTS = [
   ["off_plugins", "Built-in plugins to switch off", "ids, separated by commas"],
-  ["off_skills", "Built-in skills to switch off", "names, separated by commas"],
+  [
+    "builtin_skills",
+    "Built-in skills to keep (all are off otherwise)",
+    "names, separated by commas",
+  ],
+  ["off_skills", "Other skills of the Claude command to switch off", "names, separated by commas"],
 ] as const;
 
 const itemKey = (list: string, name: string) => `${list}:${name}`;

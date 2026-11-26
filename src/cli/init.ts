@@ -64,7 +64,10 @@ effort = "medium"       # low, medium, high, xhigh or max
 model = "sonnet"
 effort = "medium"
 # permission_mode = "manual"      # manual, acceptEdits, auto, plan, dontAsk, bypassPermissions
-# deny_tools = ["WebSearch"]      # built-in tools to remove; or tools = [...] to list the only ones
+# tools = ["Read", "Bash"]        # the only built-in tools a session has; without it: Read, Edit,
+#                                 # Write, Bash, Glob, Grep, Skill, AskUserQuestion, ExitPlanMode.
+#                                 # ["*"] is every tool the Claude command ships
+# deny_tools = ["Edit"]           # built-in tools to take away from that list
 # allow = ["Bash(git log *)"]     # permission rules allowed without asking
 # deny = ["Read(.env)"]           # permission rules that are refused
 # mcp = []                        # MCP servers from the catalogue above
@@ -72,8 +75,9 @@ effort = "medium"
 # plugins = []                    # plugins from the catalogue above
 # skills = ["review"]             # only these skills, from .claude/skills, .dwa/skills or
 #                                 # ~/.config/${APP_NAME}/skills; without it: every project skill
-# off_plugins = ["name@builtin"]  # plugins built into the Claude command to switch off, and
-# off_skills = ["name"]           # built-in skills; /plugin and /skills in a session list them
+# builtin_skills = ["simplify"]   # skills built into the Claude command to keep; all are off
+#                                 # otherwise (/context in a session lists them)
+# off_plugins = ["name@builtin"]  # plugins built into the Claude command to switch off
 # memory = true                   # let sessions use the Claude command's own project memory
 # subagents = true                # let sessions use the Claude command's own subagents (the Agent
 #                                 # tool); without it work is handed over with spawn_agent
