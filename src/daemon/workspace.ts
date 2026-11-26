@@ -93,7 +93,7 @@ import {
   SESSION,
   spawnPoolWindow,
 } from "../tmux/layout.ts";
-import { parseStatusline, reduceHook, snippet, wholeDetail } from "./activity.ts";
+import { parseStatusline, reduceHook, sessionLine, snippet, wholeDetail } from "./activity.ts";
 import type { AgentRow, Store } from "./db.ts";
 import { reportSuffix } from "./delegation.ts";
 import { WorkspaceError } from "./errors.ts";
@@ -694,11 +694,13 @@ export class Workspace {
     this.deps.store.addEvent({ agentId, at: this.now(), event: "Progress", summary: text });
   }
 
-  /** Stores the figures from a session's statusline. */
-  statusline(request: StatuslineRequest): void {
-    if (!this.deps.store.getRunning(request.agentId)) return;
+  /** Stores the figures from a session's statusline and returns the line the session shows. */
+  statusline(request: StatuslineRequest): string {
+    const row = this.deps.store.getRunning(request.agentId);
+    if (!row) return "";
     const telemetry = parseStatusline(request.data, this.now());
     if (telemetry) this.telemetry.set(request.agentId, telemetry);
+    return sessionLine(row.role, this.telemetry.get(request.agentId) ?? null);
   }
 
   /** Shows a short message in the attached terminal, e.g. why a shortcut did nothing. */

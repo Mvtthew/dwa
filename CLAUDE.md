@@ -17,7 +17,7 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - Never touch the user's own tmux server or config. All tmux calls go to the private server (`tmux -L dwa -f <generated conf>`).
 - Never write to `~/.claude` or the project's `.claude/settings.json`. Per-session settings are generated under `.dwa/run/` and passed with `--settings` and `--mcp-config`.
 - Agent state comes from hooks and the statusline JSON, not from reading the screen.
-- Sessions are isolated from the user's own Claude setup (`--setting-sources project,local`, `--strict-mcp-config`, and the generated settings; see docs/spikes.md, S5). Whatever a session gets must come from the project's Claude files or from dwa configuration, and `dwa statusline` prints nothing.
+- Sessions are isolated from the user's own Claude setup (`--setting-sources project,local`, `--strict-mcp-config`, and the generated settings; see docs/spikes.md, S5). Whatever a session gets must come from the project's Claude files or from dwa configuration, and `dwa statusline` prints only the one line the daemon gives it (`sessionLine` in `src/daemon/activity.ts`): Claude Code keeps a row for the status line even when it is empty.
 - A role is a `.dwa/roles/<role>.toml` file. `.claude/agents/` is not read, and `--agent` is not used: the role's prompt is appended to the system prompt.
 - A new capability field goes into `capabilityFields` only; `resolveSession` is the one place that decides what a session gets, and a spawn made by an agent (`narrowOnly`) may only take away.
 - Built-in tools and skills are given, never assumed: a session has the tools of its `tools` list or `DEFAULT_TOOLS` (`listedTools` in `src/shared/capabilities.ts`; `deny_tools` takes away from that list, `"*"` is the only way to every tool) and no built-in skill unless `builtin_skills` names it. Do not add a tool to `DEFAULT_TOOLS` for convenience: each one is sent with every request of every session (docs/spikes.md, S9). `BUILTIN_SKILLS` and `BUILTIN_TOOLS` are the Claude command's names at one version; the `Skill` check of the hook (`skillRefusal`, `skills.json`, written from `ResolvedSession.allowedSkills`) is what holds when they change, so keep it independent of those lists.
@@ -50,7 +50,7 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - `src/tmux/` private-server driver, generated config, layout operations
 - `src/providers/` the provider interface and the Claude Code launch command
 - `src/daemon/activity.ts` turns hook events and statusline JSON into agent activity and telemetry
-- `src/cli/hook.ts` holds the `hook` and `statusline` commands Claude Code runs in every session; keep it fast, silent and free of heavy imports
+- `src/cli/hook.ts` holds the `hook` and `statusline` commands Claude Code runs in every session; keep it fast, free of heavy imports and silent apart from what its comments name
 - `src/ui/` OpenTUI panes: `model.ts` is pure view logic, `agents.ts` and `status.ts` draw it; `wizard.ts` is the form engine for the popups and `wizards.ts` their screens, the menu included (no terminal code); `theme.ts` holds the colours; test with `createTestRenderer` from `@opentui/core/testing`
 - `src/daemon/messaging.ts` messages and questions: delivery through the mailbox hook with a paste fallback, questions that never expire
 - `src/mcp/server.ts` the MCP server each session runs for the dwa tools; stateless, every tool is a daemon request

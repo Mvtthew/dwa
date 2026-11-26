@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
+import { contextText } from "../src/shared/context.ts";
 import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../src/shared/protocol.ts";
 import { createAgentsView } from "../src/ui/agents.ts";
 import {
@@ -59,6 +60,7 @@ function workspace(agents: AgentInfo[], main: Partial<AgentInfo> = {}): Workspac
 const NOW = Date.UTC(2026, 10, 24, 18, 0, 0);
 const telemetry = {
   contextPercent: 41,
+  contextSize: 200000,
   costUsd: 0.7,
   model: "Opus 5.5",
   fiveHour: { usedPercent: 19, resetsAt: NOW / 1000 + 2 * 3600 + 5 * 60 },
@@ -150,7 +152,8 @@ describe("model", () => {
     );
     const model = statusModel(state, NOW);
     expect(model.subject?.name).toBe("b");
-    expect(model.context.percent).toBeNull();
+    // The context shown is always main's, whoever is selected; the cost is the selected agent's.
+    expect(model.context).toEqual({ label: "main context", percent: 41, note: "41%/200k" });
     expect(model.cost).toBeNull();
     // Limits are per account, so they come from main even though b is selected.
     expect(model.limits.map((limit) => [limit.percent, limit.note])).toEqual([
@@ -159,6 +162,16 @@ describe("model", () => {
     ]);
     expect(model.counts).toEqual({ working: 1, idle: 0, needsYou: 1, total: 2 });
     expect(model.waiting).toEqual([{ name: "b", detail: null }]);
+  });
+});
+
+describe("contextText", () => {
+  test("says the part in use and the size of the window", () => {
+    expect(contextText(5, 1_000_000)).toBe("5%/1M");
+    expect(contextText(0.1, 1_000_000)).toBe("0.1%/1M");
+    expect(contextText(41.4, 200_000)).toBe("41%/200k");
+    expect(contextText(41, null)).toBe("41%");
+    expect(contextText(null, 200_000)).toBeNull();
   });
 });
 

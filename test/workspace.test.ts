@@ -914,11 +914,11 @@ describe("live state", () => {
 
   test("statusline data becomes telemetry", async () => {
     const { main } = await workspace.up();
-    workspace.statusline({
+    const line = workspace.statusline({
       agentId: main?.id ?? "",
       data: {
         model: { id: "claude-fable-5-2", display_name: "Fable 5.2" },
-        context_window: { used_percentage: 41 },
+        context_window: { used_percentage: 41, context_window_size: 1000000 },
         cost: { total_cost_usd: 0.7 },
         rate_limits: {
           five_hour: { used_percentage: 9, resets_at: 1795559400 },
@@ -928,11 +928,15 @@ describe("live state", () => {
     });
     expect((await workspace.state()).main?.telemetry).toMatchObject({
       contextPercent: 41,
+      contextSize: 1000000,
       costUsd: 0.7,
       model: "Fable 5.2",
       fiveHour: { usedPercent: 9, resetsAt: 1795559400 },
       sevenDay: { usedPercent: 12, resetsAt: 1795766400 },
     });
+    // The session's own status line: the row is there anyway, so it says what is known.
+    expect(line).toBe("Fable 5.2 · context 41%/1M · $0.70");
+    expect(workspace.statusline({ agentId: "nobody", data: {} })).toBe("");
   });
 
   test("missing statusline fields are null, not guessed", async () => {

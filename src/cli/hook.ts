@@ -134,14 +134,19 @@ export async function hookCommand(
 }
 
 /**
- * `dwa statusline`: sends the statusline JSON to the daemon and prints nothing. A session's
- * status line stays empty on purpose: the user's own status line is not carried into the
- * workspace, and what it would show is in the status pane.
+ * `dwa statusline`: sends the statusline JSON to the daemon and prints the one line the daemon
+ * answers with (the session's role, model, context and cost). Claude Code keeps a row for the
+ * status line even when nothing is printed, so the row is used; the user's own status line is
+ * not carried into the workspace. Without a daemon nothing is printed.
  */
 export async function statuslineCommand(env: Env = process.env): Promise<number> {
   const data = parse(await Bun.stdin.text());
   const agentId = env.DWA_AGENT_ID;
-  if (agentId) await post(env, "/statusline", { agentId, data });
+  if (!agentId) return 0;
+  const answer = (await post(env, "/statusline", { agentId, data })) as { line?: unknown } | null;
+  // One line only: more would take rows from the session.
+  const line = typeof answer?.line === "string" ? answer.line.split("\n")[0] : "";
+  if (line) console.log(line);
   return 0;
 }
 

@@ -108,7 +108,7 @@ const MAILBOX_EVENTS: readonly string[] = ["SessionStart", "Stop"];
 /**
  * Settings passed with `--settings`: hooks for state, the mailbox hook for incoming messages
  * (an `asyncRewake` hook, which wakes even an idle session; see docs/spikes.md, S3), a
- * statusline command for telemetry (it prints nothing, so the session shows no status line),
+ * statusline command for telemetry (it prints one line about the session: the row is there anyway),
  * the role's permission rules with the dwa tools always allowed, and the two things the launch
  * flags cannot keep out: the user's personal instructions and project skills the role does not list.
  */

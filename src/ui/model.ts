@@ -1,6 +1,7 @@
 // Pure functions that turn workspace state into what the panes show. No terminal code here,
 // so everything is unit-tested without a renderer.
 import { MAX_VISIBLE_AGENTS } from "../shared/constants.ts";
+import { contextText } from "../shared/context.ts";
 import type {
   AgentActivity,
   AgentInfo,
@@ -268,7 +269,7 @@ export interface Meter {
 }
 
 export interface StatusModel {
-  /** The session the figures belong to: the open agent, otherwise main. */
+  /** The session the status, model and cost belong to: the open agent, otherwise main. */
   subject: AgentInfo | null;
   subjectStyle: ActivityStyle | null;
   model: string | null;
@@ -298,6 +299,7 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
   const everyone = [...(state.main ? [state.main] : []), ...state.agents];
   const subject = state.agents.find((agent) => agent.open) ?? state.main;
   const telemetry = subject?.telemetry ?? null;
+  const main = state.main?.telemetry ?? null;
   // Usage limits belong to the account, so the freshest report from any session will do.
   const freshest = everyone
     .map((agent) => agent.telemetry)
@@ -309,7 +311,12 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
     subjectStyle: subject ? agentStyle(subject) : null,
     model: telemetry?.model ?? null,
     cost: telemetry?.costUsd == null ? null : `$${telemetry.costUsd.toFixed(2)}`,
-    context: { label: "context", percent: telemetry?.contextPercent ?? null, note: null },
+    // Always the main session's: an agent's own is on the status line of its pane.
+    context: {
+      label: subject && subject !== state.main ? "main context" : "context",
+      percent: main?.contextPercent ?? null,
+      note: contextText(main?.contextPercent ?? null, main?.contextSize ?? null),
+    },
     limits: [
       limitMeter("5 hours", freshest?.fiveHour, nowMs),
       limitMeter("7 days", freshest?.sevenDay, nowMs),

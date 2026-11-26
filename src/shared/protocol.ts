@@ -29,6 +29,8 @@ export interface UsageLimit {
 /** Figures Claude Code reports through the statusline; null when not reported. */
 export interface Telemetry {
   contextPercent: number | null;
+  /** The size of the context window in tokens. */
+  contextSize: number | null;
   costUsd: number | null;
   model: string | null;
   fiveHour: UsageLimit | null;

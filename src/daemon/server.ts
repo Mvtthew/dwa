@@ -154,8 +154,7 @@ export function startServer(options: ServerOptions) {
       case "POST /hook":
         return json({ ok: true, ...workspace.hook(await body<HookRequest>(request)) });
       case "POST /statusline":
-        workspace.statusline(await body<StatuslineRequest>(request));
-        return json({ ok: true });
+        return json({ line: workspace.statusline(await body<StatuslineRequest>(request)) });
       case "POST /messages": {
         const input = await body<{ from?: string; to?: string; body?: string }>(request);
         return json(messaging.send(sender(input.from), text(input.to, "to"), input.body ?? ""));

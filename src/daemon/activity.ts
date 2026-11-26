@@ -1,3 +1,4 @@
+import { contextText } from "../shared/context.ts";
 import type { AgentActivity, Telemetry } from "../shared/protocol.ts";
 import { approvesOwnTool } from "../shared/tools.ts";
 
@@ -111,6 +112,22 @@ function limit(value: unknown): Telemetry["fiveHour"] {
   return { usedPercent, resetsAt: number(resets_at) };
 }
 
+/**
+ * What a session's own status line says: its role, the model, how full the context is and the
+ * cost so far, each only when known. Claude Code keeps a row for the status line whether or not
+ * the command prints (docs/spikes.md, S5), so the row says something.
+ */
+export function sessionLine(role: string | null, telemetry: Telemetry | null): string {
+  const context = contextText(telemetry?.contextPercent ?? null, telemetry?.contextSize ?? null);
+  const parts = [
+    role,
+    telemetry?.model ?? null,
+    context === null ? null : `context ${context}`,
+    telemetry?.costUsd == null ? null : `$${telemetry.costUsd.toFixed(2)}`,
+  ];
+  return parts.filter((part) => part !== null && part !== "").join(" · ");
+}
+
 /** Picks the fields dwa shows out of the statusline JSON Claude Code sends every few seconds. */
 export function parseStatusline(data: unknown, now: number): Telemetry | null {
   if (typeof data !== "object" || data === null) return null;
@@ -118,6 +135,7 @@ export function parseStatusline(data: unknown, now: number): Telemetry | null {
   const model = input.model;
   return {
     contextPercent: number(input.context_window?.used_percentage),
+    contextSize: number(input.context_window?.context_window_size),
     costUsd: number(input.cost?.total_cost_usd),
     model: typeof model === "object" ? (text(model.display_name) ?? text(model.id)) : text(model),
     fiveHour: limit(input.rate_limits?.five_hour),
