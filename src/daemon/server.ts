@@ -150,8 +150,10 @@ export function startServer(options: ServerOptions) {
       case "POST /agents/refresh":
         return json(await workspace.refresh(await body<RefreshRequest>(request)));
       case "POST /agents/restart": {
-        const input = await body<{ target?: string; when?: RestartWhen }>(request);
-        return json({ applied: await workspace.restart(requireTarget(input), input.when) });
+        const input = await body<{ target?: string; when?: RestartWhen; from?: string }>(request);
+        return json({
+          applied: await workspace.restart(requireTarget(input), input.when, input.from),
+        });
       }
       case "POST /agents/stop": {
         const input = await body<{ target?: unknown; from?: string }>(request);

@@ -868,8 +868,10 @@ export class Workspace {
         this.markStopped(row.id);
         continue;
       }
+      const spawner = store.handover(row.id)?.spawnedBy;
       live.push({
         ...row,
+        ...(spawner ? { startedBy: store.getAgentName(spawner) ?? spawner } : {}),
         telemetry: this.telemetry.get(row.id) ?? null,
         waitingOn: null,
         open: row.kind === "agent" && pane.inWorkspace,
@@ -1421,10 +1423,20 @@ export class Workspace {
     });
   }
 
-  /** Restarts a session with its conversation, whether or not anything changed for it. */
-  restart(target: string, when: RestartWhen = "now"): Promise<Applied> {
+  /**
+   * Restarts a session with its conversation, whether or not anything changed for it. Asked
+   * by an agent (`from`, its id) it is any session but the main one and its own: those two
+   * hold the conversation the request came from, and are the user's to restart.
+   */
+  restart(target: string, when: RestartWhen = "now", from?: string): Promise<Applied> {
     return this.serial(async () => {
       const agent = this.findSession(await this.requireUp(), target);
+      if (from !== undefined && agent.kind === "main") {
+        throw new WorkspaceError("The main session is restarted by the user, not by an agent.");
+      }
+      if (from !== undefined && agent.id === from) {
+        throw new WorkspaceError("A session cannot restart itself.");
+      }
       if (when === "turn-end" && isBusy(agent)) {
         this.deps.store.setPendingRestart(agent.id, true);
         return "pending";
@@ -1682,7 +1694,12 @@ export class Workspace {
       mcpConfigPath,
       JSON.stringify(
         provider.buildMcpConfig(
-          { command, args: [...args, "mcp"], env: this.paneEnv(agentId) },
+          {
+            command,
+            args: [...args, "mcp"],
+            // A leader's server offers the tools for leading; the others are not sent them.
+            env: { ...this.paneEnv(agentId), ...(session.leader ? { DWA_LEADER: "1" } : {}) },
+          },
           session,
           { ...this.pluginMcpServers(session), ...this.projectMcpServers(session) },
         ),

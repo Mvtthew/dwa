@@ -15,6 +15,16 @@ type Handler = (body: Record<string, unknown>) => unknown;
 let calls: Call[];
 let routes: Record<string, Handler>;
 let client: Client;
+let api: Api;
+
+/** A client of the server as a leader's session has it. */
+async function leaderClient(): Promise<Client> {
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await createMcpServer("main-id", api, { leader: true }).connect(serverSide);
+  const leader = new Client({ name: "test", version: "0" });
+  await leader.connect(clientSide);
+  return leader;
+}
 
 const run: WorkflowRunInfo = {
   id: 4,
@@ -45,7 +55,7 @@ function agent(id: string, name: string, activity: AgentInfo["activity"]): Agent
 beforeEach(async () => {
   calls = [];
   routes = {};
-  const api: Api = async <T>(method: string, path: string, body?: unknown) => {
+  api = async <T>(method: string, path: string, body?: unknown) => {
     calls.push({ method, path, body });
     const handler = routes[`${method} ${path}`];
     if (!handler) throw new ApiError(`no route ${method} ${path}`);
@@ -120,7 +130,7 @@ describe("the dwa tools", () => {
 describe("the connection", () => {
   test("the daemon is told when a session has connected, and only then", async () => {
     const seen: Call[] = [];
-    const api: Api = async <T>(method: string, path: string, body?: unknown) => {
+    api = async <T>(method: string, path: string, body?: unknown) => {
       seen.push({ method, path, body });
       return {} as T;
     };
@@ -338,5 +348,66 @@ describe("workflows", () => {
     expect((await use("edit_workflow", { run_id: 4, definition: "same" })).text).toBe(
       "Nothing changed: the definition is the same.",
     );
+  });
+});
+
+describe("the tools of a session that leads", () => {
+  const text = async (leader: Client, name: string, args: Record<string, unknown> = {}) => {
+    const result = await leader.callTool({ name, arguments: args });
+    return (result.content as { text: string }[])[0]?.text ?? "";
+  };
+
+  test("are two more, which the other sessions are not sent", async () => {
+    const leader = await leaderClient();
+    const names = (await leader.listTools()).tools.map((tool) => tool.name);
+    const others = (await client.listTools()).tools.map((tool) => tool.name);
+    expect(names.filter((name) => !others.includes(name)).sort()).toEqual([
+      "cancel_workflow",
+      "restart_agent",
+    ]);
+    expect(others.filter((name) => !names.includes(name))).toEqual([]);
+  });
+
+  test("list_agents says who started an agent, its task and what it has used", async () => {
+    routes["GET /state"] = () => ({
+      main: agent("main-id", "main", "idle"),
+      agents: [
+        {
+          ...agent("a", "scout", "working"),
+          role: "explore",
+          startedBy: "main",
+          task: 'Find the parser.\nIt is somewhere in src.\n\n---\n[dwa] "main" started you',
+          telemetry: { contextPercent: 41.6, costUsd: 0.257 },
+          outOfDate: true,
+        },
+        agent("b", "plain", "idle"),
+      ],
+    });
+    expect(await text(await leaderClient(), "list_agents")).toBe(
+      [
+        "main: idle  (you)",
+        "scout (explore): working · started by main · context 42% · $0.26 · behind its role's files",
+        "  task: Find the parser.",
+        "plain: idle",
+      ].join("\n"),
+    );
+  });
+
+  test("restart_agent and cancel_workflow ask the daemon as the leader", async () => {
+    routes["POST /agents/restart"] = (body) => ({
+      applied: body.when === "turn-end" ? "pending" : "restarted",
+    });
+    routes["POST /workflows/cancel"] = () => ({ ...run, state: "cancelled" });
+    const leader = await leaderClient();
+    expect(await text(leader, "restart_agent", { name: "scout" })).toBe('Restarted "scout".');
+    expect(await text(leader, "restart_agent", { name: "scout", when: "turn-end" })).toBe(
+      '"scout" restarts when its turn ends.',
+    );
+    expect(await text(leader, "cancel_workflow", { run_id: 4 })).toContain("cancelled");
+    expect(calls.map((call) => [call.path, call.body])).toEqual([
+      ["/agents/restart", { target: "scout", when: "now", from: "main-id" }],
+      ["/agents/restart", { target: "scout", when: "turn-end", from: "main-id" }],
+      ["/workflows/cancel", { id: 4 }],
+    ]);
   });
 });

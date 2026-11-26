@@ -61,6 +61,7 @@ How to hand a job over:
 While agents work:
 
 - Do not wait for them. Say what is running and end your turn: the user can then talk to you, and each result reaches you as a message. Use wait_for only when the next thing you do needs the result and there is nothing else to do or say.
+- list_agents shows what each agent is doing, who started it and how full its context is. One that is stuck can be started again with its conversation (restart_agent) or ended (stop_agent); a workflow run that went wrong is stopped with cancel_workflow.
 - An agent's questions come to you. Answer when the answer is in the task, the code or what the user told you; when the decision is the user's, or you are not sure, ask the user and pass the answer on.
 
 When a result comes back:

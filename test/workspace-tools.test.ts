@@ -493,6 +493,43 @@ describe("save globally", () => {
   });
 });
 
+describe("a restart asked for by an agent", () => {
+  test("is any session but the main one and its own", async () => {
+    await workspace.up();
+    const main = (await workspace.state()).main as AgentInfo;
+    const scout = await workspace.spawn({ name: "scout", role: "explore" });
+    idle(scout);
+    expect(await workspace.restart("scout", "now", main.id)).toBe("restarted");
+    await expect(workspace.restart("main", "now", scout.id)).rejects.toThrow(
+      "restarted by the user",
+    );
+    await expect(workspace.restart("scout", "now", scout.id)).rejects.toThrow(
+      "cannot restart itself",
+    );
+    // The user restarts whichever they like.
+    expect(await workspace.restart("main")).toBe("restarted");
+  });
+
+  test("only the leader's server is told that it leads, and agents say who started them", async () => {
+    await workspace.up();
+    const main = (await workspace.state()).main as AgentInfo;
+    const scout = await workspace.spawn({
+      name: "scout",
+      role: "explore",
+      task: "Look.",
+      from: main.id,
+    });
+    const mcp = (id: string) =>
+      JSON.parse(readFileSync(join(dir, ".dwa", "run", "agents", id, "mcp.json"), "utf8"))
+        .mcpServers.dwa.env;
+    expect(mcp(main.id).DWA_LEADER).toBe("1");
+    expect(mcp(scout.id).DWA_LEADER).toBeUndefined();
+    const state = await workspace.state();
+    expect(state.agents[0]?.startedBy).toBe("main");
+    expect(state.main?.startedBy).toBeUndefined();
+  });
+});
+
 describe("the leader mode switch", () => {
   const personal = () => join(dir, "home", "dwa", "config.toml");
   const prompt = () =>

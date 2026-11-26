@@ -34,6 +34,21 @@ function reply(text: string, isError = false) {
   return { content: [{ type: "text" as const, text }], isError };
 }
 
+/** One line as a leader sees it: also who started the session, its task and what it has used. */
+export function describeAgentFully(agent: AgentInfo): string {
+  const parts = [describeAgent(agent)];
+  if (agent.startedBy) parts.push(`started by ${agent.startedBy}`);
+  const context = agent.telemetry?.contextPercent;
+  if (context != null) parts.push(`context ${Math.round(context)}%`);
+  const cost = agent.telemetry?.costUsd;
+  if (cost != null) parts.push(`$${cost.toFixed(2)}`);
+  if (agent.outOfDate) parts.push("behind its role's files");
+  const line = parts.join(" · ");
+  const task = agent.task?.split("\n---\n")[0]?.trim().split("\n")[0];
+  if (!task) return line;
+  return `${line}\n  task: ${task.length > 160 ? `${task.slice(0, 159)}…` : task}`;
+}
+
 export function describeAgent(agent: AgentInfo): string {
   const parts = [agent.activity.replace("_", " ")];
   if (agent.waitingOn) parts.push(`waiting on ${agent.waitingOn}`);
@@ -59,7 +74,12 @@ function askedYou(name: string, asked: QuestionInfo): string {
 export type Api = <T>(method: "GET" | "POST", path: string, body?: unknown) => Promise<T>;
 
 /** The dwa tools as an MCP server, for the agent with this id. Not yet connected to a transport. */
-export function createMcpServer(agentId: string, api: Api): McpServer {
+export interface McpOptions {
+  /** The session leads: it gets the tools for leading, and more about each agent. */
+  leader?: boolean;
+}
+
+export function createMcpServer(agentId: string, api: Api, options: McpOptions = {}): McpServer {
   /** Runs a tool body and turns a daemon error into a tool error the model can read. */
   const tool = async (run: () => Promise<string>) => {
     try {
@@ -96,9 +116,11 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
       tool(async () => {
         const state = await api<WorkspaceState>("GET", "/state");
         const everyone = [...(state.main ? [state.main] : []), ...state.agents];
-        const lines = everyone.map(
-          (agent) => `${describeAgent(agent)}${agent.id === agentId ? "  (you)" : ""}`,
-        );
+        const describe = options.leader ? describeAgentFully : describeAgent;
+        const lines = everyone.map((agent) => {
+          const [first = "", ...rest] = describe(agent).split("\n");
+          return [`${first}${agent.id === agentId ? "  (you)" : ""}`, ...rest].join("\n");
+        });
         return lines.join("\n") || "No sessions are running.";
       }),
   );
@@ -313,6 +335,52 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
         return `Stopped agent "${agent.name}".`;
       }),
   );
+
+  if (options.leader) {
+    server.registerTool(
+      "restart_agent",
+      {
+        description:
+          "Start another agent's session again with its conversation kept: for an agent that is stuck, or one list_agents shows as behind its role's files. Not for the main session or yourself.",
+        inputSchema: {
+          name: z.string(),
+          when: z
+            .enum(["now", "turn-end"])
+            .optional()
+            .describe(
+              "turn-end waits until the agent has finished what it is doing; the default is now.",
+            ),
+        },
+      },
+      ({ name, when }) =>
+        tool(async () => {
+          const { applied } = await api<{ applied: string }>("POST", "/agents/restart", {
+            target: name,
+            when: when ?? "now",
+            from: agentId,
+          });
+          return applied === "pending"
+            ? `"${name}" restarts when its turn ends.`
+            : `Restarted "${name}".`;
+        }),
+    );
+
+    server.registerTool(
+      "cancel_workflow",
+      {
+        description:
+          "Stop a workflow run in progress. Its running steps' agents are stopped and no further step starts; what finished steps produced stays readable with workflow_status.",
+        inputSchema: { run_id: z.number().int() },
+      },
+      ({ run_id }) =>
+        tool(async () =>
+          describeRun(
+            await api<WorkflowRunInfo>("POST", "/workflows/cancel", { id: run_id }),
+            true,
+          ),
+        ),
+    );
+  }
 
   server.registerTool(
     "finish_task",
@@ -555,7 +623,7 @@ export async function runMcp(env: Env = process.env): Promise<void> {
     return data;
   };
 
-  const server = createMcpServer(agentId, api);
+  const server = createMcpServer(agentId, api, { leader: env.DWA_LEADER === "1" });
   reportReady(server, agentId, api);
   await server.connect(new StdioServerTransport());
 }

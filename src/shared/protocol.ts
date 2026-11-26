@@ -64,6 +64,8 @@ export interface AgentInfo {
    * report it, so an idle moment is not yet its last word.
    */
   reportDue?: boolean;
+  /** The name of the session that started this one with `spawn_agent`, when one did. */
+  startedBy?: string;
   /** True when this agent's session is the pane shown under the main session. */
   open: boolean;
   /** What the session was started with; null for one started before this was recorded. */
