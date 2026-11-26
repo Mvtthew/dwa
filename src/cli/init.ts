@@ -60,6 +60,10 @@ export const CONFIG_TEMPLATE = `# ${APP_NAME} project configuration. Personal se
 model = "opus"
 effort = "medium"       # low, medium, high, xhigh or max
 # leader = false
+# While it leads it is reminded (never refused) when it does a lot itself in one turn: many
+# reads and searches, edits to several files, web lookups, or a test, build or lint command.
+# Name the commands that count as checks here when the usual ones do not fit; [] for none.
+# check_commands = ["bun test", "bun run check"]
 
 # What every session gets unless its role says otherwise. A role's own value wins, and a value
 # given for one agent or workflow step wins over the role.

@@ -805,6 +805,55 @@ skills = ["review", "house-style"]
     expect(other).toContain("Do quick searches and reads yourself.");
   });
 
+  test("a leading main session is reminded when it does a lot itself, an agent never", async () => {
+    roles = { explore: "", runner: "" };
+    await workspace.up();
+    const call = (agentId: string, tool: string, input: unknown = {}) =>
+      workspace.hook({
+        agentId,
+        event: "PostToolUse",
+        input: { tool_name: tool, tool_input: input },
+      });
+    const reads = (agentId: string, count: number) =>
+      Array.from({ length: count }, () => call(agentId, "Read").context);
+
+    const first = reads("id-1", 9);
+    expect(first.slice(0, 7).every((context) => context === undefined)).toBe(true);
+    expect(first[7]).toContain("an agent (role explore) with spawn_agent");
+    expect(first[8]).toBeUndefined();
+    expect(call("id-1", "Bash", { command: "bun test" }).context).toContain("role runner");
+    // A failed run is a run too.
+    workspace.hook({ agentId: "id-1", event: "Stop", input: {} });
+    const failed = workspace.hook({
+      agentId: "id-1",
+      event: "PostToolUseFailure",
+      input: { tool_name: "Bash", tool_input: { command: "bun test" } },
+    });
+    expect(failed.context).toContain("role runner");
+
+    // The next turn starts from nothing, and handing work over ends the reminders for a turn.
+    workspace.hook({ agentId: "id-1", event: "UserPromptSubmit", input: {} });
+    expect(reads("id-1", 7).every((context) => context === undefined)).toBe(true);
+    call("id-1", "mcp__dwa__spawn_agent");
+    expect(reads("id-1", 5).every((context) => context === undefined)).toBe(true);
+
+    const explore = await workspace.spawn({ role: "explore" });
+    expect(reads(explore.id, 12).every((context) => context === undefined)).toBe(true);
+  });
+
+  test("a main session that does not lead is not reminded", async () => {
+    config = { ...config, main: { leader: false } };
+    await workspace.up();
+    for (let i = 0; i < 12; i++) {
+      const reply = workspace.hook({
+        agentId: "id-1",
+        event: "PostToolUse",
+        input: { tool_name: "Read", tool_input: {} },
+      });
+      expect(reply.context).toBeUndefined();
+    }
+  });
+
   test("with leader mode off the main session is an ordinary one", async () => {
     config = { ...config, main: { leader: false } };
     roles = { explore: 'description = "Reads the code."', main: 'prompt = "My rules."' };

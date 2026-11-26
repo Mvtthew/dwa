@@ -64,6 +64,12 @@ const MainSchema = z.strictObject({
    * and workflows to do it with. On unless this is false.
    */
   leader: z.boolean().optional(),
+  /**
+   * How the commands that run this project's checks start ("bun test", "make lint"). A main
+   * session that leads is reminded of the runner when it runs one itself. Without the key the
+   * usual test, build and lint commands count; an empty list turns that reminder off.
+   */
+  check_commands: z.array(z.string().min(1)).optional(),
 });
 
 /** An MCP server roles can list by name. The fields are those of Claude Code's MCP config. */

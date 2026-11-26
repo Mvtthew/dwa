@@ -27,6 +27,7 @@ import {
   resolveProfile,
 } from "../shared/config.ts";
 import { APP_NAME, DEFAULT_KEY_PREFIX } from "../shared/constants.ts";
+import { afterCall, type NudgeState, newTurn, nudgeText } from "../shared/nudge.ts";
 import { expandPath, projectConfigPath, userConfigPath } from "../shared/paths.ts";
 import type {
   AgentInfo,
@@ -62,6 +63,7 @@ import {
   findRole,
   findSkill,
   isRoleFile,
+  listRoles,
   missingOnThisMachine,
   type ResolvedSession,
   type ResolvedSkill,
@@ -264,6 +266,10 @@ export class Workspace {
   private readonly capabilities = new Map<string, SessionSummary | null>();
   /** What to tell a session once it is back after a restart or a change, by agent id. */
   private readonly notes = new Map<string, string>();
+  /** What a leading main session has done itself in its current turn, by session id. */
+  private readonly nudges = new Map<string, NudgeState>();
+  /** `[main] check_commands`: undefined until read, null when the config has none. */
+  private checkCommands: string[] | null | undefined;
   /** Tool names of MCP servers, by server definition; null when the server did not answer. */
   private readonly serverTools = new Map<string, { at: number; tools: string[] | null }>();
   /** Ids of the sessions whose files changed since their start, and when that was worked out. */
@@ -724,7 +730,41 @@ export class Workspace {
   }
 
   /** Applies a lifecycle event reported by a session's hook. Unknown or stopped agents are ignored. */
-  hook(request: HookRequest): { deny?: string } {
+  /**
+   * The reminder a leading main session gets after a tool call, when it has done a lot itself
+   * in this turn (`src/shared/nudge.ts`). Nothing for any other session.
+   */
+  private nudge(row: AgentRow, event: string, input: Record<string, unknown>): string | undefined {
+    if (row.kind !== "main") return undefined;
+    // A turn starts with a prompt and ends with Stop; a turn a message wakes has no prompt.
+    if (event === "UserPromptSubmit" || event === "Stop") this.nudges.delete(row.id);
+    // A start may follow a change of the config, so the commands are read again.
+    if (event === "SessionStart") this.checkCommands = undefined;
+    const finished = event === "PostToolUse" || event === "PostToolUseFailure";
+    if (!finished || typeof input.tool_name !== "string") return undefined;
+    if (!parseJson<ResolvedSession>(this.deps.store.getLaunch(row.id))?.leader) return undefined;
+    if (this.checkCommands === undefined) {
+      // Read once; until it is there the usual commands count.
+      this.checkCommands = null;
+      this.deps
+        .loadConfig()
+        .then((config) => {
+          this.checkCommands = config.main.check_commands ?? null;
+        })
+        .catch(() => undefined);
+    }
+    const { state, kind } = afterCall(
+      this.nudges.get(row.id) ?? newTurn(),
+      { tool: input.tool_name, input: input.tool_input },
+      this.checkCommands ?? undefined,
+    );
+    this.nudges.set(row.id, state);
+    if (!kind) return undefined;
+    const roles = listRoles(this.roleContext()).map((role) => role.name);
+    return nudgeText(kind, roles);
+  }
+
+  hook(request: HookRequest): { deny?: string; context?: string } {
     const { store } = this.deps;
     const row = store.getRunning(request.agentId);
     if (!row) return {};
@@ -773,7 +813,8 @@ export class Workspace {
       const reason = blockedReason(input.tool_name, blocks);
       if (reason) return { deny: reason };
     }
-    return {};
+    const context = this.nudge(row, request.event, input);
+    return context ? { context } : {};
   }
 
   /** The workflows a run can be started from, for a leader's prompt; none when they cannot be read. */

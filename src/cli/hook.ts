@@ -88,10 +88,26 @@ export function skillVerdict(projectRoot: string, agentId: string, input: unknow
 }
 
 /**
+ * What the hook prints to hand the model the daemon's reminder: `additionalContext`, and only
+ * after a tool call. Null for any other event and without a text.
+ */
+export function reminderOutput(event: string, context: unknown): object | null {
+  if (event !== "PostToolUse" && event !== "PostToolUseFailure") return null;
+  if (typeof context !== "string" || context === "") return null;
+  return { hookSpecificOutput: { hookEventName: event, additionalContext: context } };
+}
+
+/**
  * `dwa hook <event>`: forwards the event JSON from stdin to the daemon. Prints nothing, with
- * two exceptions, both in the form Claude Code reads: on `PreToolUse` the refusal of a tool that
- * was switched off for the session after it started or of a skill the session was not given, and on `PermissionRequest` the approval of
- * one of dwa's own tools in plan mode (`approvesOwnTool`). A refused call never gets that far.
+ * three exceptions, all in the form Claude Code reads: on `PreToolUse` the refusal of a tool
+ * that was switched off for the session after it started or of a skill the session was not
+ * given; on `PermissionRequest` the approval of one of dwa's own tools in plan mode
+ * (`approvesOwnTool`), which a refused call never gets as far as; and after a tool call
+ * (`PostToolUse`, `PostToolUseFailure`) the reminder the daemon has for a main session that
+ * leads and does a lot itself (`context` in its answer). The reminder is `additionalContext`:
+ * the model reads it next to the tool's result, nothing is refused and nothing is shown on
+ * screen (docs/spikes.md, S11). Plain text on stdout would not reach the model, and an exit
+ * code of 2 would look like an error to the user.
  */
 export async function hookCommand(
   event: string | undefined,
@@ -105,7 +121,10 @@ export async function hookCommand(
     event === "PreToolUse" && typeof tool === "string" && env.DWA_PROJECT
       ? localVerdict(env.DWA_PROJECT, agentId, tool)
       : undefined;
-  const reply = (await post(env, "/hook", { agentId, event, input })) as { deny?: unknown } | null;
+  const reply = (await post(env, "/hook", { agentId, event, input })) as {
+    deny?: unknown;
+    context?: unknown;
+  } | null;
   // The session's own list decides; the daemon's answer only when there is no list.
   const blocked = local !== undefined ? local : typeof reply?.deny === "string" ? reply.deny : null;
   const deny =
@@ -129,6 +148,9 @@ export async function hookCommand(
         hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } },
       }),
     );
+  } else {
+    const reminder = reminderOutput(event, reply?.context);
+    if (reminder) console.log(JSON.stringify(reminder));
   }
   return 0;
 }

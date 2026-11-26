@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { localVerdict, skillVerdict } from "../src/cli/hook.ts";
+import { localVerdict, reminderOutput, skillVerdict } from "../src/cli/hook.ts";
 import { approvesOwnTool, skillRefusal } from "../src/shared/tools.ts";
 
 let dir: string;
@@ -86,5 +86,30 @@ describe("permission requests the hook answers itself", () => {
     expect(ask("Bash", "plan")).toBe(false);
     expect(ask(undefined, "plan")).toBe(false);
     expect(approvesOwnTool(null)).toBe(false);
+  });
+});
+
+describe("the reminder for a session that leads", () => {
+  test("is handed to the model after a tool call, as context and never as a refusal", () => {
+    expect(reminderOutput("PostToolUse", "[dwa] Hand it over.")).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        additionalContext: "[dwa] Hand it over.",
+      },
+    });
+    expect(reminderOutput("PostToolUseFailure", "x")).toEqual({
+      hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: "x" },
+    });
+    expect(JSON.stringify(reminderOutput("PostToolUse", "x"))).not.toContain("permissionDecision");
+  });
+
+  test("nothing is printed for another event or without a text", () => {
+    // Before the call the text would come no earlier, and is lost when the user declines.
+    for (const event of ["PreToolUse", "Stop", "UserPromptSubmit", "SessionStart"]) {
+      expect(reminderOutput(event, "x")).toBeNull();
+    }
+    for (const context of [undefined, null, "", 3, {}]) {
+      expect(reminderOutput("PostToolUse", context)).toBeNull();
+    }
   });
 });
