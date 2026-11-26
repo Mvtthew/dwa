@@ -18,7 +18,14 @@ import { openRun } from "./run-screens.ts";
 import { createStatusView } from "./status.ts";
 import { toolsPickScreen, toolsScreen } from "./tool-screens.ts";
 import { createWizard, type Outcome, type Screen } from "./wizard.ts";
-import { agentScreen, menuScreen, type WizardApi, workflowsScreen } from "./wizards.ts";
+import {
+  agentScreen,
+  detailScreen,
+  menuScreen,
+  messagesScreen,
+  type WizardApi,
+  workflowsScreen,
+} from "./wizards.ts";
 import { type DesignDeps, designListScreen, openDesign } from "./workflow-screens.ts";
 import { diskWorkflowStore } from "./workflow-store.ts";
 
@@ -86,6 +93,7 @@ export async function runUi(view: UiView, projectRoot: string): Promise<never> {
             if (action === "focus") return post("/focus");
             if (action === "zoom") return post("/zoom");
             if (action === "detach") return post("/detach");
+            if (action === "clear-messages") return post("/inbox/clear");
             return post("/popup", { kind: action, subject });
           },
         });
@@ -195,15 +203,19 @@ export async function runWizard(
           ? agentScreen(api)
           : kind === "menu"
             ? await menuScreen(api, store(), design)
-            : kind === "tools"
-              ? subject
-                ? await toolsScreen(api, subject)
-                : await toolsPickScreen(api)
-              : kind === "roles"
-                ? subject
-                  ? roleScreen(api, store(), parseRef(subject))
-                  : rolesScreen(api, store())
-                : await workflowsScreen(api, design);
+            : kind === "messages"
+              ? await messagesScreen(api)
+              : kind === "detail"
+                ? await detailScreen(api, subject ?? "main")
+                : kind === "tools"
+                  ? subject
+                    ? await toolsScreen(api, subject)
+                    : await toolsPickScreen(api)
+                  : kind === "roles"
+                    ? subject
+                      ? roleScreen(api, store(), parseRef(subject))
+                      : rolesScreen(api, store())
+                    : await workflowsScreen(api, design);
     }
   } catch (error) {
     console.error((error as Error).message);

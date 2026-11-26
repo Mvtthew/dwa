@@ -200,6 +200,8 @@ const MIGRATIONS = [
    ALTER TABLE agents ADD COLUMN keep INTEGER NOT NULL DEFAULT 0;
    ALTER TABLE agents ADD COLUMN finished_at INTEGER;
    ALTER TABLE agents ADD COLUMN reminders INTEGER NOT NULL DEFAULT 0;`,
+  // The whole of what `detail` is the first line of. Read on request only, never with the rows.
+  "ALTER TABLE agents ADD COLUMN detail_text TEXT;",
 ];
 
 const HANDOVER_COLUMNS = `id, name, state, detail, spawned_by AS spawnedBy, keep,
@@ -380,10 +382,27 @@ export class Store {
     this.db.query("UPDATE agents SET state = 'stopped', stopped_at = ? WHERE id = ?").run(now, id);
   }
 
-  setActivity(id: string, activity: AgentActivity, detail: string | null, now: number): void {
+  /** `whole` is the text `detail` was cut from, when there is more of it than the one line. */
+  setActivity(
+    id: string,
+    activity: AgentActivity,
+    detail: string | null,
+    now: number,
+    whole: string | null = null,
+  ): void {
     this.db
-      .query("UPDATE agents SET activity = ?, detail = ?, activity_since = ? WHERE id = ?")
-      .run(activity, detail, now, id);
+      .query(
+        "UPDATE agents SET activity = ?, detail = ?, activity_since = ?, detail_text = ? WHERE id = ?",
+      )
+      .run(activity, detail, now, whole, id);
+  }
+
+  /** The whole text behind a session's detail line, or null when the line is all there is. */
+  detailText(id: string): string | null {
+    const row = this.db.query("SELECT detail_text AS text FROM agents WHERE id = ?").get(id) as {
+      text: string | null;
+    } | null;
+    return row?.text ?? null;
   }
 
   setProgress(id: string, progress: string | null): void {
@@ -492,14 +511,17 @@ export class Store {
     })();
   }
 
-  /** Latest messages addressed to someone and sent at or after `since`, newest first. */
-  recentMessages(toId: string, limit: number, since = 0): MessageRow[] {
+  /**
+   * Latest messages addressed to someone, sent at or after `since` and with an id above `after`,
+   * newest first.
+   */
+  recentMessages(toId: string, limit: number, since = 0, after = 0): MessageRow[] {
     return this.db
       .query(
         `SELECT ${MESSAGE_COLUMNS} FROM messages
-         WHERE to_id = ? AND created_at >= ? ORDER BY id DESC LIMIT ?`,
+         WHERE to_id = ? AND created_at >= ? AND id > ? ORDER BY id DESC LIMIT ?`,
       )
-      .all(toId, since, limit) as MessageRow[];
+      .all(toId, since, after, limit) as MessageRow[];
   }
 
   addQuestion(question: {

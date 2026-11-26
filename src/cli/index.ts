@@ -64,6 +64,7 @@ Talking to agents
   ask <name> <question>                 Ask an agent and wait for its answer
   answer [id] [text]                    Answer an open question (goes through them when run bare, asks for the text when given only an id)
   inbox                                 Show open questions and messages agents sent to you
+  inbox clear                           Take the messages so far out of that list and the status pane
 
 Workflows
   workflow list                         The project's and your personal workflows, and the runs
@@ -346,7 +347,16 @@ async function main(argv: string[]): Promise<number> {
     }
     case "wizard": {
       const kind = rest[0];
-      const kinds = ["workflows", "agent", "tools", "roles", "design", "menu"] as const;
+      const kinds = [
+        "workflows",
+        "agent",
+        "tools",
+        "roles",
+        "design",
+        "detail",
+        "messages",
+        "menu",
+      ] as const;
       const known = kinds.find((entry) => entry === kind);
       if (!known) {
         console.error(`Usage: ${APP_NAME} wizard <${kinds.join("|")}> [session, role or workflow]`);

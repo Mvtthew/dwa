@@ -894,6 +894,9 @@ describe("live state", () => {
     expect(await activity()).toEqual(["working", null]);
     send("Stop", { last_assistant_message: "\nAll done.\nDetails follow." });
     expect(await activity()).toEqual(["idle", "All done."]);
+    // The dialog of the status pane gets the whole reply, not its first line.
+    const said = await workspace.detailInfo("dev");
+    expect([said.agent.name, said.text]).toEqual(["dev", "All done.\nDetails follow."]);
     send("StopFailure", { error: "Login expired" });
     expect(await activity()).toEqual(["error", "Login expired"]);
 
@@ -1055,6 +1058,14 @@ describe("messaging", () => {
     expect(state.inbox.map((entry) => [entry.from, entry.body])).toEqual([
       ["dev", "done with the fix"],
     ]);
+    // Cleared messages are not shown again; later ones are, and nothing is deleted.
+    workspace.clearInbox();
+    expect((await workspace.state()).inbox).toEqual([]);
+    m.send(dev, "user", "and the tests pass");
+    expect((await workspace.state()).inbox.map((entry) => entry.body)).toEqual([
+      "and the tests pass",
+    ]);
+    expect(store.recentMessages("user", 10).map((row) => row.body)).toContain("done with the fix");
   });
 
   test("ask blocks until the addressed agent answers", async () => {

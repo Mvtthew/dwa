@@ -36,6 +36,7 @@ import type {
   RefreshRequest,
   RefreshResult,
   RestartWhen,
+  SessionDetail,
   SessionRef,
   SpawnRequest,
   StatuslineRequest,
@@ -92,7 +93,7 @@ import {
   SESSION,
   spawnPoolWindow,
 } from "../tmux/layout.ts";
-import { parseStatusline, reduceHook, snippet } from "./activity.ts";
+import { parseStatusline, reduceHook, snippet, wholeDetail } from "./activity.ts";
 import type { AgentRow, Store } from "./db.ts";
 import { reportSuffix } from "./delegation.ts";
 import { WorkspaceError } from "./errors.ts";
@@ -106,6 +107,10 @@ const META_PROFILE = "workspace_profile";
 const META_AGENT_HEIGHT = "agent_height";
 const META_STARTED_AT = "started_at";
 const META_SHELL_PANE = "shell_pane";
+/** The id of the newest message to the user when they last cleared them. */
+const META_INBOX_CLEARED = "inbox_cleared";
+/** Messages to the user a state carries: what the status pane and its dialog show. */
+const INBOX_SIZE = 20;
 const SHELL_NAME = "shell";
 
 /** What a session was asked to be started with; kept so it can be started again the same way. */
@@ -630,10 +635,12 @@ export class Workspace {
       event: request.event,
       summary: change?.detail ?? snippet(input.tool_name) ?? snippet(input.notification_type),
     });
-    if (change && (change.activity !== row.activity || change.detail !== row.detail)) {
+    const whole = change ? wholeDetail(request.event, input) : null;
+    // A reply is stored even when its first line is the same as the one before.
+    if (change && (change.activity !== row.activity || change.detail !== row.detail || whole)) {
       // Keep the time of the last real change, so "idle for 5 min" stays meaningful.
       const since = change.activity === row.activity ? row.activitySince : now;
-      store.setActivity(row.id, change.activity, change.detail, since);
+      store.setActivity(row.id, change.activity, change.detail, since, whole);
     }
     if (request.event === "UserPromptSubmit") store.setHadTurn(row.id, true);
     if (request.event === "SessionStart") {
@@ -778,7 +785,11 @@ export class Workspace {
       agents: live.filter((agent) => agent.kind === "agent"),
       questions,
       // Only messages from this run of the workspace; older ones belong to sessions that are gone.
-      inbox: this.messaging.inbox(5, Number(this.deps.store.getMeta(META_STARTED_AT)) || 0),
+      inbox: this.messaging.inbox(
+        INBOX_SIZE,
+        Number(store.getMeta(META_STARTED_AT)) || 0,
+        Number(store.getMeta(META_INBOX_CLEARED)) || 0,
+      ),
       workflows: workflowRuns(store),
       shell,
     };
@@ -996,6 +1007,23 @@ export class Workspace {
   }
 
   /** What the tools dialog shows for a session. Asking MCP servers may take a moment. */
+  /**
+   * Takes the messages sent to the user so far out of what is shown. Nothing is deleted: only
+   * the point from which messages are listed moves.
+   */
+  clearInbox(): void {
+    const { store } = this.deps;
+    const last = store.lastMessageTo(USER);
+    if (last) store.setMeta(META_INBOX_CLEARED, String(last.id));
+  }
+
+  /** A session and the whole of what its detail line was cut from, for the status dialog. */
+  async detailInfo(target: string): Promise<SessionDetail> {
+    const state = await this.serial(() => this.requireUp());
+    const agent = this.findSession(state, target);
+    return { agent, text: this.deps.store.detailText(agent.id) };
+  }
+
   async toolsInfo(target: string): Promise<ToolsInfo> {
     const state = await this.serial(() => this.requireUp());
     const agent = this.findSession(state, target);

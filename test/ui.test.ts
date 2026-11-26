@@ -210,7 +210,9 @@ describe("questions and messages", () => {
     expect(frame).toContain("Which database should I u…");
     expect(frame).toContain("◷ #4 rev → dev");
     expect(frame).toContain("click, or Ctrl+Q q for all");
-    expect(frame).toContain("MESSAGES TO YOU");
+    expect(frame).toContain("MESSAGES TO YOU 1");
+    expect(frame).toContain("click to read");
+    expect(frame).toContain("▸ Clear messages");
     expect(frame).toContain("from dev  just now");
     expect(frame).toContain("The fix is ready for revi…");
   });
@@ -315,6 +317,39 @@ describe("panes", () => {
     expect(frame).toContain("● working · Bash");
     expect(frame).toContain("▸2 dev developer");
     expect(frame).toContain("◆ needs you · permission: Ba…");
+  });
+
+  test("the agents pane keeps what the selected agent may use on its last rows", async () => {
+    const harness = await setup(34, 60);
+    const view = createAgentsView(harness.renderer, { toggle() {}, close() {}, tools() {} });
+    view.update(workspace([agent("explore"), agent("dev")]));
+    await harness.renderOnce();
+    const lines = harness.captureCharFrame().trimEnd().split("\n");
+    expect(lines.length).toBe(60);
+    expect(lines[59]).toContain("enter: show / hide");
+    expect(lines[2]).toContain("1 explore");
+    expect(lines[5]).toContain("2 dev");
+  });
+
+  test("the status pane shows three lines of what a session said and opens the rest", async () => {
+    const harness = await setup(30, 50);
+    const pressed: [string, string | undefined][] = [];
+    const view = createStatusView(harness.renderer, {
+      run: (action, subject) => pressed.push([action, subject]),
+      version: "1.2.3",
+    });
+    const said =
+      "I have started a reviewer agent on this branch and it is checking the one real commit against dev, which is a lot of files";
+    view.update(workspace([], { detail: said }), NOW);
+    await harness.renderOnce();
+    const lines = harness.captureCharFrame().split("\n");
+    expect(lines[1]).toContain("○ idle · I have started a");
+    expect(lines[2]).toContain("reviewer agent on this");
+    expect(lines[3]).toContain("…");
+    expect(lines[4]).toContain("model N/A");
+    await harness.mockMouse.click(4, 3);
+    await harness.mockMouse.click(4, 4);
+    expect(pressed).toEqual([["detail", "id-main"]]);
   });
 
   test("an empty list says how to start an agent", async () => {
@@ -545,7 +580,15 @@ describe("clicking lines of the status pane", () => {
       run: (action, subject) => pressed.push([action, subject]),
       version: "1.2.3",
     });
-    view.update({ ...workspace([agent("dev")]), workflows: [run], questions: [question] }, NOW);
+    view.update(
+      {
+        ...workspace([agent("dev")]),
+        workflows: [run],
+        questions: [question],
+        inbox: [{ id: 1, from: "dev", body: "The fix is ready for review.", createdAt: NOW }],
+      },
+      NOW,
+    );
     await harness.renderOnce();
     const lines = harness.captureCharFrame().split("\n");
     const click = async (part: string) => {
@@ -559,6 +602,10 @@ describe("clicking lines of the status pane", () => {
     await click("#7 dev → you");
     await click("Which database?");
     await click("q for all");
+    await click("from dev  just now");
+    await click("The fix is ready");
+    await click("click to read");
+    await click("Clear messages");
     await click("USAGE");
     await click("AGENTS 1");
     harness.renderer.destroy();
@@ -568,6 +615,10 @@ describe("clicking lines of the status pane", () => {
       ["questions", "7"],
       ["questions", "7"],
       ["questions", undefined],
+      ["messages", undefined],
+      ["messages", undefined],
+      ["messages", undefined],
+      ["clear-messages", undefined],
     ]);
   });
 

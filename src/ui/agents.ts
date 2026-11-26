@@ -50,15 +50,18 @@ export function createAgentsView(renderer: CliRenderer, actions: AgentsActions):
   const header = createText(renderer, "agents-header", 2);
   const list = new ScrollBoxRenderable(renderer, {
     id: "agents-list",
-    flexGrow: 1,
+    // As tall as its tiles and no taller, so the footer is not pushed up by an empty list.
+    height: 0,
+    flexGrow: 0,
     flexShrink: 1,
-    maxHeight: MAX_VISIBLE_AGENTS * TILE_HEIGHT,
     verticalScrollbarOptions: { visible: false },
     horizontalScrollbarOptions: { visible: false },
   });
   const footer = createText(renderer, "agents-footer");
   root.add(header);
   root.add(list);
+  // Takes the rows the list leaves, which keeps the footer on the last rows of the pane.
+  root.add(new BoxRenderable(renderer, { id: "agents-gap", flexGrow: 1, flexShrink: 1 }));
   root.add(footer);
   renderer.root.add(root);
 
@@ -111,6 +114,7 @@ export function createAgentsView(renderer: CliRenderer, actions: AgentsActions):
       list.remove(node.box);
       node.box.destroyRecursively();
     }
+    list.height = Math.min(current.length, MAX_VISIBLE_AGENTS) * TILE_HEIGHT;
     nodes = current.map((tile, index) => {
       const box = new BoxRenderable(renderer, {
         id: `tile-${tile.id}`,

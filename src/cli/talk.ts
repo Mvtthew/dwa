@@ -160,6 +160,15 @@ export async function talkCommand(
       return 0;
     }
     case "inbox": {
+      if (args[0] === "clear") {
+        await call(projectRoot, "POST", "/inbox/clear");
+        console.log("Messages cleared.");
+        return 0;
+      }
+      if (args.length > 0) {
+        console.error("Usage: dwa inbox [clear]");
+        return 2;
+      }
       const state = await call<WorkspaceState>(projectRoot, "GET", "/state");
       console.log(inboxText(state).join("\n"));
       return 0;

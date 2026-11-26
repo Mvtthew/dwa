@@ -109,6 +109,13 @@ export function startServer(options: ServerOptions) {
       case "POST /agents/close":
         await workspace.close();
         return json({ ok: true });
+      case "POST /inbox/clear":
+        workspace.clearInbox();
+        return json({ ok: true });
+      case "GET /agents/detail":
+        return json(
+          await workspace.detailInfo(new URL(request.url).searchParams.get("target") ?? ""),
+        );
       case "GET /tools":
         return json(
           await workspace.toolsInfo(new URL(request.url).searchParams.get("target") ?? ""),

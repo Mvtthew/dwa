@@ -186,9 +186,12 @@ export class Messaging {
     }));
   }
 
-  /** Latest messages sent to the user at or after `since`, newest first. */
-  inbox(limit: number, since = 0): MessageInfo[] {
-    return this.deps.store.recentMessages(USER, limit, since).map((message) => ({
+  /**
+   * Latest messages sent to the user at or after `since`, newest first; none with an id up to
+   * `after`, which is how the user's cleared messages stay out.
+   */
+  inbox(limit: number, since = 0, after = 0): MessageInfo[] {
+    return this.deps.store.recentMessages(USER, limit, since, after).map((message) => ({
       id: message.id,
       from: this.nameOf(message.fromId),
       body: message.body,

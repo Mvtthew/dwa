@@ -1,7 +1,7 @@
 import { BoxRenderable, bold, type CliRenderer, dim } from "@opentui/core";
 import { APP_NAME, DEFAULT_KEY_PREFIX } from "../shared/constants.ts";
 import type { WorkspaceState } from "../shared/protocol.ts";
-import { bar, fit, formatKey, type Meter, percentTone, statusModel } from "./model.ts";
+import { bar, fit, formatKey, type Meter, percentTone, statusModel, wrap } from "./model.ts";
 import { createText, type Part, styled } from "./text.ts";
 import { accent, tone } from "./theme.ts";
 
@@ -16,12 +16,18 @@ export type StatusAction =
   | "close"
   | "focus"
   | "questions"
+  | "detail"
+  | "messages"
+  | "clear-messages"
   | "palette"
   | "zoom"
   | "detach";
 
 export interface StatusOptions {
-  /** The subject is what a clicked line is about: `run:<id>` for a workflow run, a question's id. */
+  /**
+   * The subject is what a clicked line is about: `run:<id>` for a workflow run, a question's id,
+   * the session's id for its status.
+   */
   run(action: StatusAction, subject?: string): void;
   /** Shown at the very bottom. */
   version: string;
@@ -53,6 +59,12 @@ const KEYS: Button[] = [
   { key: "z", label: () => "Zoom main", action: "zoom" },
   { key: "d", label: () => "Detach", action: "detach" },
 ];
+
+/** Messages to the user the pane shows; the dialog has the rest. */
+const INBOX_LINES = 3;
+
+/** Rows the status of the session and what it last said may take. */
+const DETAIL_LINES = 3;
 
 export interface StatusView {
   update(state: WorkspaceState, nowMs: number): void;
@@ -184,10 +196,22 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
       const { subject, subjectStyle } = model;
       lines.push([bold((subject?.name ?? "main").toUpperCase())]);
       if (subject && subjectStyle) {
-        lines.push([
-          tone(subjectStyle.tone, `${subjectStyle.glyph} ${subjectStyle.label}`),
-          ...(subject.detail ? [dim(` · ${subject.detail}`)] : []),
-        ]);
+        const status = `${subjectStyle.glyph} ${subjectStyle.label}`;
+        if (subject.detail) {
+          // Three lines of what the session said; a click on them opens the whole of it.
+          wrap(`${status} · ${subject.detail}`, width, DETAIL_LINES).forEach((row, index) => {
+            const line =
+              index === 0
+                ? [
+                    tone(subjectStyle.tone, row.slice(0, status.length)),
+                    dim(row.slice(status.length)),
+                  ]
+                : [dim(row)];
+            link(line, "detail", subject.id);
+          });
+        } else {
+          lines.push([tone(subjectStyle.tone, status)]);
+        }
         lines.push([dim([model.model ?? "model N/A", model.cost ?? "cost N/A"].join(" · "))]);
         lines.push([dim(`profile ${subject.profile}`)]);
       } else {
@@ -252,11 +276,15 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
       }
 
       if (model.inbox.length > 0) {
-        lines.push([], [bold("MESSAGES TO YOU")]);
-        for (const message of model.inbox.slice(0, 3)) {
-          lines.push([`from ${message.from}`, dim(`  ${message.age}`)]);
-          lines.push([dim(`  ${fit(oneLine(message.text), width - 2)}`)]);
+        const more = model.inbox.length - INBOX_LINES;
+        lines.push([], [bold(`MESSAGES TO YOU ${model.inbox.length}`)]);
+        // A click on a message opens them all, each one whole.
+        for (const message of model.inbox.slice(0, INBOX_LINES)) {
+          link([`from ${message.from}`, dim(`  ${message.age}`)], "messages");
+          link([dim(`  ${fit(oneLine(message.text), width - 2)}`)], "messages");
         }
+        link([dim(more > 0 ? `  click to read, ${more} more` : "  click to read")], "messages");
+        link([accent("▸ "), "Clear messages"], "clear-messages");
       }
 
       text.content = styled(lines);

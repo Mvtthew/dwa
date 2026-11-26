@@ -19,6 +19,8 @@ const POPUPS: Record<PopupKind, { title: string; command: string; width: number;
     tools: { title: "Agent tools", command: "wizard tools", width: 70, height: 90 },
     roles: { title: "Role settings", command: "wizard roles", width: 70, height: 90 },
     design: { title: "Workflow designer", command: "wizard design", width: 90, height: 90 },
+    detail: { title: "Status", command: "wizard detail", width: 70, height: 70 },
+    messages: { title: "Messages to you", command: "wizard messages", width: 70, height: 70 },
     questions: { title: "Questions", command: "answer", width: 80, height: 60 },
     palette: { title: APP_NAME, command: "palette", width: 60, height: 70 },
   };
