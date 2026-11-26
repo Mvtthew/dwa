@@ -20,7 +20,6 @@ import { toolsPickScreen, toolsScreen } from "./tool-screens.ts";
 import { createWizard, type Outcome, type Screen } from "./wizard.ts";
 import {
   agentScreen,
-  detailScreen,
   menuScreen,
   messagesScreen,
   type WizardApi,
@@ -205,17 +204,15 @@ export async function runWizard(
             ? await menuScreen(api, store(), design)
             : kind === "messages"
               ? await messagesScreen(api)
-              : kind === "detail"
-                ? await detailScreen(api, subject ?? "main")
-                : kind === "tools"
+              : kind === "tools"
+                ? subject
+                  ? await toolsScreen(api, subject)
+                  : await toolsPickScreen(api)
+                : kind === "roles"
                   ? subject
-                    ? await toolsScreen(api, subject)
-                    : await toolsPickScreen(api)
-                  : kind === "roles"
-                    ? subject
-                      ? roleScreen(api, store(), parseRef(subject))
-                      : rolesScreen(api, store())
-                    : await workflowsScreen(api, design);
+                    ? roleScreen(api, store(), parseRef(subject))
+                    : rolesScreen(api, store())
+                  : await workflowsScreen(api, design);
     }
   } catch (error) {
     console.error((error as Error).message);

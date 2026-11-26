@@ -894,9 +894,6 @@ describe("live state", () => {
     expect(await activity()).toEqual(["working", null]);
     send("Stop", { last_assistant_message: "\nAll done.\nDetails follow." });
     expect(await activity()).toEqual(["idle", "All done."]);
-    // The dialog of the status pane gets the whole reply, not its first line.
-    const said = await workspace.detailInfo("dev");
-    expect([said.agent.name, said.text]).toEqual(["dev", "All done.\nDetails follow."]);
     send("StopFailure", { error: "Login expired" });
     expect(await activity()).toEqual(["error", "Login expired"]);
 

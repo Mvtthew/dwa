@@ -200,7 +200,7 @@ const MIGRATIONS = [
    ALTER TABLE agents ADD COLUMN keep INTEGER NOT NULL DEFAULT 0;
    ALTER TABLE agents ADD COLUMN finished_at INTEGER;
    ALTER TABLE agents ADD COLUMN reminders INTEGER NOT NULL DEFAULT 0;`,
-  // The whole of what `detail` is the first line of. Read on request only, never with the rows.
+  // Not used any more: it held the whole reply for a dialog that is gone. Migrations stay.
   "ALTER TABLE agents ADD COLUMN detail_text TEXT;",
 ];
 
@@ -382,27 +382,10 @@ export class Store {
     this.db.query("UPDATE agents SET state = 'stopped', stopped_at = ? WHERE id = ?").run(now, id);
   }
 
-  /** `whole` is the text `detail` was cut from, when there is more of it than the one line. */
-  setActivity(
-    id: string,
-    activity: AgentActivity,
-    detail: string | null,
-    now: number,
-    whole: string | null = null,
-  ): void {
+  setActivity(id: string, activity: AgentActivity, detail: string | null, now: number): void {
     this.db
-      .query(
-        "UPDATE agents SET activity = ?, detail = ?, activity_since = ?, detail_text = ? WHERE id = ?",
-      )
-      .run(activity, detail, now, whole, id);
-  }
-
-  /** The whole text behind a session's detail line, or null when the line is all there is. */
-  detailText(id: string): string | null {
-    const row = this.db.query("SELECT detail_text AS text FROM agents WHERE id = ?").get(id) as {
-      text: string | null;
-    } | null;
-    return row?.text ?? null;
+      .query("UPDATE agents SET activity = ?, detail = ?, activity_since = ? WHERE id = ?")
+      .run(activity, detail, now, id);
   }
 
   setProgress(id: string, progress: string | null): void {

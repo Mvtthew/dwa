@@ -1,6 +1,15 @@
 /** The project and command name. Everything that needs the name imports it from here. */
 export const APP_NAME = "dwa";
 
+/** The name drawn large, for the foot of the status pane. Every row is as wide as the widest. */
+export const APP_LOGO: readonly string[] = [
+  " ______        ___    ",
+  "│  _ ╲ ╲      ╱ ╱ ╲   ",
+  "│ │ │ ╲ ╲ ╱╲ ╱ ╱ _ ╲  ",
+  "│ │_│ │╲ V  V ╱ ___ ╲ ",
+  "│____╱  ╲_╱╲_╱_╱   ╲_╲",
+];
+
 /** Name of the private tmux server socket (`tmux -L <name>`), so the user's own tmux is never touched. */
 export const TMUX_SOCKET_NAME = APP_NAME;
 

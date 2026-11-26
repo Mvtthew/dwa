@@ -347,16 +347,7 @@ async function main(argv: string[]): Promise<number> {
     }
     case "wizard": {
       const kind = rest[0];
-      const kinds = [
-        "workflows",
-        "agent",
-        "tools",
-        "roles",
-        "design",
-        "detail",
-        "messages",
-        "menu",
-      ] as const;
+      const kinds = ["workflows", "agent", "tools", "roles", "design", "messages", "menu"] as const;
       const known = kinds.find((entry) => entry === kind);
       if (!known) {
         console.error(`Usage: ${APP_NAME} wizard <${kinds.join("|")}> [session, role or workflow]`);

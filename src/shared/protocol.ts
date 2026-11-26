@@ -232,22 +232,8 @@ export interface WorkspaceState {
   shell: { open: boolean } | null;
 }
 
-/** What the status dialog shows: a session and the whole text its detail line was cut from. */
-export interface SessionDetail {
-  agent: AgentInfo;
-  /** Null when the detail line is all there is. */
-  text: string | null;
-}
-
 /** The wizards that open in a popup over the workspace. */
-export type WizardKind =
-  | "workflows"
-  | "agent"
-  | "tools"
-  | "roles"
-  | "design"
-  | "detail"
-  | "messages";
+export type WizardKind = "workflows" | "agent" | "tools" | "roles" | "design" | "messages";
 
 /** Everything the daemon can show in a popup: the wizards, the question queue, the command menu. */
 export type PopupKind = WizardKind | "questions" | "palette";
@@ -258,7 +244,6 @@ export const POPUP_KINDS: readonly PopupKind[] = [
   "tools",
   "roles",
   "design",
-  "detail",
   "messages",
   "questions",
   "palette",

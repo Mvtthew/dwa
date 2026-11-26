@@ -1,7 +1,7 @@
 import { BoxRenderable, bold, type CliRenderer, dim } from "@opentui/core";
-import { APP_NAME, DEFAULT_KEY_PREFIX } from "../shared/constants.ts";
+import { APP_LOGO, APP_NAME, DEFAULT_KEY_PREFIX } from "../shared/constants.ts";
 import type { WorkspaceState } from "../shared/protocol.ts";
-import { bar, fit, formatKey, type Meter, percentTone, statusModel, wrap } from "./model.ts";
+import { bar, fit, formatKey, type Meter, percentTone, statusModel } from "./model.ts";
 import { createText, type Part, styled } from "./text.ts";
 import { accent, tone } from "./theme.ts";
 
@@ -16,7 +16,6 @@ export type StatusAction =
   | "close"
   | "focus"
   | "questions"
-  | "detail"
   | "messages"
   | "clear-messages"
   | "palette"
@@ -25,8 +24,7 @@ export type StatusAction =
 
 export interface StatusOptions {
   /**
-   * The subject is what a clicked line is about: `run:<id>` for a workflow run, a question's id,
-   * the session's id for its status.
+   * The subject is what a clicked line is about: `run:<id>` for a workflow run, a question's id.
    */
   run(action: StatusAction, subject?: string): void;
   /** Shown at the very bottom. */
@@ -63,9 +61,6 @@ const KEYS: Button[] = [
 /** Messages to the user the pane shows; the dialog has the rest. */
 const INBOX_LINES = 3;
 
-/** Rows the status of the session and what it last said may take. */
-const DETAIL_LINES = 3;
-
 export interface StatusView {
   update(state: WorkspaceState, nowMs: number): void;
   showMessage(message: string): void;
@@ -75,13 +70,17 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+/** Two rows: the label, its note and the value at the right, and a thin bar under them. */
 function meter(entry: Meter, width: number): Part[][] {
-  const title: Part[] = [entry.label, ...(entry.note ? [dim(`  ${entry.note}`)] : [])];
-  if (entry.percent === null) return [title, [dim("N/A")]];
-  const percent = Math.round(entry.percent);
+  const value = entry.value ?? "N/A";
+  // The note goes first when the row is too narrow for all three.
+  const room = width - entry.label.length - value.length - 1;
+  const note = entry.note && entry.note.length + 2 <= room ? `  ${entry.note}` : "";
+  const gap = " ".repeat(Math.max(1, width - entry.label.length - note.length - value.length));
+  const [used, rest] = bar(entry.percent ?? 0, width);
   return [
-    title,
-    [tone(percentTone(percent), bar(percent, Math.max(4, width - 5))), ` ${percent}%`],
+    [entry.label, dim(note), gap, entry.value === null ? dim(value) : value],
+    [tone(percentTone(entry.percent ?? 0), used), dim(rest)],
   ];
 }
 
@@ -155,6 +154,10 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
   const keyButtons = addButtons(KEYS, keys);
   bottom.add(keys);
   addLine("status-gap-version");
+  /** The name drawn large. The first thing left out when the pane is short, or too narrow for it. */
+  const logo = createText(renderer, "status-logo", APP_LOGO.length);
+  logo.content = styled(APP_LOGO.map((row) => [accent(row)]));
+  bottom.add(logo);
   const version = addLine("status-version");
   version.content = styled([[dim(`${APP_NAME} ${options.version}`)]]);
   // Opening an agent needs a number, so it is a hint in the same shape, not a button.
@@ -162,7 +165,7 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
   /** Rows of the bottom part without the shortcuts: a gap, the actions, a gap, the version. */
   const compact = ACTIONS.length + 3;
   const full = compact + KEYS.length + 3;
-  bottom.height = full;
+  bottom.height = full + APP_LOGO.length;
   root.add(bottom);
   renderer.root.add(root);
 
@@ -196,22 +199,8 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
       const { subject, subjectStyle } = model;
       lines.push([bold((subject?.name ?? "main").toUpperCase())]);
       if (subject && subjectStyle) {
-        const status = `${subjectStyle.glyph} ${subjectStyle.label}`;
-        if (subject.detail) {
-          // Three lines of what the session said; a click on them opens the whole of it.
-          wrap(`${status} · ${subject.detail}`, width, DETAIL_LINES).forEach((row, index) => {
-            const line =
-              index === 0
-                ? [
-                    tone(subjectStyle.tone, row.slice(0, status.length)),
-                    dim(row.slice(status.length)),
-                  ]
-                : [dim(row)];
-            link(line, "detail", subject.id);
-          });
-        } else {
-          lines.push([tone(subjectStyle.tone, status)]);
-        }
+        // The status alone: what the session is doing or last said is in its own pane.
+        lines.push([tone(subjectStyle.tone, `${subjectStyle.glyph} ${subjectStyle.label}`)]);
         lines.push([dim([model.model ?? "model N/A", model.cost ?? "cost N/A"].join(" · "))]);
         lines.push([dim(`profile ${subject.profile}`)]);
       } else {
@@ -290,8 +279,12 @@ export function createStatusView(renderer: CliRenderer, options: StatusOptions):
       text.content = styled(lines);
       // What needs the user must not be pushed out of sight by a list of shortcuts.
       const roomy = lines.length + full <= renderer.height;
+      const drawn =
+        lines.length + full + APP_LOGO.length <= renderer.height &&
+        APP_LOGO.every((row) => row.length <= width);
       keys.visible = roomy;
-      bottom.height = roomy ? full : compact;
+      logo.visible = drawn;
+      bottom.height = (roomy ? full : compact) + (drawn ? APP_LOGO.length : 0);
       paintButtons(state);
     },
     showMessage(message) {

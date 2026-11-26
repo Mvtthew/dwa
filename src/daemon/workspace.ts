@@ -36,7 +36,6 @@ import type {
   RefreshRequest,
   RefreshResult,
   RestartWhen,
-  SessionDetail,
   SessionRef,
   SpawnRequest,
   StatuslineRequest,
@@ -93,7 +92,7 @@ import {
   SESSION,
   spawnPoolWindow,
 } from "../tmux/layout.ts";
-import { parseStatusline, reduceHook, sessionLine, snippet, wholeDetail } from "./activity.ts";
+import { parseStatusline, reduceHook, sessionLine, snippet } from "./activity.ts";
 import type { AgentRow, Store } from "./db.ts";
 import { reportSuffix } from "./delegation.ts";
 import { WorkspaceError } from "./errors.ts";
@@ -635,12 +634,10 @@ export class Workspace {
       event: request.event,
       summary: change?.detail ?? snippet(input.tool_name) ?? snippet(input.notification_type),
     });
-    const whole = change ? wholeDetail(request.event, input) : null;
-    // A reply is stored even when its first line is the same as the one before.
-    if (change && (change.activity !== row.activity || change.detail !== row.detail || whole)) {
+    if (change && (change.activity !== row.activity || change.detail !== row.detail)) {
       // Keep the time of the last real change, so "idle for 5 min" stays meaningful.
       const since = change.activity === row.activity ? row.activitySince : now;
-      store.setActivity(row.id, change.activity, change.detail, since, whole);
+      store.setActivity(row.id, change.activity, change.detail, since);
     }
     if (request.event === "UserPromptSubmit") store.setHadTurn(row.id, true);
     if (request.event === "SessionStart") {
@@ -1017,13 +1014,6 @@ export class Workspace {
     const { store } = this.deps;
     const last = store.lastMessageTo(USER);
     if (last) store.setMeta(META_INBOX_CLEARED, String(last.id));
-  }
-
-  /** A session and the whole of what its detail line was cut from, for the status dialog. */
-  async detailInfo(target: string): Promise<SessionDetail> {
-    const state = await this.serial(() => this.requireUp());
-    const agent = this.findSession(state, target);
-    return { agent, text: this.deps.store.detailText(agent.id) };
   }
 
   async toolsInfo(target: string): Promise<ToolsInfo> {

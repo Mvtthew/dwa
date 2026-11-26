@@ -85,8 +85,11 @@ describe("model", () => {
   });
 
   test("bar, percentTone, untilReset and formatKey", () => {
-    expect(bar(50, 10)).toBe("█████░░░░░");
-    expect(bar(140, 4)).toBe("████");
+    expect(bar(50, 10)).toEqual(["━━━━━", "─────"]);
+    expect(bar(140, 4)).toEqual(["━━━━", ""]);
+    // Anything in use shows, however little.
+    expect(bar(1, 10)).toEqual(["━", "─────────"]);
+    expect(bar(0, 3)).toEqual(["", "───"]);
     expect([percentTone(10), percentTone(75), percentTone(95)]).toEqual([
       "good",
       "attention",
@@ -153,7 +156,12 @@ describe("model", () => {
     const model = statusModel(state, NOW);
     expect(model.subject?.name).toBe("b");
     // The context shown is always main's, whoever is selected; the cost is the selected agent's.
-    expect(model.context).toEqual({ label: "main context", percent: 41, note: "41%/200k" });
+    expect(model.context).toEqual({
+      label: "main context",
+      percent: 41,
+      value: "41%/200k",
+      note: null,
+    });
     expect(model.cost).toBeNull();
     // Limits are per account, so they come from main even though b is selected.
     expect(model.limits.map((limit) => [limit.percent, limit.note])).toEqual([
@@ -344,25 +352,20 @@ describe("panes", () => {
     expect(lines[5]).toContain("2 dev");
   });
 
-  test("the status pane shows three lines of what a session said and opens the rest", async () => {
+  test("the status pane shows the status alone, and a click on it does nothing", async () => {
     const harness = await setup(30, 50);
     const pressed: [string, string | undefined][] = [];
     const view = createStatusView(harness.renderer, {
       run: (action, subject) => pressed.push([action, subject]),
       version: "1.2.3",
     });
-    const said =
-      "I have started a reviewer agent on this branch and it is checking the one real commit against dev, which is a lot of files";
-    view.update(workspace([], { detail: said }), NOW);
+    view.update(workspace([], { detail: "I have started a reviewer agent on this branch." }), NOW);
     await harness.renderOnce();
     const lines = harness.captureCharFrame().split("\n");
-    expect(lines[1]).toContain("○ idle · I have started a");
-    expect(lines[2]).toContain("reviewer agent on this");
-    expect(lines[3]).toContain("…");
-    expect(lines[4]).toContain("model N/A");
-    await harness.mockMouse.click(4, 3);
-    await harness.mockMouse.click(4, 4);
-    expect(pressed).toEqual([["detail", "id-main"]]);
+    expect(lines[1]?.trim()).toBe("○ idle");
+    expect(lines[2]).toContain("model N/A");
+    await harness.mockMouse.click(4, 1);
+    expect(pressed).toEqual([]);
   });
 
   test("an empty list says how to start an agent", async () => {
@@ -418,6 +421,27 @@ describe("panes", () => {
     await harness.mockMouse.click(5, row);
     await harness.renderOnce();
     expect(opened).toEqual(["id-b"]);
+  });
+
+  test("the name is drawn large over the version where the pane has room for it", async () => {
+    const draw = async (width: number, height: number) => {
+      const harness = await setup(width, height);
+      createStatusView(harness.renderer, noActions).update(workspace([]), NOW);
+      await harness.renderOnce();
+      const rows = harness.captureCharFrame().trimEnd().split("\n");
+      await dispose?.();
+      dispose = undefined;
+      return rows.map((row) => row.trimEnd());
+    };
+    const roomy = await draw(30, 50);
+    expect(roomy.slice(-2)).toEqual([" │____╱  ╲_╱╲_╱_╱   ╲_╲", " dwa 1.2.3"]);
+    expect(roomy.at(-6)).toBe("  ______        ___");
+    // Too narrow or too short: the version alone, and the shortcuts stay.
+    for (const rows of [await draw(20, 50), await draw(30, 36)]) {
+      expect(rows.at(-1)).toBe(" dwa 1.2.3");
+      expect(rows.join("\n")).not.toContain("╲_╲");
+      expect(rows.join("\n")).toContain("Detach");
+    }
   });
 
   test("the status pane ends with clickable actions and shortcuts, and the version", async () => {
@@ -479,8 +503,10 @@ describe("panes", () => {
     view.update({ ...workspace([]), shell: { open: true }, keyPrefix: "C-a" }, NOW);
     await harness.renderOnce();
     lines = harness.captureCharFrame().split("\n");
-    expect(lines[26]?.trim()).toBe("▸ Hide shell  s");
-    expect(lines[28]?.trim()).toBe("KEYS  Ctrl+A, then");
+    // One line less above, which is the room the name drawn large needed: the buttons move up.
+    const shell = lines.findIndex((line) => line.trim() === "▸ Hide shell  s");
+    expect(shell).toBeGreaterThan(-1);
+    expect(lines[shell + 2]?.trim()).toBe("KEYS  Ctrl+A, then");
   });
 
   test("a short status pane drops the shortcut buttons, not what needs the user", async () => {
@@ -537,11 +563,15 @@ describe("panes", () => {
     await harness.renderOnce();
     let frame = harness.captureCharFrame();
     expect(frame).toContain("MAIN");
-    expect(frame).toContain("● working · Read");
+    expect(frame).toContain("● working");
+    expect(frame).not.toContain("Read");
     expect(frame).toContain("Opus 5.5 · $0.70");
-    expect(frame).toContain("41%");
-    expect(frame).toContain("5 hours  in 2h 5m");
-    expect(frame).toContain("92%");
+    // Each meter says its value once, at the right of its title, over a thin bar.
+    expect(frame).toContain(`context${" ".repeat(13)}41%/200k`);
+    expect(frame).toContain("━".repeat(11) + "─".repeat(17));
+    expect(frame).toContain(`5 hours  in 2h 5m${" ".repeat(8)}19%`);
+    expect(frame).toContain(`7 days  in 2d 14h${" ".repeat(8)}92%`);
+    expect(frame).not.toContain("█");
     expect(frame).toContain("NEEDS YOU");
     expect(frame).toContain("◆ dev");
     expect(frame).toContain("dwa 1.2.3");

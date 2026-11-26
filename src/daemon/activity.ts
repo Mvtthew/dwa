@@ -26,23 +26,6 @@ export function snippet(value: unknown, length = DETAIL_LENGTH): string | null {
   return line.length > length ? `${line.slice(0, length - 1)}…` : line;
 }
 
-/** As much of a reply as the dialog that shows it whole is given. */
-const WHOLE_LENGTH = 8000;
-
-/**
- * The whole text an event's detail is the first line of: what the session said when its turn
- * ended, or why the turn failed. Null for events whose detail is all there is.
- */
-export function wholeDetail(event: string, input: Input): string | null {
-  const whole =
-    event === "Stop"
-      ? text(input.last_assistant_message)
-      : event === "StopFailure"
-        ? (text(input.error) ?? text(input.message))
-        : null;
-  return whole ? whole.trim().slice(0, WHOLE_LENGTH) : null;
-}
-
 /**
  * Maps a Claude Code hook event to the agent's new activity, or null when the event does not
  * change it. The sequence was recorded from real sessions; see docs/spikes.md (S2).

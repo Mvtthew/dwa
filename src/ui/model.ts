@@ -168,11 +168,14 @@ export function moveCursor(current: number, delta: number, count: number): numbe
   return Math.max(0, Math.min(count - 1, current + delta));
 }
 
-/** A text meter such as "█████░░░░░". */
-export function bar(percent: number, width: number): string {
+/**
+ * A thin meter in two parts, "━━━" and "─────", so the part in use can be coloured and the rest
+ * dimmed. Anything above zero shows at least one cell.
+ */
+export function bar(percent: number, width: number): [used: string, rest: string] {
   const clamped = Math.max(0, Math.min(100, percent));
-  const filled = Math.round((clamped / 100) * width);
-  return "█".repeat(filled) + "░".repeat(width - filled);
+  const filled = clamped > 0 ? Math.max(1, Math.round((clamped / 100) * width)) : 0;
+  return ["━".repeat(filled), "─".repeat(width - filled)];
 }
 
 /** Tone for a usage or context percentage. */
@@ -265,6 +268,9 @@ export interface Meter {
   label: string;
   /** Null when the value is not reported; shown as N/A, never guessed. */
   percent: number | null;
+  /** The value in words, at the right of the title: "34%", "5%/1M". Null when not reported. */
+  value: string | null;
+  /** Shown dimmed after the label: when a limit resets. */
   note: string | null;
 }
 
@@ -291,6 +297,7 @@ function limitMeter(label: string, limit: UsageLimit | null | undefined, nowMs: 
   return {
     label,
     percent: limit?.usedPercent ?? null,
+    value: limit ? `${Math.round(limit.usedPercent)}%` : null,
     note: limit ? untilReset(limit.resetsAt, nowMs) : null,
   };
 }
@@ -315,7 +322,8 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
     context: {
       label: subject && subject !== state.main ? "main context" : "context",
       percent: main?.contextPercent ?? null,
-      note: contextText(main?.contextPercent ?? null, main?.contextSize ?? null),
+      value: contextText(main?.contextPercent ?? null, main?.contextSize ?? null),
+      note: null,
     },
     limits: [
       limitMeter("5 hours", freshest?.fiveHour, nowMs),

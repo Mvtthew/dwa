@@ -3,15 +3,10 @@
 // only describe rows and what a button asks the daemon to do, so they are tested without a
 // terminal.
 import { APP_NAME } from "../shared/constants.ts";
-import type {
-  AgentInfo,
-  SessionDetail,
-  WorkflowRunInfo,
-  WorkspaceState,
-} from "../shared/protocol.ts";
+import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../shared/protocol.ts";
 import { EFFORT_LEVELS } from "../shared/roles.ts";
 import type { WorkflowSummary } from "../shared/workflow.ts";
-import { agentStyle, ago } from "./model.ts";
+import { ago } from "./model.ts";
 import { type RoleStore, rolesScreen } from "./role-screens.ts";
 import { openRun } from "./run-screens.ts";
 import { toolsScreen } from "./tool-screens.ts";
@@ -41,29 +36,6 @@ const orDefault = (values: string[]) => [
   { value: DEFAULT, label: "default" },
   ...values.map((value) => ({ value, label: value })),
 ];
-
-/**
- * What a session's status line says, whole: the status pane shows three lines of it at most and
- * opens this for the rest.
- */
-export async function detailScreen(api: WizardApi, target: string): Promise<Screen> {
-  const { agent, text } = await api.call<SessionDetail>(
-    "GET",
-    `/agents/detail?target=${encodeURIComponent(target)}`,
-  );
-  const style = agentStyle(agent);
-  const said = text ?? agent.detail;
-  return {
-    title: agent.role && agent.role !== agent.name ? `${agent.name}  ${agent.role}` : agent.name,
-    rows: [
-      { kind: "note", text: `${style.glyph} ${style.label}`, tone: style.tone },
-      { kind: "note", text: "" },
-      { kind: "note", text: said ?? "Nothing to show yet." },
-      { kind: "note", text: "" },
-      close,
-    ],
-  };
-}
 
 /** The messages agents sent to the user, each one whole and the newest first, and clearing them. */
 export async function messagesScreen(api: WizardApi, now = Date.now()): Promise<Screen> {
