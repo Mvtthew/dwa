@@ -445,8 +445,9 @@ describe("save globally", () => {
     });
     const config = readFileSync(join(dir, ".dwa", "config.toml"), "utf8");
     expect(config).toContain('deny_tools = ["WebSearch"]');
-    // The reviewer is behind from the save before; main now is too, by the new default.
-    expect(result.behind.map((session) => session.name)).toEqual(["rev", "main"]);
+    // The reviewer is behind from the save before. Main is not: its role has a list of tools
+    // of its own, which what [defaults] takes away does not reach.
+    expect(result.behind.map((session) => session.name)).toEqual(["rev"]);
     // The reviewer never had WebSearch, so for it the switch is as asked.
     expect(result.note).toBeUndefined();
 
