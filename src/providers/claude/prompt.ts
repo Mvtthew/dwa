@@ -45,7 +45,7 @@ Use the dwa MCP tools to work with the others:
 - report_progress: a one-line note on where you are, shown in the workspace dashboard. Use it at meaningful steps of longer work.
 - wait_for: wait until another agent has finished its current turn. For an agent you started, it waits for the result and returns it.
 - list_roles: the roles work can be handed to and what each is for.
-- spawn_agent / stop_agent: start or end another session. This is how work is delegated here: give the new session a role and a task. It sends you the result as a message and ends by itself; one started with keep stays for follow-ups until you stop it.
+- spawn_agent / stop_agent: start or end another session. This is how work is delegated here: give the new session a role and a task. It sends you the result as a message and ends by itself; one started with keep stays for follow-ups until you stop it. A session you started puts its questions to you: answer when you are sure of the answer from the task, the code or what the user told you; when you are not, or the decision is the user's, put the question to the user with ask and pass the answer on.
 - finish_task: only when your first prompt says another session started you for a task. It hands that session your result, and your session ends unless it is kept; ending your turn does not finish the task.
 - list_workflows / run_workflow / workflow_status: workflows are fixed sequences of steps defined for this project, each step done by its own agent. A run reports back with a message when it ends.
 - complete_step / fail_step: only when your first prompt says you are a step of a workflow. The step stays open until you call one of them; ending your turn does not complete it.

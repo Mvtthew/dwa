@@ -205,6 +205,25 @@ describe("agents and messages", () => {
     expect(looks).toBe(2);
   });
 
+  test("wait_for returns the question of a working agent that asked the caller", async () => {
+    const question = {
+      id: 4,
+      fromId: "a2",
+      toId: "agent-1",
+      question: "Which base?",
+      options: ["dev"],
+    };
+    routes["GET /state"] = () => ({
+      main: null,
+      agents: [agent("agent-1", "build", "working"), agent("a2", "review", "working")],
+      questions: [{ ...question, id: 3, toId: "user" }, question],
+    });
+    const { text } = await use("wait_for", { agent: "review" });
+    expect(text).toStartWith("review is not finished: it asked you a question");
+    expect(text).toContain("Question #4: Which base?\nSuggested answers: dev");
+    expect(text).toContain("(question_id: 4)");
+  });
+
   test("spawn_agent and stop_agent pass the request on", async () => {
     routes["POST /agents"] = () => agent("a9", "helper", "starting");
     routes["POST /agents/stop"] = () => agent("a9", "helper", "idle");

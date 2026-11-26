@@ -16,7 +16,8 @@ tools = ["Read", "Grep", "Glob", "Bash"]
 # Never stops at a permission prompt. The rules below are allowed, and so are shell commands
 # the Claude command itself recognises as read-only (cat, date and the like); anything that
 # changes something is refused and the agent is told so. Reading and searching files needs
-# no rule.
+# no rule. A rule matches one plain command from its first word: a call with a shell variable,
+# a loop, `$(...)` or `git -C <dir>` is refused whatever it runs, and the prompt says so.
 permission_mode = "dontAsk"
 allow = [
   "Bash(git status *)",
@@ -24,6 +25,13 @@ allow = [
   "Bash(git log *)",
   "Bash(git show *)",
   "Bash(git blame *)",
+  # What it takes to read a branch that is not checked out.
+  "Bash(git grep *)",
+  "Bash(git ls-tree *)",
+  "Bash(git ls-files *)",
+  "Bash(git merge-base *)",
+  "Bash(git rev-parse *)",
+  "Bash(git cat-file *)",
   "Bash(ls *)",
   "Bash(wc *)",
 ]
@@ -35,7 +43,7 @@ How to work:
 
 - Start from the question you were given. If it is too vague to act on, use the dwa `ask` tool to get it clarified before spending time.
 - Read the code rather than guessing. Give file paths and line numbers for every claim, and say plainly what you could not confirm.
-- Shell commands that change something are refused. Do not try to work around that; say what you could not run.
+- Shell: the allowed commands are read-only git (status, diff, log, show, blame, grep, ls-tree, ls-files, merge-base, rev-parse, cat-file), ls, wc and plain reading commands such as cat, head, grep and sed -n. Write one plain command per call; pipes and `&&` between allowed commands are fine. Shell variables, loops, `$(...)` and `git -C <dir>` get the whole call refused even when every command in it is allowed, so write refs and paths out in full and run from the project folder. A refusal is for that one call, not for the shell: run it again in a simpler form. Commands that change something (builds, tests, worktrees, checkouts, writing files) stay refused; do not work around that, say what you could not run.
 - Use `report_progress` when you move to a new area, so the dashboard shows where you are.
 - When you are done, hand over your findings the way your task says (it names the tool to call); if it names none, send it with `send_message` to whoever gave you the task. Put the answer first, then the evidence, then open questions. Keep it short enough to read in a minute.
 """

@@ -8,6 +8,7 @@ import { APP_NAME } from "../shared/constants.ts";
 import { daemonSocketPath } from "../shared/paths.ts";
 import type {
   AgentInfo,
+  QuestionInfo,
   WorkflowEdit,
   WorkflowRunInfo,
   WorkspaceState,
@@ -39,6 +40,18 @@ export function describeAgent(agent: AgentInfo): string {
   else if (agent.detail) parts.push(agent.detail);
   const role = agent.role && agent.role !== agent.name ? ` (${agent.role})` : "";
   return `${agent.name}${role}: ${parts.join(" · ")}`;
+}
+
+/** What `wait_for` returns when the awaited agent is itself blocked on a question to the caller. */
+function askedYou(name: string, asked: QuestionInfo): string {
+  const lines = [`${name} is not finished: it asked you a question and waits for the answer.`, ""];
+  lines.push(`Question #${asked.id}: ${asked.question}`);
+  if (asked.options.length > 0) lines.push(`Suggested answers: ${asked.options.join(" | ")}`);
+  lines.push(
+    "",
+    `Give the answer with the "answer" tool (question_id: ${asked.id}), then wait for ${name} again. If you are not sure of the answer, or the decision is the user's, put it to the user with "ask" first and pass on what they say. The same question may still reach you as a message; it needs no second answer.`,
+  );
+  return lines.join("\n");
 }
 
 /** One request to the daemon. Throws `ApiError` when the daemon answers with an error. */
@@ -171,7 +184,7 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
     "wait_for",
     {
       description:
-        "Wait until another agent has finished its current turn (or has stopped). Blocks with no time limit. Returns what the agent last said; for an agent you started that has reported its result and ended, the result.",
+        "Wait until another agent has finished its current turn (or has stopped). Blocks with no time limit. Returns what the agent last said; for an agent you started that has reported its result and ended, the result. Returns early with the question when that agent asks you one.",
       inputSchema: { agent: z.string() },
     },
     ({ agent: target }, extra) =>
@@ -196,6 +209,12 @@ export function createMcpServer(agentId: string, api: Api): McpServer {
             return outcome.message;
           }
           if (found.id === agentId) return "You cannot wait for yourself.";
+          // It asked the caller: waiting on would leave both blocked on each other, and the
+          // question itself only reaches the caller as a message once this turn is over.
+          const asked = (state.questions ?? []).find(
+            (question) => question.fromId === found.id && question.toId === agentId,
+          );
+          if (asked) return askedYou(found.name, asked);
           const busy = found.activity === "working" || found.activity === "starting";
           // An idle session that still owes its result is about to be reminded to report it.
           const dueSoon = found.activity === "idle" && found.reportDue && !found.waitingOn;
