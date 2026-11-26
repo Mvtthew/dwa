@@ -59,6 +59,7 @@ function workspace(agents: AgentInfo[], main: Partial<AgentInfo> = {}): Workspac
     inbox: [],
     workflows: [],
     shell: null,
+    feed: null,
   };
 }
 
@@ -655,6 +656,7 @@ describe("the top bar", () => {
     questions: [asked, { ...asked, id: 4, to: "rev", toId: "id-rev" }],
     inbox: [{ id: 1, from: "dev", body: "Done.", createdAt: NOW }],
     shell: { open: true },
+    feed: { open: false },
   });
 
   test("categories, the shell toggle, what waits for the user, and the keys", () => {
@@ -666,6 +668,7 @@ describe("the top bar", () => {
       "Workspace",
       "│",
       "Shell",
+      "Feed",
       "│",
       "? 2",
       "✉ 1",
@@ -696,14 +699,15 @@ describe("the top bar", () => {
     view.update(busy(), NOW);
     await harness.renderOnce();
     const line = harness.captureCharFrame().split("\n")[0] ?? "";
-    expect(line).toContain("Workflows  Agents  Panes  Workspace  │  Shell  │  ? 2  ✉ 1");
-    for (const label of ["Agents", "Shell", "? 2", "✉ 1"]) {
+    expect(line).toContain("Workflows  Agents  Panes  Workspace  │  Shell  Feed  │  ? 2  ✉ 1");
+    for (const label of ["Agents", "Shell", "Feed", "? 2", "✉ 1"]) {
       await harness.mockMouse.click(line.indexOf(label), 0);
     }
     harness.renderer.destroy();
     expect(pressed).toEqual([
       [{ menu: "Agents" }, line.indexOf("Agents") - 1],
       [{ toggle: "shell" }, line.indexOf("Shell") - 1],
+      [{ toggle: "feed" }, line.indexOf("Feed") - 1],
       [{ popup: "questions" }, line.indexOf("? 2") - 1],
       [{ popup: "messages" }, line.indexOf("✉ 1") - 1],
     ]);

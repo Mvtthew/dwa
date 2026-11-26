@@ -8,6 +8,8 @@ export interface LayoutSizes {
   statusWidth: number;
   /** Columns of the agents pane on the right. */
   agentsWidth: number;
+  /** Columns of the event feed, right of the agents pane when it is shown. */
+  feedWidth: number;
   /** Percent of the centre column given to the agent pane opened under main. */
   agentHeight: number;
 }
@@ -15,7 +17,12 @@ export interface LayoutSizes {
 /** Rows of the top bar's text. tmux draws its border line above it. */
 export const TOP_BAR_HEIGHT = 1;
 
-export const DEFAULT_LAYOUT: LayoutSizes = { statusWidth: 30, agentsWidth: 34, agentHeight: 40 };
+export const DEFAULT_LAYOUT: LayoutSizes = {
+  statusWidth: 30,
+  agentsWidth: 34,
+  feedWidth: 40,
+  agentHeight: 40,
+};
 
 const PRINT_PANE = ["-P", "-F", "#{pane_id}"];
 
@@ -44,7 +51,12 @@ export interface WorkspacePanes {
   left: string;
   main: string;
   right: string;
+  /** The event feed, when the workspace starts with it shown. */
+  feed?: string;
 }
+
+/** The panes whose size the layout keeps: the bar, the side columns, the feed while shown. */
+export type FramePanes = Omit<WorkspacePanes, "main">;
 
 /**
  * Creates the session with the top bar across the whole width and three columns under it:
@@ -59,6 +71,8 @@ export async function createWorkspace(
     left: PaneCommand;
     main: PaneCommand;
     right: PaneCommand;
+    /** Shown right of the agents pane from the start. */
+    feed?: PaneCommand;
     sizes?: LayoutSizes;
   },
 ): Promise<WorkspacePanes> {
@@ -107,6 +121,24 @@ export async function createWorkspace(
     "--",
     ...options.right.argv,
   ]);
+  const feed = options.feed
+    ? await run([
+        "split-window",
+        "-d",
+        "-h",
+        "-l",
+        String(sizes.feedWidth),
+        "-t",
+        right,
+        "-c",
+        cwd,
+        ...envArgs(options.feed.env),
+        ...PRINT_PANE,
+        "--",
+        ...options.feed.argv,
+      ])
+    : undefined;
+  if (feed && options.feed) await setTitle(run, feed, options.feed.title);
   // Full width (-f) and above the columns (-b): one row over all of them.
   const top = await run([
     "split-window",
@@ -129,29 +161,58 @@ export async function createWorkspace(
   await setTitle(run, left, options.left.title);
   await setTitle(run, main, options.main.title);
   await setTitle(run, right, options.right.title);
-  const frame = { top, left, right };
-  for (const args of frameResizes(frame, sizes)) await run(args);
+  const frame: FramePanes = { top, left, right, feed };
+  await fixFrame(run, frame, sizes);
+  return { top, left, main, right, feed };
+}
+
+/** The resizes that put the top bar, the side columns and the feed back to their sizes. */
+export function frameResizes(panes: FramePanes, sizes: LayoutSizes = DEFAULT_LAYOUT): string[][] {
+  // The feed first: when the terminal is too narrow for everything, the panes sized last keep
+  // their widths, and the agents pane matters more than the feed.
+  return [
+    ["resize-pane", "-t", panes.top, "-y", String(TOP_BAR_HEIGHT)],
+    ...(panes.feed ? [["resize-pane", "-t", panes.feed, "-x", String(sizes.feedWidth)]] : []),
+    ["resize-pane", "-t", panes.left, "-x", String(sizes.statusWidth)],
+    ["resize-pane", "-t", panes.right, "-x", String(sizes.agentsWidth)],
+  ];
+}
+
+/**
+ * Puts the frame back to its sizes now, and makes tmux do the same whenever the terminal is
+ * resized. Called again when the feed is shown or hidden, since the hook names its panes.
+ */
+export async function fixFrame(
+  run: TmuxRunner,
+  panes: FramePanes,
+  sizes: LayoutSizes = DEFAULT_LAYOUT,
+): Promise<void> {
+  const resizes = frameResizes(panes, sizes);
+  for (const args of resizes) await run(args);
   await run([
     "set-hook",
     "-g",
     "window-resized",
-    frameResizes(frame, sizes)
-      .map((args) => args.join(" "))
-      .join(" ; "),
+    resizes.map((args) => args.join(" ")).join(" ; "),
   ]);
-  return { top, left, main, right };
 }
 
-/** The resizes that put the top bar and the side columns back to their sizes. */
-export function frameResizes(
-  panes: { top: string; left: string; right: string },
-  sizes: LayoutSizes = DEFAULT_LAYOUT,
-): string[][] {
-  return [
-    ["resize-pane", "-t", panes.top, "-y", String(TOP_BAR_HEIGHT)],
-    ["resize-pane", "-t", panes.left, "-x", String(sizes.statusWidth)],
-    ["resize-pane", "-t", panes.right, "-x", String(sizes.agentsWidth)],
-  ];
+/** Moves the feed from the pool to the right of the agents pane, leaving the focus where it is. */
+export async function showFeed(
+  run: TmuxRunner,
+  options: { feed: string; right: string; width: number },
+): Promise<void> {
+  await run([
+    "join-pane",
+    "-d",
+    "-h",
+    "-l",
+    String(options.width),
+    "-s",
+    options.feed,
+    "-t",
+    options.right,
+  ]);
 }
 
 export async function setTitle(run: TmuxRunner, pane: string, title: string): Promise<void> {

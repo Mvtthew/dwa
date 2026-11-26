@@ -3,7 +3,13 @@
 // only describe rows and what a button asks the daemon to do, so they are tested without a
 // terminal.
 import { APP_NAME } from "../shared/constants.ts";
-import type { AgentInfo, WorkflowRunInfo, WorkspaceState } from "../shared/protocol.ts";
+import type {
+  AgentInfo,
+  FeedDetail,
+  FeedKind,
+  WorkflowRunInfo,
+  WorkspaceState,
+} from "../shared/protocol.ts";
 import { EFFORT_LEVELS } from "../shared/roles.ts";
 import type { WorkflowSummary } from "../shared/workflow.ts";
 import { ago } from "./model.ts";
@@ -63,6 +69,85 @@ export async function messagesScreen(api: WizardApi, now = Date.now()): Promise<
       close,
     ],
   };
+}
+
+const FEED_TITLES: Record<FeedKind, string> = {
+  recap: "Recap",
+  spawn: "Agent started",
+  finish: "Result",
+  message: "Message",
+  question: "Question",
+  answer: "Answer",
+  step: "Workflow",
+  lifecycle: "Session",
+};
+
+/** What a feed item's details say, as label and value, for a spawn. */
+function spawnDetails(item: FeedDetail): [string, string][] {
+  const data = item.data ?? {};
+  const text = (key: string) => (typeof data[key] === "string" ? (data[key] as string) : null);
+  const rows: [string, string | null][] = [
+    ["started by", text("startedBy") ?? "you or the workspace"],
+    ["role", text("role")],
+    ["profile", text("profile")],
+    ["model", text("model")],
+    ["effort", text("effort")],
+    ["skill", text("skill")],
+    ["kept", data.keep === true ? "yes, after it reports" : null],
+  ];
+  return rows.filter((row): row is [string, string] => row[1] !== null);
+}
+
+/**
+ * One item of the event feed, whole: a recap's reply, a result, a message, or for a spawned
+ * agent the task it was given and what it was started with. The session it is about can be
+ * shown under main, or its tools opened, while it runs.
+ */
+export async function feedScreen(api: WizardApi, id: string, now = Date.now()): Promise<Screen> {
+  const item = await api.call<FeedDetail>("GET", `/feed/item?id=${encodeURIComponent(id)}`);
+  const state = await api.call<WorkspaceState>("GET", "/state");
+  const title = FEED_TITLES[item.kind];
+  const rows: Row[] = [
+    { kind: "heading", text: `${item.agent ?? APP_NAME}  ${ago(item.at, now)}` },
+    { kind: "note", text: item.title },
+    { kind: "note", text: "" },
+  ];
+  if (item.kind === "spawn") {
+    rows.push({ kind: "heading", text: "Task" });
+    rows.push({ kind: "note", text: item.body || "(no task: started to wait for one)" });
+    rows.push({ kind: "note", text: "" }, { kind: "heading", text: "Started with" });
+    const details = [...spawnDetails(item), ...(item.launch ?? [])];
+    const pad = Math.max(...details.map(([label]) => label.length)) + 2;
+    rows.push({
+      kind: "note",
+      text: details.map(([label, text]) => `${label.padEnd(pad)}${text}`).join("\n"),
+    });
+    rows.push({ kind: "note", text: "" });
+  } else if (item.body && item.body !== item.title) {
+    rows.push({ kind: "note", text: item.body }, { kind: "note", text: "" });
+  }
+  const sessionId = item.kind === "spawn" ? item.refId : item.agentId;
+  const session = state.agents.find((agent) => agent.id === sessionId);
+  if (session) {
+    rows.push(
+      {
+        kind: "button",
+        label: session.open ? `Hide ${session.name}` : `Show ${session.name}`,
+        hint: "under main",
+        run: async () => {
+          await api.call("POST", "/agents/toggle", { target: session.id });
+          return { close: true };
+        },
+      },
+      {
+        kind: "button",
+        label: "Agent tools",
+        run: async () => ({ to: await toolsScreen(api, session.id) }),
+      },
+    );
+  }
+  rows.push(close);
+  return { title, rows };
 }
 
 export function agentScreen(api: WizardApi): Screen {

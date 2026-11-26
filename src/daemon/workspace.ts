@@ -82,9 +82,11 @@ import type { TmuxRunner } from "../tmux/driver.ts";
 import {
   createWorkspace,
   DEFAULT_LAYOUT,
+  fixFrame,
   focusPane,
   hasSession,
   killPane,
+  type LayoutSizes,
   listPanes,
   openUnderMain,
   type PaneCommand,
@@ -92,6 +94,7 @@ import {
   respawnPane,
   returnToPool,
   SESSION,
+  showFeed,
   spawnPoolWindow,
   TOP_BAR_HEIGHT,
 } from "../tmux/layout.ts";
@@ -110,6 +113,19 @@ const META_PROFILE = "workspace_profile";
 const META_AGENT_HEIGHT = "agent_height";
 const META_STARTED_AT = "started_at";
 const META_SHELL_PANE = "shell_pane";
+/** The panes whose size the layout keeps, and their sizes (`Frame`). */
+const META_FRAME = "frame";
+/** The event feed's pane, shown or in the pool. */
+const META_FEED_PANE = "feed_pane";
+const FEED_NAME = "feed";
+
+/** What the layout keeps sized, as stored in `meta`. The feed is added while it is shown. */
+interface Frame {
+  top: string;
+  left: string;
+  right: string;
+  sizes: LayoutSizes;
+}
 /** The id of the newest message to the user when they last cleared them. */
 const META_INBOX_CLEARED = "inbox_cleared";
 /** Messages to the user a state carries: what the status pane and its dialog show. */
@@ -327,6 +343,7 @@ export class Workspace {
       this.deps.store.setMeta(META_PROFILE, request.profile ?? null);
       this.deps.store.setMeta(META_STARTED_AT, String(this.now()));
       this.deps.store.setMeta(META_SHELL_PANE, null);
+      this.deps.store.setMeta(META_FEED_PANE, null);
       // Values saved "for the next agents of the role" belong to one run of the workspace.
       this.deps.store.setMeta(META_ROLE_RUN, null);
 
@@ -339,6 +356,12 @@ export class Workspace {
         session,
         ...this.sessionFiles(id, "main", session, profile),
       });
+      const sizes: LayoutSizes = {
+        statusWidth: config.layout.status_width ?? DEFAULT_LAYOUT.statusWidth,
+        agentsWidth: config.layout.agents_width ?? DEFAULT_LAYOUT.agentsWidth,
+        feedWidth: config.layout.feed_width ?? DEFAULT_LAYOUT.feedWidth,
+        agentHeight: config.layout.agent_height ?? DEFAULT_LAYOUT.agentHeight,
+      };
       const panes = await createWorkspace(this.deps.run, {
         cwd: this.deps.projectRoot,
         top: this.uiPane("topbar", APP_NAME),
@@ -349,12 +372,12 @@ export class Workspace {
           title: "main",
         },
         right: this.uiPane("agents", "agents"),
-        sizes: {
-          statusWidth: config.layout.status_width ?? DEFAULT_LAYOUT.statusWidth,
-          agentsWidth: config.layout.agents_width ?? DEFAULT_LAYOUT.agentsWidth,
-          agentHeight: config.layout.agent_height ?? DEFAULT_LAYOUT.agentHeight,
-        },
+        feed: this.uiPane("feed", FEED_NAME),
+        sizes,
       });
+      const frame: Frame = { top: panes.top, left: panes.left, right: panes.right, sizes };
+      this.deps.store.setMeta(META_FRAME, JSON.stringify(frame));
+      this.deps.store.setMeta(META_FEED_PANE, panes.feed ?? null);
       this.insert(
         { id, kind: "main", name: "main", profile: profile.name, sessionId, role: session.role },
         panes.main,
@@ -565,6 +588,36 @@ export class Workspace {
       }
       await this.showUnderMain(state, pane);
       await focusPane(run, pane);
+      return { open: true };
+    });
+  }
+
+  /**
+   * Shows the event feed right of the agents pane, or sends it to the pool. The focus stays
+   * where it is. A feed pane that is gone (its program ended) is started again.
+   */
+  toggleFeed(): Promise<{ open: boolean }> {
+    return this.serial(async () => {
+      const { run, store } = this.deps;
+      const state = await this.requireUp();
+      const frame = parseJson<Frame>(store.getMeta(META_FRAME));
+      if (!frame) throw new WorkspaceError("This workspace has no room for the feed; restart it.");
+      if (state.feed?.open) {
+        await returnToPool(run, { agent: store.getMeta(META_FEED_PANE) ?? "", name: FEED_NAME });
+        await fixFrame(run, frame, frame.sizes);
+        return { open: false };
+      }
+      let pane = state.feed ? store.getMeta(META_FEED_PANE) : null;
+      if (!pane) {
+        pane = await spawnPoolWindow(run, {
+          cwd: this.deps.projectRoot,
+          name: FEED_NAME,
+          command: this.uiPane("feed", FEED_NAME),
+        });
+        store.setMeta(META_FEED_PANE, pane);
+      }
+      await showFeed(run, { feed: pane, right: frame.right, width: frame.sizes.feedWidth });
+      await fixFrame(run, { ...frame, feed: pane }, frame.sizes);
       return { open: true };
     });
   }
@@ -808,6 +861,18 @@ export class Workspace {
       for (const agent of live) if (behind.has(agent.id)) agent.outOfDate = true;
     }
 
+    // A feed pane whose program ended is removed; showing the feed again starts a new one.
+    const feedPane = up ? store.getMeta(META_FEED_PANE) : null;
+    let feed: WorkspaceState["feed"] = null;
+    if (feedPane) {
+      const pane = panes.get(feedPane);
+      if (pane && !pane.dead) {
+        feed = { open: pane.inWorkspace };
+      } else {
+        if (pane) await killPane(run, feedPane).catch(() => undefined);
+        store.setMeta(META_FEED_PANE, null);
+      }
+    }
     // The shell is gone once the user exits it; its dead pane is removed like an agent's.
     const shellPane = up ? store.getMeta(META_SHELL_PANE) : null;
     let shell: WorkspaceState["shell"] = null;
@@ -845,6 +910,7 @@ export class Workspace {
       ),
       workflows: workflowRuns(store),
       shell,
+      feed,
     };
   }
 

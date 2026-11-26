@@ -230,6 +230,8 @@ export interface WorkspaceState {
   workflows: WorkflowRunInfo[];
   /** The plain shell pane: null until it is first shown, then whether it is under main now. */
   shell: { open: boolean } | null;
+  /** The event feed: null when its pane is gone, else whether it is shown. */
+  feed: { open: boolean } | null;
 }
 
 /** What an item of the event feed is about. */
@@ -283,7 +285,7 @@ export interface FeedDetail extends FeedItem {
 }
 
 /** The wizards that open in a popup over the workspace. */
-export type WizardKind = "workflows" | "agent" | "tools" | "roles" | "design" | "messages";
+export type WizardKind = "workflows" | "agent" | "tools" | "roles" | "design" | "messages" | "feed";
 
 /** Everything the daemon can show in a popup: the wizards, the question queue, the command menu. */
 export type PopupKind = WizardKind | "questions" | "palette";
@@ -295,6 +297,7 @@ export const POPUP_KINDS: readonly PopupKind[] = [
   "roles",
   "design",
   "messages",
+  "feed",
   "questions",
   "palette",
 ];

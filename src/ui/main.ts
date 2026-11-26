@@ -7,11 +7,12 @@ import { openEditor } from "../cli/editor.ts";
 import { projectRoles } from "../cli/palette.ts";
 import { loadConfig } from "../shared/config.ts";
 import { runDir } from "../shared/paths.ts";
-import type { WizardKind, WorkspaceState } from "../shared/protocol.ts";
+import type { FeedItem, WizardKind, WorkspaceState } from "../shared/protocol.ts";
 import { capabilityLines, resolveSession, summarizeSession } from "../shared/roles.ts";
 import { parseRef } from "../shared/scope.ts";
 import { createAgentsView } from "./agents.ts";
 import { createDesigner } from "./designer.ts";
+import { createFeedView } from "./feed.ts";
 import { roleScreen, rolesScreen } from "./role-screens.ts";
 import { diskRoleStore } from "./role-store.ts";
 import { openRun } from "./run-screens.ts";
@@ -21,6 +22,7 @@ import { createTopbarView } from "./topbar.ts";
 import { createWizard, type Outcome, type Screen } from "./wizard.ts";
 import {
   agentScreen,
+  feedScreen,
   menuScreen,
   messagesScreen,
   type WizardApi,
@@ -29,7 +31,7 @@ import {
 import { type DesignDeps, designListScreen, openDesign } from "./workflow-screens.ts";
 import { diskWorkflowStore } from "./workflow-store.ts";
 
-export type UiView = "status" | "agents" | "topbar";
+export type UiView = "status" | "agents" | "topbar" | "feed";
 
 const POLL_MS = 500;
 
@@ -78,6 +80,8 @@ export async function runUi(view: UiView, projectRoot: string): Promise<never> {
     });
   };
 
+  if (view === "feed") return runFeed(renderer, projectRoot, post);
+
   const pane =
     view === "agents"
       ? createAgentsView(renderer, {
@@ -98,6 +102,33 @@ export async function runUi(view: UiView, projectRoot: string): Promise<never> {
 
   while (true) {
     try {
+      pane.update(await call<WorkspaceState>(projectRoot, "GET", "/state"), Date.now());
+    } catch (error) {
+      pane.showMessage((error as Error).message);
+    }
+    await Bun.sleep(POLL_MS);
+  }
+}
+
+/** The feed pane: the workspace state for its switches, and the items that are new since the last poll. */
+async function runFeed(
+  renderer: CliRenderer,
+  projectRoot: string,
+  post: (path: string, body?: unknown) => void,
+): Promise<never> {
+  const pane = createFeedView(renderer, {
+    open: (itemId) => post("/popup", { kind: "feed", subject: String(itemId) }),
+  });
+  let last = 0;
+  while (true) {
+    try {
+      const { items } = await call<{ items: FeedItem[] }>(
+        projectRoot,
+        "GET",
+        `/feed?after=${last}&limit=${last === 0 ? 300 : 200}`,
+      );
+      pane.add(items);
+      last = items.at(-1)?.id ?? last;
       pane.update(await call<WorkspaceState>(projectRoot, "GET", "/state"), Date.now());
     } catch (error) {
       pane.showMessage((error as Error).message);
@@ -203,15 +234,17 @@ export async function runWizard(
             ? await menuScreen(api, store(), design)
             : kind === "messages"
               ? await messagesScreen(api)
-              : kind === "tools"
-                ? subject
-                  ? await toolsScreen(api, subject)
-                  : await toolsPickScreen(api)
-                : kind === "roles"
+              : kind === "feed"
+                ? await feedScreen(api, subject ?? "")
+                : kind === "tools"
                   ? subject
-                    ? roleScreen(api, store(), parseRef(subject))
-                    : rolesScreen(api, store())
-                  : await workflowsScreen(api, design);
+                    ? await toolsScreen(api, subject)
+                    : await toolsPickScreen(api)
+                  : kind === "roles"
+                    ? subject
+                      ? roleScreen(api, store(), parseRef(subject))
+                      : rolesScreen(api, store())
+                    : await workflowsScreen(api, design);
     }
   } catch (error) {
     console.error((error as Error).message);

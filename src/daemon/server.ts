@@ -102,6 +102,8 @@ export function startServer(options: ServerOptions) {
         return json(await workspace.toggle(requireTarget(await body(request))));
       case "POST /shell/toggle":
         return json(await workspace.toggleShell());
+      case "POST /feed/toggle":
+        return json(await workspace.toggleFeed());
       case "POST /popup": {
         const { kind, subject } = await body<{ kind?: unknown; subject?: unknown }>(request);
         const known = POPUP_KINDS.find((entry) => entry === kind);

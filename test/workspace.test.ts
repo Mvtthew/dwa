@@ -93,7 +93,7 @@ describe("up", () => {
     expect(state.agents).toEqual([]);
 
     const panes = [...tmux.panes.values()];
-    expect(panes.map((pane) => pane.window)).toEqual(Array(4).fill(WORKSPACE_WINDOW));
+    expect(panes.map((pane) => pane.window)).toEqual(Array(5).fill(WORKSPACE_WINDOW));
     expect(panes[0]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "status"]);
     const mainArgv = panes[1]?.argv ?? [];
     expect(mainArgv).toEqual([
@@ -116,7 +116,8 @@ describe("up", () => {
     ]);
     expect(files.get("/project/.dwa/run/agents/id-1/prompt.md")).toContain('You are "main"');
     expect(panes[2]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "agents"]);
-    expect(panes[3]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "topbar"]);
+    expect(panes[3]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "feed"]);
+    expect(panes[4]?.argv).toEqual(["bun", "/dwa/cli.ts", "ui", "topbar"]);
     expect(panes[1]?.env).toMatchObject({
       DWA_PROJECT: "/project",
       DWA_SOCKET: "/tmp/dwa.sock",
@@ -202,17 +203,47 @@ describe("config", () => {
     expect(shown[1]).toContain('Unknown profile "nope"');
   });
 
+  test("the feed is shown at the start, and hidden and shown again at its width", async () => {
+    config.layout = { feed_width: 44 };
+    expect((await workspace.up()).feed).toEqual({ open: true });
+    const feed = [...tmux.panes].find(([, pane]) => pane.argv.at(-1) === "feed")?.[0] ?? "";
+    expect(await workspace.toggleFeed()).toEqual({ open: false });
+    expect(tmux.commands("break-pane").at(-1)).toEqual([
+      "break-pane",
+      "-d",
+      "-s",
+      feed,
+      "-n",
+      "feed",
+    ]);
+    // The resize hook no longer names the hidden feed.
+    expect(tmux.commands("set-hook").at(-1)?.at(-1)).not.toContain(feed);
+    expect((await workspace.state()).feed).toEqual({ open: false });
+    expect(await workspace.toggleFeed()).toEqual({ open: true });
+    expect(tmux.commands("join-pane").at(-1)).toEqual(
+      expect.arrayContaining(["-d", "-h", "-l", "44", "-s", feed]),
+    );
+    expect(tmux.commands("set-hook").at(-1)?.at(-1)).toContain(`-t ${feed} -x 44`);
+    // A feed pane that is gone is started again when it is shown.
+    tmux.panes.delete(feed);
+    expect((await workspace.state()).feed).toBeNull();
+    expect(await workspace.toggleFeed()).toEqual({ open: true });
+    expect(tmux.commands("new-window").at(-1)).toEqual(expect.arrayContaining(["ui", "feed"]));
+  });
+
   test("layout sizes from the config are applied", async () => {
     config.layout = { status_width: 24, agents_width: 40, agent_height: 55 };
     await workspace.up();
-    // The top bar keeps its one row, the side columns their widths, now and on every resize.
+    // The top bar keeps its one row, the side columns and the feed their widths, now and on
+    // every resize.
     expect(tmux.commands("resize-pane").map((command) => command.at(-1))).toEqual([
       "1",
+      "40",
       "24",
       "40",
     ]);
     const hook = tmux.commands("set-hook").find((command) => command.includes("window-resized"));
-    expect(hook?.at(-1)).toMatch(/-y 1 ; resize-pane .* -x 24 ; resize-pane .* -x 40$/);
+    expect(hook?.at(-1)).toMatch(/-y 1 ; resize-pane .* -x 40 ; resize-pane .* -x 24 ; .* -x 40$/);
     // Full width, above the columns, running the bar.
     const bar = tmux.commands("split-window").find((command) => command.includes("-f"));
     expect(bar).toEqual(expect.arrayContaining(["-v", "-b", "-l", "1", "ui", "topbar"]));

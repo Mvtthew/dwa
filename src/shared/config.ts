@@ -103,6 +103,8 @@ const LayoutSchema = z.strictObject({
   status_width: z.number().int().min(16).max(80).optional(),
   /** Width of the agents pane in columns. */
   agents_width: z.number().int().min(16).max(80).optional(),
+  /** Width of the event feed on the right, in columns. */
+  feed_width: z.number().int().min(16).max(80).optional(),
   /** Height of the agent pane opened under main, in percent of the centre column. */
   agent_height: z.number().int().min(10).max(90).optional(),
 });

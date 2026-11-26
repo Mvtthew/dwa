@@ -401,6 +401,7 @@ export function topbarModel(state: WorkspaceState | null, width: number): Topbar
   separator();
   const shell = state?.shell?.open ?? false;
   parts.push({ text: " Shell ", on: shell, action: { toggle: "shell" } });
+  parts.push({ text: " Feed ", on: state?.feed?.open ?? false, action: { toggle: "feed" } });
   const questions = state?.questions.filter((question) => question.to === "user").length ?? 0;
   const waiting = state?.questions.length ?? 0;
   const messages = state?.inbox.length ?? 0;

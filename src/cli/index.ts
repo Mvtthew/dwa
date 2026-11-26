@@ -254,6 +254,7 @@ async function keyCommand(projectRoot: string, args: string[]): Promise<number> 
     else if (action === "close") await call(projectRoot, "POST", "/agents/close");
     else if (action === "focus") await call(projectRoot, "POST", "/focus");
     else if (action === "shell") await call(projectRoot, "POST", "/shell/toggle");
+    else if (action === "feed") await call(projectRoot, "POST", "/feed/toggle");
   } catch (error) {
     const message =
       action === "open" && /^No agent/.test((error as Error).message)
@@ -347,7 +348,16 @@ async function main(argv: string[]): Promise<number> {
     }
     case "wizard": {
       const kind = rest[0];
-      const kinds = ["workflows", "agent", "tools", "roles", "design", "messages", "menu"] as const;
+      const kinds = [
+        "workflows",
+        "agent",
+        "tools",
+        "roles",
+        "design",
+        "messages",
+        "feed",
+        "menu",
+      ] as const;
       const known = kinds.find((entry) => entry === kind);
       if (!known) {
         console.error(`Usage: ${APP_NAME} wizard <${kinds.join("|")}> [session, role or workflow]`);
@@ -357,8 +367,8 @@ async function main(argv: string[]): Promise<number> {
     }
     case "ui": {
       const view = rest[0];
-      if (view !== "status" && view !== "agents" && view !== "topbar") {
-        console.error(`Usage: ${APP_NAME} ui <status|agents|topbar>`);
+      if (view !== "status" && view !== "agents" && view !== "topbar" && view !== "feed") {
+        console.error(`Usage: ${APP_NAME} ui <status|agents|topbar|feed>`);
         return 2;
       }
       return (await import("../ui/main.ts")).runUi(view, projectRoot);

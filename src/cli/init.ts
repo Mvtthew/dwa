@@ -88,6 +88,7 @@ effort = "medium"
 # [layout]
 # status_width = 30     # columns
 # agents_width = 34     # columns
+# feed_width = 40       # columns of the event feed (prefix, then e, shows or hides it)
 # agent_height = 40     # percent of the centre column
 `;
 
