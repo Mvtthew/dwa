@@ -36,6 +36,7 @@ describe("the role store on disk", () => {
       ["dwa-selfheal", "project", false],
       ["explore", "project", false],
       ["explore", "user", true],
+      ["general", "project", false],
       ["main", "project", false],
       ["mine", "user", false],
       ["planner", "project", false],

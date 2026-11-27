@@ -50,21 +50,18 @@ describe("setKeys", () => {
 
   test("removes and appends items of a multi-line list, keeping the comments inside it", () => {
     const before = example("developer");
-    const wanted = [
-      "Bash(git status *)",
-      "Bash(git log *)",
-      "Bash(git show *)",
-      "Bash(bun test *)",
-    ];
+    const wanted = ["Bash(bun test *)"];
     const after = setKeys(before, null, { allow: wanted });
     expect(parse(after).allow).toEqual(wanted);
+    // The removed line is `  "Bash",`, which the `tools` list still has, so only the added one shows.
     expect(changed(before, after)).toEqual({
-      gone: ['  "Bash(git diff *)",'],
+      gone: [],
       added: ['  "Bash(bun test *)",'],
     });
-    expect(after).toContain("# Add the project's own checks");
-    // The new item comes right after the last real one, before the commented example.
-    expect(after.indexOf('"Bash(bun test *)"')).toBeLessThan(after.indexOf("# Add the project"));
+    // The new item takes the place of the real one, before the commented example.
+    expect(after).toContain(
+      'allow = [\n  "Bash(bun test *)",\n  # To be asked about the rest, put rules',
+    );
   });
 
   test("adds a comma to a last item that had none", () => {

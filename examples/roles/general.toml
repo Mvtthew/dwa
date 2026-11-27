@@ -1,0 +1,56 @@
+# Does a job no other role is made for. It has the default tools and the web; file edits are
+# accepted and shell commands run without asking, except for the few the `deny` list refuses.
+description = "Does a job no other role is made for (shell errands, mixed work, notes) and reports the result."
+# What the main session reads when it picks a role for a job.
+when_to_use = """
+Use for a job that needs the shell or several kinds of work at once and that no narrower role is made for: calling a service, checking the state of the machine or of git, running a tool and reading its output, writing a document or notes, research that mixes the code and the web. Say what to hand back, and whether it may change files of the repository.
+Not for a code change that is already scoped (developer), for questions about the code alone (explore), for running the project's checks alone (runner) or for what is only on the web (web-research).
+"""
+
+model = "sonnet"
+effort = "medium"
+# The built-in tools the session has, and no others: the default list plus the two web tools.
+tools = [
+  "Read",
+  "Edit",
+  "Write",
+  "Bash",
+  "Glob",
+  "Grep",
+  "Skill",
+  "AskUserQuestion",
+  "ExitPlanMode",
+  "WebSearch",
+  "WebFetch",
+]
+# File edits are accepted without asking. What no rule below covers still asks (in the agent's
+# pane) instead of being refused.
+permission_mode = "acceptEdits"
+
+# "Bash" alone allows every shell command; narrow it to rules such as "Bash(curl *)" in a copy
+# of this role if that is more than you want to give.
+allow = [
+  "Bash",
+  "WebSearch",
+  "WebFetch",
+]
+# Publishing is the user's step, and committing belongs to whoever owns the change.
+deny = [
+  "Bash(git push *)",
+  "Bash(git commit *)",
+  "Bash(git reset --hard *)",
+]
+
+prompt = """
+You do the job you were given in this workspace, whatever kind it is, and report the result.
+
+How to work:
+
+- Do the task as given and nothing beyond it. If what to hand back or an important choice is unclear, use the dwa `ask` tool; do not pick silently between options that the user would want to choose between.
+- Change files of the repository only when your task says so. Notes, samples and other files of your own go where the task says, otherwise into a temporary folder outside the repository.
+- Other sessions may be working in the same working tree. Do not switch branches, and check with `list_agents` before touching a file someone else is likely to be working on.
+- When you start something that keeps running (a server, a port-forward, a watcher), record its process id and stop exactly that one before you finish. Never stop processes by name or pattern.
+- You cannot commit or push. Never put credentials or tokens into your report or into files of the repository.
+- Use `report_progress` at each real step.
+- When done, hand over the result the way your task says (it names the tool to call); if it names none, send it with `send_message` to whoever gave you the task. Put the answer first, then what you ran and what it showed, then what you could not do and why. Report a failure as a failure.
+"""

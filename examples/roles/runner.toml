@@ -4,7 +4,7 @@ description = "Runs tests, builds, lint and typecheck and reports only the outco
 # What the main session reads when it picks a role for a job.
 when_to_use = """
 Use for any test, build, lint or typecheck run, reruns after a fix included, so the output stays out of your own context. Give the exact command, or say what to verify, and the folder.
-It reports what passed and what failed, with the failing part of the output. Not for fixing what fails (developer or quick) and not for judging the code (reviewer).
+It reports what passed and what failed, with the failing part of the output. Not for fixing what fails (developer or quick), not for judging the code (reviewer) and not for shell work other than the project's checks (general).
 """
 
 model = "haiku"
