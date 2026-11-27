@@ -10,7 +10,7 @@ import {
   visibleItems,
 } from "../src/ui/feed-model.ts";
 import type { Row } from "../src/ui/wizard.ts";
-import { feedScreen, type WizardApi } from "../src/ui/wizards.ts";
+import { feedScreen, menuScreen, type WizardApi } from "../src/ui/wizards.ts";
 
 const NOW = Date.UTC(2026, 10, 26, 12, 0, 0);
 
@@ -117,7 +117,7 @@ describe("the feed pane", () => {
   test("lists items, switches types on and off, and opens an item on a click", async () => {
     const harness = await createTestRenderer({ width: 40, height: 30 });
     const opened: number[] = [];
-    const view = createFeedView(harness.renderer, { open: (id) => opened.push(id) });
+    const view = createFeedView(harness.renderer, { open: (id) => opened.push(id), clear() {} });
     view.update(workspace([agent("dev")]), NOW);
     view.add([
       item(1, { body: "Done with the parser." }),
@@ -155,11 +155,105 @@ describe("the feed pane", () => {
 
   test("says when there is nothing yet", async () => {
     const harness = await createTestRenderer({ width: 40, height: 10 });
-    const view = createFeedView(harness.renderer, { open() {} });
+    const view = createFeedView(harness.renderer, { open() {}, clear() {} });
     view.update(workspace([]), NOW);
     await harness.renderOnce();
     expect(harness.captureCharFrame()).toContain("Nothing yet.");
     harness.renderer.destroy();
+  });
+});
+
+describe("separators and clearing in the feed pane", () => {
+  const separator = (id: number, title = "new session") =>
+    item(id, { kind: "session", agentId: "id-main", agent: "main", main: true, title, body: "" });
+
+  test("a separator is shown whatever the switches say, as one rule across the pane", () => {
+    const items = [item(1), separator(2), item(3)];
+    expect(filterOf(separator(2))).toBeNull();
+    expect(
+      visibleItems(items, { filters: new Set(), only: null }).map((entry) => entry.id),
+    ).toEqual([2]);
+    expect(
+      visibleItems(items, { filters: new Set(), only: "id-other" }).map((entry) => entry.id),
+    ).toEqual([2]);
+    const lines = itemLines(separator(2), 38, NOW);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.text).toHaveLength(38);
+    expect(lines[0]?.text.startsWith("── new session · just now ─")).toBe(true);
+    expect(lines[0]?.text.endsWith("─")).toBe(true);
+    // Too narrow for the whole label: cut, never wider than the pane.
+    expect(itemLines(separator(2, "conversation cleared"), 12, NOW)[0]?.text.length).toBe(12);
+  });
+
+  test("the pane draws the separator, drops what was cleared and asks for a clear on a click", async () => {
+    const harness = await createTestRenderer({ width: 40, height: 30 });
+    const opened: number[] = [];
+    const cleared: string[] = [];
+    const view = createFeedView(harness.renderer, {
+      open: (id) => opened.push(id),
+      clear: (scope) => cleared.push(scope),
+    });
+    view.update(workspace([agent("dev")]), NOW);
+    view.add([item(1, { body: "Old work." }), separator(2), item(3, { body: "New work." })]);
+    await harness.renderOnce();
+    let frame = harness.captureCharFrame();
+    let lines = frame.split("\n");
+    const row = (text: string) => lines.findIndex((line) => line.includes(text));
+    const column = (text: string) => (lines[row(text)] ?? "").indexOf(text);
+    expect(row("Old work.")).toBeLessThan(row("── new session"));
+    expect(row("── new session")).toBeLessThan(row("New work."));
+
+    // The separator has nothing to open.
+    await harness.mockMouse.click(4, row("── new session"));
+    expect(opened).toEqual([]);
+
+    await harness.mockMouse.click(column("[Clear]") + 1, row("[Clear]"));
+    await harness.mockMouse.click(column("[Clear old]") + 1, row("[Clear old]"));
+    expect(cleared).toEqual(["all", "earlier"]);
+
+    // The daemon's answer is what empties the pane, not the click.
+    expect(frame).toContain("Old work.");
+    view.clear(1);
+    await harness.renderOnce();
+    frame = harness.captureCharFrame();
+    lines = frame.split("\n");
+    expect(frame).not.toContain("Old work.");
+    expect(frame).toContain("── new session");
+    expect(frame).toContain("New work.");
+
+    view.clear(3);
+    await harness.renderOnce();
+    frame = harness.captureCharFrame();
+    expect(frame).not.toContain("New work.");
+    expect(frame).toContain("Nothing yet.");
+    harness.renderer.destroy();
+  });
+
+  test("the menu clears everything or the earlier sessions", async () => {
+    const posted: unknown[] = [];
+    const wizard: WizardApi = {
+      roles: [],
+      profiles: [],
+      call: async <T>(method: string, path: string, body?: unknown) => {
+        if (method === "POST") posted.push([path, body]);
+        return (path === "/state" ? workspace([]) : {}) as T;
+      },
+    };
+    const menu = await menuScreen(wizard);
+    const button = (rows: Row[], label: string) => {
+      const found = rows.find((entry) => entry.kind === "button" && entry.label === label);
+      if (found?.kind !== "button") throw new Error(`no button ${label}`);
+      return found;
+    };
+    const next = await button(menu.rows, "Clear the feed…").run({});
+    if (!next || !("to" in next)) throw new Error("no screen");
+    const screen = await next.to;
+    expect(await button(screen.rows, "Clear everything").run({})).toEqual({ close: true });
+    expect(await button(screen.rows, "Clear earlier sessions").run({})).toEqual({ close: true });
+    expect(posted).toEqual([
+      ["/feed/clear", { scope: "all" }],
+      ["/feed/clear", { scope: "earlier" }],
+    ]);
   });
 });
 

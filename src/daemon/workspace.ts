@@ -405,6 +405,8 @@ export class Workspace {
         META_AGENT_HEIGHT,
         config.layout.agent_height ? String(config.layout.agent_height) : null,
       );
+      // The feed of a new workspace starts here: what earlier ones left is hidden, not deleted.
+      this.feed.startSession({ agentId: id, agentName: "main", title: "new session" });
 
       // Agents listed in the config start with the workspace. One that cannot be started
       // (bad name, unknown profile) is reported and does not stop the others.
@@ -790,6 +792,15 @@ export class Workspace {
       const note = this.notes.get(row.id);
       this.notes.delete(row.id);
       if (note) this.messaging.send(USER, row.name, note);
+      // "/clear" in the main session is where the user starts something new.
+      if (row.kind === "main" && input.source === "clear") {
+        this.feed.add({
+          kind: "session",
+          agentId: row.id,
+          agentName: row.name,
+          title: "conversation cleared",
+        });
+      }
     }
     if (request.event === "Stop") {
       const reply = input.last_assistant_message;
@@ -1577,7 +1588,8 @@ export class Workspace {
     store.setActivity(agentId, "starting", null, this.now());
     store.addEvent({ agentId, at: this.now(), event: "Restart", summary: null });
     this.feed.add({
-      kind: "lifecycle",
+      // A main session that starts over without its conversation gets a separator.
+      kind: !resume && row.kind === "main" ? "session" : "lifecycle",
       agentId,
       agentName: row.name,
       title: resume ? "restarted with changed settings" : "started afresh",

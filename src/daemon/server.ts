@@ -1,11 +1,14 @@
 import { ConfigError } from "../shared/config.ts";
 import type {
+  FeedClearScope,
+  FeedList,
   HookRequest,
   SpawnRequest,
   StatuslineRequest,
   UpRequest,
 } from "../shared/protocol.ts";
 import {
+  FEED_CLEAR_SCOPES,
   type LeaderRequest,
   POPUP_KINDS,
   type RefreshRequest,
@@ -81,7 +84,20 @@ export function startServer(options: ServerOptions) {
         const params = new URL(request.url).searchParams;
         const after = Number(params.get("after") ?? 0) || 0;
         const limit = Number(params.get("limit") ?? 200) || 200;
-        return json({ items: workspace.feed.list(after, limit) });
+        const list: FeedList = {
+          items: workspace.feed.list(after, limit),
+          cleared: workspace.feed.cleared(),
+        };
+        return json(list);
+      }
+      case "POST /feed/clear": {
+        const scope = (await body<{ scope?: unknown }>(request)).scope ?? "all";
+        if (!FEED_CLEAR_SCOPES.includes(scope as FeedClearScope)) {
+          throw new WorkspaceError(`Unknown scope "${String(scope)}": use all or earlier.`);
+        }
+        const before = workspace.feed.cleared();
+        const cleared = workspace.feed.clear(scope as FeedClearScope);
+        return json({ cleared, changed: cleared > before });
       }
       case "GET /feed/item": {
         const id = Number(new URL(request.url).searchParams.get("id"));

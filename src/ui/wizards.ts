@@ -80,6 +80,7 @@ const FEED_TITLES: Record<FeedKind, string> = {
   answer: "Answer",
   step: "Workflow",
   lifecycle: "Session",
+  session: "New session",
 };
 
 /** What a feed item's details say, as label and value, for a spawn. */
@@ -438,6 +439,31 @@ export async function menuScreen(
       run: post("/shell/toggle"),
     },
     { kind: "button", label: "Hide the pane under main", run: post("/agents/close") },
+    {
+      kind: "button",
+      label: "Clear the feed…",
+      hint: "entries stay stored, and are not shown again",
+      run: () => ({
+        to: {
+          title: "Clear the feed",
+          rows: [
+            {
+              kind: "button",
+              label: "Clear everything",
+              hint: "the feed is empty until something happens",
+              run: post("/feed/clear", { scope: "all" }),
+            },
+            {
+              kind: "button",
+              label: "Clear earlier sessions",
+              hint: "keeps what follows the latest separator",
+              run: post("/feed/clear", { scope: "earlier" }),
+            },
+            back,
+          ],
+        },
+      }),
+    },
     {
       kind: "button",
       label: "Stop the workspace…",

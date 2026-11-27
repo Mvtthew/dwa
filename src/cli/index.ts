@@ -65,6 +65,8 @@ Talking to agents
   answer [id] [text]                    Answer an open question (goes through them when run bare, asks for the text when given only an id)
   inbox                                 Show open questions and messages agents sent to you
   inbox clear                           Take the messages so far out of that list and the status pane
+  feed clear [--earlier]                Take the entries so far out of the event feed, or with --earlier
+                                        only the ones before the latest session separator
 
 Workflows
   workflow list                         The project's and your personal workflows, and the runs
@@ -309,6 +311,7 @@ async function main(argv: string[]): Promise<number> {
     case "ask":
     case "answer":
     case "inbox":
+    case "feed":
       return (await import("./talk.ts")).talkCommand(projectRoot, command, rest);
     case "workflow":
       if (rest[0] === "design") {

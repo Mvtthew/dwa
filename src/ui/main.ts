@@ -7,7 +7,7 @@ import { openEditor } from "../cli/editor.ts";
 import { projectRoles } from "../cli/palette.ts";
 import { loadConfig } from "../shared/config.ts";
 import { runDir } from "../shared/paths.ts";
-import type { FeedItem, WizardKind, WorkspaceState } from "../shared/protocol.ts";
+import type { FeedList, WizardKind, WorkspaceState } from "../shared/protocol.ts";
 import { capabilityLines, resolveSession, summarizeSession } from "../shared/roles.ts";
 import { parseRef } from "../shared/scope.ts";
 import { createAgentsView } from "./agents.ts";
@@ -118,17 +118,24 @@ async function runFeed(
 ): Promise<never> {
   const pane = createFeedView(renderer, {
     open: (itemId) => post("/popup", { kind: "feed", subject: String(itemId) }),
+    clear: (scope) => post("/feed/clear", { scope }),
   });
   let last = 0;
+  let cleared = 0;
   while (true) {
     try {
-      const { items } = await call<{ items: FeedItem[] }>(
+      const feed = await call<FeedList>(
         projectRoot,
         "GET",
         `/feed?after=${last}&limit=${last === 0 ? 300 : 200}`,
       );
-      pane.add(items);
-      last = items.at(-1)?.id ?? last;
+      // A clear made anywhere (here, the menu, the CLI, a new workspace) shows within one poll.
+      if (feed.cleared > cleared) {
+        cleared = feed.cleared;
+        pane.clear(cleared);
+      }
+      pane.add(feed.items);
+      last = feed.items.at(-1)?.id ?? last;
       pane.update(await call<WorkspaceState>(projectRoot, "GET", "/state"), Date.now());
     } catch (error) {
       pane.showMessage((error as Error).message);

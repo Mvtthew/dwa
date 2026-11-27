@@ -1,5 +1,5 @@
-// Commands for the user's side of the conversation: asking an agent, answering questions and
-// reading the inbox. None of them involves a model call.
+// Commands for the user's side of the conversation: asking an agent, answering questions,
+// reading the inbox and clearing the feed. None of them involves a model call.
 import type { QuestionInfo, WorkspaceState } from "../shared/protocol.ts";
 import { call } from "./client.ts";
 
@@ -119,7 +119,7 @@ export function inboxText(state: WorkspaceState, now = Date.now()): string[] {
 
 export async function talkCommand(
   projectRoot: string,
-  command: "ask" | "answer" | "inbox",
+  command: "ask" | "answer" | "inbox" | "feed",
   args: string[],
 ): Promise<number> {
   switch (command) {
@@ -157,6 +157,20 @@ export async function talkCommand(
         answer: words.join(" "),
       });
       console.log(`Question #${id} answered.`);
+      return 0;
+    }
+    case "feed": {
+      const earlier = args[1] === "--earlier";
+      if (args[0] !== "clear" || args.length > (earlier ? 2 : 1)) {
+        console.error("Usage: dwa feed clear [--earlier]");
+        return 2;
+      }
+      const { changed } = await call<{ changed: boolean }>(projectRoot, "POST", "/feed/clear", {
+        scope: earlier ? "earlier" : "all",
+      });
+      if (changed)
+        console.log(earlier ? "Earlier sessions cleared from the feed." : "Feed cleared.");
+      else console.log(earlier ? "No earlier session in the feed." : "The feed is empty already.");
       return 0;
     }
     case "inbox": {

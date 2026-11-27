@@ -255,7 +255,10 @@ export interface WorkspaceState {
   feed: { open: boolean } | null;
 }
 
-/** What an item of the event feed is about. */
+/**
+ * What an item of the event feed is about. A `session` item is the separator written where a main
+ * session starts or starts over.
+ */
 export type FeedKind =
   | "recap"
   | "spawn"
@@ -264,7 +267,8 @@ export type FeedKind =
   | "question"
   | "answer"
   | "step"
-  | "lifecycle";
+  | "lifecycle"
+  | "session";
 
 export const FEED_KINDS: readonly FeedKind[] = [
   "recap",
@@ -275,7 +279,20 @@ export const FEED_KINDS: readonly FeedKind[] = [
   "answer",
   "step",
   "lifecycle",
+  "session",
 ];
+
+/** What a clear of the feed takes out of sight: everything, or what is above the latest separator. */
+export type FeedClearScope = "all" | "earlier";
+
+export const FEED_CLEAR_SCOPES: readonly FeedClearScope[] = ["all", "earlier"];
+
+/** The answer of `GET /feed`. */
+export interface FeedList {
+  items: FeedItem[];
+  /** Items up to this id are no longer listed: the pane drops the ones it still shows. */
+  cleared: number;
+}
 
 /** One thing that happened, as the feed pane lists it. */
 export interface FeedItem {

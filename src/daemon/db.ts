@@ -627,20 +627,31 @@ export class Store {
 
   /**
    * Feed items after `after`, oldest first, at most `limit`. Without `after` the latest `limit`.
+   * Nothing up to `floor` is given either way.
    * The body is cut to `preview` characters.
    */
-  feedAfter(after: number, limit: number, preview: number): FeedRow[] {
+  feedAfter(after: number, limit: number, preview: number, floor = 0): FeedRow[] {
     const columns = `${FEED_COLUMNS}, substr(feed.body, 1, ${Math.max(0, Math.floor(preview))}) AS body`;
     const from = "FROM feed LEFT JOIN agents ON agents.id = feed.agent_id";
     if (after > 0) {
       return this.db
         .query(`SELECT ${columns} ${from} WHERE feed.id > ? ORDER BY feed.id LIMIT ?`)
-        .all(after, limit) as FeedRow[];
+        .all(Math.max(after, floor), limit) as FeedRow[];
     }
     const rows = this.db
-      .query(`SELECT ${columns} ${from} ORDER BY feed.id DESC LIMIT ?`)
-      .all(limit) as FeedRow[];
+      .query(`SELECT ${columns} ${from} WHERE feed.id > ? ORDER BY feed.id DESC LIMIT ?`)
+      .all(floor, limit) as FeedRow[];
     return rows.reverse();
+  }
+
+  /** The id of the newest feed item, of one kind when given; 0 when there is none. */
+  lastFeedId(kind?: string): number {
+    const row = (
+      kind === undefined
+        ? this.db.query("SELECT max(id) AS id FROM feed").get()
+        : this.db.query("SELECT max(id) AS id FROM feed WHERE kind = ?").get(kind)
+    ) as { id: number | null } | null;
+    return row?.id ?? 0;
   }
 
   feedItem(id: number): FeedRow | null {

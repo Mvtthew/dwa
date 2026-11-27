@@ -20,7 +20,9 @@ export function defaultFilters(): Set<FeedFilter> {
   return new Set(FEED_FILTERS.map((entry) => entry.filter).filter((filter) => filter !== "main"));
 }
 
-export function filterOf(item: FeedItem): FeedFilter {
+/** The switch an item belongs to; a separator has none and is always shown. */
+export function filterOf(item: FeedItem): FeedFilter | null {
+  if (item.kind === "session") return null;
   if (item.kind === "recap") return item.main ? "main" : "recap";
   if (item.kind === "question" || item.kind === "answer") return "message";
   return item.kind;
@@ -43,7 +45,10 @@ export interface FeedView {
 
 export function visibleItems(items: readonly FeedItem[], view: FeedView): FeedItem[] {
   return items.filter((item) => {
-    if (!view.filters.has(filterOf(item))) return false;
+    const filter = filterOf(item);
+    // A separator stays whatever is switched off: it says where a session begins.
+    if (filter === null) return true;
+    if (!view.filters.has(filter)) return false;
     if (view.only === null) return true;
     return item.agentId === view.only || item.refId === view.only;
   });
@@ -58,6 +63,7 @@ const GLYPHS: Record<FeedKind, string> = {
   answer: "↩",
   step: "▸",
   lifecycle: "·",
+  session: "─",
 };
 
 export function itemTone(item: FeedItem): Tone | undefined {
@@ -99,6 +105,12 @@ function preview(item: FeedItem): string {
 /** An item as lines: a head with its glyph, who and when, then a few lines of text. */
 export function itemLines(item: FeedItem, width: number, nowMs: number): FeedLine[] {
   const room = Math.max(8, width);
+  if (item.kind === "session") {
+    // A rule across the pane with what began and when in it.
+    const label = `── ${item.title} · ${ago(item.at, nowMs)} `;
+    const text = label.length < room ? label.padEnd(room, "─") : fit(label.trimEnd(), room);
+    return [{ text, kind: "head" }];
+  }
   const head = `${GLYPHS[item.kind]} ${item.agent ?? "dwa"}`;
   const when = ago(item.at, nowMs);
   const gap = room - head.length - when.length;

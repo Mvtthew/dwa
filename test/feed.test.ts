@@ -215,3 +215,82 @@ describe("what the feed records", () => {
     ]);
   });
 });
+
+describe("separators and clearing", () => {
+  const add = (title: string) => workspace.feed.add({ kind: "lifecycle", title });
+  const titles = () => feed().map((item) => item.title);
+
+  test("a new workspace starts its feed at a separator and hides what came before", async () => {
+    expect(kinds()).toEqual(["session new session"]);
+    expect(feed()[0]).toMatchObject({ agentId: MAIN, agent: "main", main: true });
+    add("one");
+    await workspace.down();
+    const before = store.lastFeedId();
+    await workspace.up();
+    const shown = feed();
+    expect(shown[0]).toMatchObject({ kind: "session", title: "new session" });
+    expect(shown.every((item) => item.id > before)).toBe(true);
+    expect(workspace.feed.cleared()).toBe((shown[0]?.id ?? 0) - 1);
+    // Hidden, not deleted: it can still be read.
+    expect(workspace.feed.item(1)?.title).toBe("new session");
+    expect(store.feedItem(2)?.title).toBe("one");
+  });
+
+  test("/clear in the main session is a separator; other starts and agents get none", async () => {
+    const dev = await workspace.spawn({ name: "dev" });
+    const count = feed().length;
+    workspace.hook({ agentId: MAIN, event: "SessionStart", input: { source: "compact" } });
+    workspace.hook({ agentId: MAIN, event: "SessionStart", input: { source: "startup" } });
+    workspace.hook({ agentId: dev.id, event: "SessionStart", input: { source: "clear" } });
+    expect(feed()).toHaveLength(count);
+    workspace.hook({ agentId: MAIN, event: "SessionStart", input: { source: "clear" } });
+    expect(feed().at(-1)).toMatchObject({
+      kind: "session",
+      title: "conversation cleared",
+      agentId: MAIN,
+    });
+  });
+
+  test("a main session started afresh gets a separator, a resumed one or an agent does not", async () => {
+    await workspace.spawn({ name: "dev" });
+    await workspace.restart("dev");
+    expect(kinds().at(-1)).toBe("lifecycle started afresh");
+    await workspace.restart("main");
+    expect(kinds().at(-1)).toBe("session started afresh");
+    workspace.hook({ agentId: MAIN, event: "UserPromptSubmit", input: {} });
+    await workspace.restart("main");
+    expect(kinds().at(-1)).toBe("lifecycle restarted with changed settings");
+  });
+
+  test("clearing moves a point forward and deletes nothing", () => {
+    add("a");
+    add("b");
+    workspace.feed.add({ kind: "session", title: "conversation cleared" });
+    add("c");
+    expect(titles()).toEqual(["new session", "a", "b", "conversation cleared", "c"]);
+
+    const separator = store.lastFeedId("session");
+    expect(workspace.feed.clear("earlier")).toBe(separator - 1);
+    expect(titles()).toEqual(["conversation cleared", "c"]);
+    // Asking from before the point still gives nothing that was cleared.
+    expect(workspace.feed.list(1).map((item) => item.title)).toEqual(["conversation cleared", "c"]);
+    // The same again changes nothing.
+    expect(workspace.feed.clear("earlier")).toBe(separator - 1);
+
+    const last = store.lastFeedId();
+    expect(workspace.feed.clear("all")).toBe(last);
+    expect(feed()).toEqual([]);
+    // The point never moves back, also when the only separator is behind it.
+    expect(workspace.feed.clear("earlier")).toBe(last);
+    add("d");
+    expect(titles()).toEqual(["d"]);
+    expect(workspace.feed.list(last).map((item) => item.title)).toEqual(["d"]);
+    expect(workspace.feed.item(2)?.title).toBe("a");
+  });
+
+  test("a feed without a separator has nothing earlier to clear", () => {
+    const local = new Store(":memory:");
+    expect(local.lastFeedId()).toBe(0);
+    expect(local.lastFeedId("session")).toBe(0);
+  });
+});

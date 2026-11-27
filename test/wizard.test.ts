@@ -215,6 +215,7 @@ describe("the menu", () => {
       "[Leader mode…] whether the main session hands work to agents",
       "[Show the shell]",
       "[Hide the pane under main]",
+      "[Clear the feed…] entries stay stored, and are not shown again",
       "[Stop the workspace…]",
       "",
       "[Close]",
