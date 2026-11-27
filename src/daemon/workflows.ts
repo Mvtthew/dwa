@@ -8,6 +8,7 @@ import type {
   WorkflowStepInfo,
   WorkflowStepState,
 } from "../shared/protocol.ts";
+import { shellAccess } from "../shared/roles.ts";
 import {
   DEFAULT_MAX_ROUNDS,
   dependents,
@@ -391,6 +392,27 @@ export class Workflows {
     }
     if (!existing) workspace.popup("design", `${personal ? "personal" : "project"}:${name}`);
     return { name, path, version, created: !existing, steps: Object.keys(definition.steps) };
+  }
+
+  /**
+   * What the one who wrote a workflow has to know about its steps' sessions: one line for each
+   * step whose session refuses shell commands without asking (`shellAccess`). A step that cannot
+   * be resolved is left out; starting it says why.
+   */
+  async access(text: string, name: string): Promise<string[]> {
+    const definition = parseWorkflow(text, name, "the definition");
+    const lines: string[] = [];
+    for (const [id, step] of Object.entries(definition.steps)) {
+      try {
+        const session = await this.deps.workspace.preview(step.role, pickCapabilities(step));
+        const access = shellAccess(session);
+        if (access)
+          lines.push(`- ${id} (${step.role ? `role ${step.role}` : "no role"}): ${access}`);
+      } catch {
+        // Not this note's business.
+      }
+    }
+    return lines;
   }
 
   /** Starts the session that writes a workflow from a description and stays to refine it. */

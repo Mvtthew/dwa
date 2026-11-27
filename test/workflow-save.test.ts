@@ -37,6 +37,12 @@ depends_on = ["build"]
 prompt = "Check {{steps.build.result}}"
 `;
 
+const RUNNER = `tools = ["Read", "Bash"]
+permission_mode = "dontAsk"
+allow = ["Bash(git diff *)", "Bash(bun test *)", "Read(docs/**)"]
+deny = ["Bash(git push *)"]
+`;
+
 describe("a workflow written by an agent", () => {
   let dir = "";
   let tmux: FakeTmux;
@@ -65,7 +71,12 @@ describe("a workflow written by an agent", () => {
       loadConfig: async () => config,
       roleFiles: {
         ...testRoleFiles(),
-        read: (path) => (absentRoles.some((role) => path.endsWith(`/${role}.toml`)) ? null : ""),
+        read: (path) =>
+          absentRoles.some((role) => path.endsWith(`/${role}.toml`))
+            ? null
+            : path.endsWith("/runner.toml")
+              ? RUNNER
+              : "",
       },
       schedule: () => undefined,
       env,
@@ -92,6 +103,32 @@ describe("a workflow written by an agent", () => {
     );
     await Bun.sleep(0);
     expect(popups().at(-1)).toContain("wizard design 'project:check-it'");
+  });
+
+  test("the author is told what a step that never asks may run in the shell", async () => {
+    const text = `[steps.fetch]
+role = "runner"
+prompt = "az repos pr show"
+
+[steps.own]
+role = "runner"
+allow = ["Bash(az repos pr show *)"]
+deny = []
+prompt = "az repos pr show"
+
+[steps.open]
+role = "runner"
+allow = ["Bash"]
+prompt = "anything"
+
+[steps.asks]
+role = "developer"
+prompt = "Build"
+`;
+    expect(await workflows.access(text, "pr")).toEqual([
+      "- fetch (role runner): runs only git diff *, bun test * and plain reading commands (cat, head, grep); never git push *",
+      "- own (role runner): runs only az repos pr show * and plain reading commands (cat, head, grep)",
+    ]);
   });
 
   test("saving it again makes a version by that agent and opens no second popup", async () => {

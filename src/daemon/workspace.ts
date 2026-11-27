@@ -1400,6 +1400,12 @@ export class Workspace {
     };
   }
 
+  /** What a session of that role would be started with now, with these values on top. */
+  async preview(role: string | undefined, overrides: Capabilities): Promise<ResolvedSession> {
+    const config = await this.deps.loadConfig();
+    return resolveSession(this.sessionRequest(config, { role, overrides }), this.roleContext());
+  }
+
   private storedRequest(row: { id: string; kind: AgentKind; role: string | null }): StoredRequest {
     return (
       parseJson<StoredRequest>(this.deps.store.getRequest(row.id)) ??

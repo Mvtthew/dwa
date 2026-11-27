@@ -452,8 +452,17 @@ export function createMcpServer(agentId: string, api: Api, options: McpOptions =
           version: number;
           created: boolean;
           steps: string[];
+          access?: string[];
         }>("POST", "/workflows/save", { from: agentId, name, definition, personal });
-        return `${saved.created ? "Created" : "Saved"} workflow "${saved.name}" (v${saved.version}) at ${saved.path}\nSteps: ${saved.steps.join(" -> ")}`;
+        const done = `${saved.created ? "Created" : "Saved"} workflow "${saved.name}" (v${saved.version}) at ${saved.path}\nSteps: ${saved.steps.join(" -> ")}`;
+        if (!saved.access?.length) return done;
+        return [
+          done,
+          "",
+          "These steps never ask for permission: a shell command that is not listed is refused and the step fails there.",
+          ...saved.access,
+          "Compare each with what its prompt asks for. Where a command is missing, give the step its own `allow` (and `deny`), which replace the role's lists, or use another role, and save again.",
+        ].join("\n");
       }),
   );
 

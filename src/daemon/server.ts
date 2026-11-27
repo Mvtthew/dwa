@@ -285,14 +285,16 @@ export function startServer(options: ServerOptions) {
           from?: string;
           personal?: boolean;
         }>(request);
-        return json(
-          workflows.saveFile(
-            text(input.name, "name"),
-            text(input.definition, "definition"),
-            sender(input.from),
-            input.personal === true,
-          ),
+        const saved = workflows.saveFile(
+          text(input.name, "name"),
+          text(input.definition, "definition"),
+          sender(input.from),
+          input.personal === true,
         );
+        return json({
+          ...saved,
+          access: await workflows.access(input.definition ?? "", saved.name),
+        });
       }
       case "POST /workflows/author": {
         const input = await body<{ description?: string; name?: string; personal?: boolean }>(

@@ -701,6 +701,28 @@ export function missingOnThisMachine(session: ResolvedSession, ctx: RoleContext)
   return problems;
 }
 
+/**
+ * The shell commands a session runs, in words, for whoever writes its task: only a session that
+ * never asks (`dontAsk`) and has Bash is described, because there a command no rule allows is
+ * refused and nobody is asked. `null` for every other session, and for one allowed every command.
+ */
+export function shellAccess(session: ResolvedSession): string | null {
+  if (session.permissionMode !== "dontAsk") return null;
+  if (session.tools && !session.tools.includes("Bash")) return null;
+  if (session.denyTools.includes("Bash")) return null;
+  const commands = (rules: string[]) =>
+    rules.flatMap((rule) => (rule === "Bash" ? ["*"] : (/^Bash\((.*)\)$/.exec(rule)?.[1] ?? [])));
+  const allowed = commands(session.allow);
+  if (allowed.includes("*")) return null;
+  const refused = commands(session.deny);
+  return (
+    (allowed.length > 0
+      ? `runs only ${allowed.join(", ")} and plain reading commands (cat, head, grep)`
+      : "runs only plain reading commands (cat, head, grep)") +
+    (refused.length > 0 ? `; never ${refused.join(", ")}` : "")
+  );
+}
+
 /** A session's capabilities as label and text pairs, for `dwa role show` and the panes. */
 export function capabilityLines(summary: SessionSummary): [string, string][] {
   const list = (items: string[]) => items.join(", ") || "none";

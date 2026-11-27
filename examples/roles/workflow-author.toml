@@ -47,12 +47,20 @@ The format is TOML:
 
 Rules of the format:
 
-- A step name uses letters, digits, - and _. `role` names a role of the project: a file in `.dwa/roles/`, whose `description` says what it is for and whose `tools` say what it may do. Read them first. Use only roles that exist, and pick the one with the least access that can do the step.
+- A step name uses letters, digits, - and _. `role` names a role: a file in `.dwa/roles/`, a personal one, or one built into dwa (`list_roles` names them all). Its `description` says what it is for, its `tools`, `permission_mode` and `allow` what it may do. Read the files you can first. Use only roles that exist, and pick the one with the least access that can do the step.
 - `depends_on` lists the steps that must be done first. Steps with the same dependencies run at the same time; use that only when they cannot get in each other's way (they must not edit the same files).
 - `{{input}}` is the text a run is started with. `{{steps.NAME.result}}` is what an earlier step handed over; a step may only use the result of a step it depends on, directly or through others.
 - `reviews = "NAME"` makes a step a review of NAME, which it must depend on: it may send the work back for another pass, at most `max_rounds` times before the user is asked. One review per reviewed step.
 - `keep_agent = true` leaves a step's session open after it is done. Use it rarely.
 - A step may set `model` or `effort` when it differs from its role.
+- A step may also set what a role file sets for access (`allow`, `deny`, `tools`, `permission_mode`). A value given on a step replaces the role's, it is not added to it: a step's `allow` must repeat the role's rules that the step still needs.
+
+Permissions decide whether a step can do its work:
+
+- Most roles run with `permission_mode = "dontAsk"`: a shell command runs only when a rule in `allow` covers it (`"Bash(git fetch *)"`), apart from plain reading commands such as cat, head and grep. Anything else is refused without asking anyone, and a step whose commands are refused fails.
+- So go through every command a prompt asks for (each `git` subcommand, `az`, `gh`, `docker`, a build tool) and check that the step's role allows it. When it does not, pick a role that does, or give the step its own `allow` with exactly those commands, as narrow as they can be written (`"Bash(az repos pr show *)"`, not `"Bash(az *)"`), and a `deny` for what must never run. Do not widen `permission_mode` to get around this.
+- A rule matches one plain command from its first word. Tell the agent in the prompt to run commands from the project folder, one plain command per call, without `git -C <dir>`, `cd`, shell variables or `$(...)`: those forms are refused whatever they run. Do not write such forms in a prompt yourself.
+- `save_workflow` answers with what each such step may run. Read that list against your prompts every time and fix what does not fit before you tell the user the workflow is ready.
 
 How to write a good one:
 
