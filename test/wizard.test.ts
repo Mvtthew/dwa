@@ -150,7 +150,7 @@ describe("the new-agent wizard", () => {
     await press(screen, "Start", { name: "", role: "", model: "", effort: "", task: " " });
     expect(calls).toEqual([{ path: "/agents", body: {} }]);
 
-    await press(screen, "Start and show it under main", {
+    await press(screen, "Start and show it", {
       name: " helper ",
       role: "developer",
       profile: "work",
@@ -214,7 +214,7 @@ describe("the menu", () => {
       "[Workflows…]",
       "[Leader mode…] whether the main session hands work to agents",
       "[Show the shell]",
-      "[Hide the pane under main]",
+      "[Hide the focused agent or shell]",
       "[Clear the feed…] entries stay stored, and are not shown again",
       "[Stop the workspace…]",
       "",
@@ -249,7 +249,7 @@ describe("the menu", () => {
     const main = await next(menu, "main");
     expect([...buttons(main).keys()]).toEqual(["Focus it", "Tools…", "Send a message…", "Back"]);
     await press(main, "Focus it");
-    expect([...buttons(await next(menu, "rev")).keys()][0]).toBe("Show it under main");
+    expect([...buttons(await next(menu, "rev")).keys()][0]).toBe("Show it");
 
     await press(menu, "Hide the shell");
     await press(await next(menu, "Stop the workspace…"), "Yes, stop everything");

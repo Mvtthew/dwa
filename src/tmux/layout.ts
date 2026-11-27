@@ -1,29 +1,20 @@
 import { APP_NAME } from "../shared/constants.ts";
 import { tmuxQuote } from "./conf.ts";
 import type { TmuxRunner } from "./driver.ts";
+import { TOP_BAR_HEIGHT } from "./plan.ts";
 
 export const SESSION = APP_NAME;
 export const WORKSPACE_WINDOW = "workspace";
-export interface LayoutSizes {
-  /** Columns of the status pane on the left. */
-  statusWidth: number;
-  /** Columns of the agents pane on the right. */
-  agentsWidth: number;
-  /** Columns of the event feed, right of the agents pane when it is shown. */
-  feedWidth: number;
-  /** Percent of the centre column given to the agent pane opened under main. */
-  agentHeight: number;
-}
+export {
+  borders,
+  DEFAULT_LAYOUT,
+  type LayoutPanes,
+  type LayoutSizes,
+  TOP_BAR_HEIGHT,
+} from "./plan.ts";
 
-/** Rows of the top bar's text. tmux draws its border line above it. */
-export const TOP_BAR_HEIGHT = 1;
-
-export const DEFAULT_LAYOUT: LayoutSizes = {
-  statusWidth: 30,
-  agentsWidth: 34,
-  feedWidth: 40,
-  agentHeight: 40,
-};
+/** The workspace window as a tmux target, whichever pane of it is active. */
+export const WORKSPACE_TARGET = `=${SESSION}:${WORKSPACE_WINDOW}`;
 
 const PRINT_PANE = ["-P", "-F", "#{pane_id}"];
 
@@ -56,13 +47,10 @@ export interface WorkspacePanes {
   feed?: string;
 }
 
-/** The panes whose size the layout keeps: the bar, the side columns, the feed while shown. */
-export type FramePanes = WorkspacePanes;
-
 /**
- * Creates the session with the top bar across the whole width and three columns under it:
- * status pane, main session, agents pane. The bar keeps its height and the side columns their
- * width when the terminal is resized.
+ * Creates the session with the top bar across the whole width and the columns under it: status
+ * pane, main session, agents pane, and the feed. The panes come out in the order a layout needs
+ * (`paneOrder`); their sizes are the caller's to set, with `applyLayout`.
  */
 export async function createWorkspace(
   run: TmuxRunner,
@@ -74,11 +62,9 @@ export async function createWorkspace(
     right: PaneCommand;
     /** Shown right of the agents pane from the start. */
     feed?: PaneCommand;
-    sizes?: LayoutSizes;
   },
 ): Promise<WorkspacePanes> {
   const { cwd } = options;
-  const sizes = options.sizes ?? DEFAULT_LAYOUT;
   const left = await run([
     "new-session",
     "-d",
@@ -127,8 +113,6 @@ export async function createWorkspace(
         "split-window",
         "-d",
         "-h",
-        "-l",
-        String(sizes.feedWidth),
         "-t",
         right,
         "-c",
@@ -162,72 +146,72 @@ export async function createWorkspace(
   await setTitle(run, left, options.left.title);
   await setTitle(run, main, options.main.title);
   await setTitle(run, right, options.right.title);
-  const frame: FramePanes = { top, left, main, right, feed };
-  await fixFrame(run, frame, sizes);
   return { top, left, main, right, feed };
 }
 
-/** Columns of the borders between the columns: one between each two of them. */
-const borders = (feed: boolean) => (feed ? 3 : 2);
+export interface WindowInfo {
+  width: number;
+  height: number;
+  /** One pane has the whole window for now; a layout applied now would end that. */
+  zoomed: boolean;
+}
 
-/**
- * The commands that put the top bar, the side columns and the feed back to their sizes.
- *
- * tmux sizes a pane by moving one of its borders: the right one, or the left one for the last
- * pane of a row. The agents pane and the feed share their border, so sizing one undoes the other
- * (the feed came out a few columns wide). With the feed shown, the feed is sized by that border
- * and the agents pane by main's width, worked out from the window's: `run-shell -C` expands the
- * format before it runs the resize, now and in the resize hook alike.
- */
-export function frameResizes(panes: FramePanes, sizes: LayoutSizes = DEFAULT_LAYOUT): string[][] {
-  const resizes = [
-    ["resize-pane", "-t", panes.top, "-y", String(TOP_BAR_HEIGHT)],
-    ["resize-pane", "-t", panes.left, "-x", String(sizes.statusWidth)],
-  ];
-  if (!panes.feed) {
-    return [...resizes, ["resize-pane", "-t", panes.right, "-x", String(sizes.agentsWidth)]];
-  }
-  const others = sizes.statusWidth + sizes.agentsWidth + sizes.feedWidth + borders(true);
-  return [
-    ...resizes,
-    ["resize-pane", "-t", panes.feed, "-x", String(sizes.feedWidth)],
-    ["run-shell", "-C", `resize-pane -t ${panes.main} -x #{e|-:#{window_width},${others}}`],
-  ];
+/** The workspace window's size, as tmux has it now (with no terminal attached, the last one). */
+export async function windowInfo(run: TmuxRunner): Promise<WindowInfo> {
+  const output = await run([
+    "display-message",
+    "-p",
+    "-t",
+    WORKSPACE_TARGET,
+    "#{window_width} #{window_height} #{window_zoomed_flag}",
+  ]);
+  const [width = "", height = "", zoomed = "0"] = output.trim().split(" ");
+  return { width: Number(width) || 0, height: Number(height) || 0, zoomed: zoomed === "1" };
 }
 
 /**
- * Puts the frame back to its sizes now, and makes tmux do the same whenever the terminal is
- * resized. Called again when the feed is shown or hidden, since the hook names its panes.
+ * Gives every pane of the workspace window its place and size at once, from a layout string
+ * (`layoutString`). The window's panes must be in the order the string was made for.
  */
-export async function fixFrame(
-  run: TmuxRunner,
-  panes: FramePanes,
-  sizes: LayoutSizes = DEFAULT_LAYOUT,
-): Promise<void> {
-  const resizes = frameResizes(panes, sizes);
-  for (const args of resizes) await run(args);
-  const hook = resizes
-    .map((args) => args.map((arg) => (/[\s#{}]/.test(arg) ? tmuxQuote(arg) : arg)).join(" "))
-    .join(" ; ");
-  await run(["set-hook", "-g", "window-resized", hook]);
+export async function applyLayout(run: TmuxRunner, layout: string): Promise<void> {
+  await run(["select-layout", "-t", WORKSPACE_TARGET, layout]);
+}
+
+/** Set on the workspace window while a relayout it asked for has not been taken up yet. */
+const RELAYOUT_FLAG = "@relayout";
+
+/**
+ * Makes tmux tell dwa when the workspace window's size changes, with `<self> key relayout`. The
+ * hook is the window's own, so a pool window never runs it, and it names no pane. While the flag
+ * is set no second command is started: dragging a terminal's edge changes the size many times a
+ * second (docs/spikes.md, S13). `relayoutTaken` clears the flag.
+ */
+export async function installResizeHook(run: TmuxRunner, self: string): Promise<void> {
+  const ask = `set -w ${RELAYOUT_FLAG} 1 ; run-shell -b ${tmuxQuote(`${self} key relayout`)}`;
+  await relayoutTaken(run);
+  // A workspace started by an earlier version sized its panes from a hook of the whole server.
+  await run(["set-hook", "-gu", "window-resized"]);
+  await run([
+    "set-hook",
+    "-w",
+    "-t",
+    WORKSPACE_TARGET,
+    "window-resized",
+    `if-shell -F '#{${RELAYOUT_FLAG}}' '' ${tmuxQuote(ask)}`,
+  ]);
+}
+
+/** Lets the next change of the window's size ask for a relayout again. */
+export async function relayoutTaken(run: TmuxRunner): Promise<void> {
+  await run(["set", "-wu", "-t", WORKSPACE_TARGET, RELAYOUT_FLAG]);
 }
 
 /** Moves the feed from the pool to the right of the agents pane, leaving the focus where it is. */
 export async function showFeed(
   run: TmuxRunner,
-  options: { feed: string; right: string; width: number },
+  options: { feed: string; right: string },
 ): Promise<void> {
-  await run([
-    "join-pane",
-    "-d",
-    "-h",
-    "-l",
-    String(options.width),
-    "-s",
-    options.feed,
-    "-t",
-    options.right,
-  ]);
+  await run(["join-pane", "-d", "-h", "-s", options.feed, "-t", options.right]);
 }
 
 export async function setTitle(run: TmuxRunner, pane: string, title: string): Promise<void> {
@@ -257,13 +241,25 @@ export async function spawnPoolWindow(
   return pane;
 }
 
-/** Moves an agent's pane from the pool to the slot under the main session and focuses it. */
-export async function openUnderMain(
+/**
+ * Moves a pane from the pool into the workspace window, right after `after` in the window's pane
+ * order, leaving the focus where it is. Its size is the layout's to set.
+ */
+export async function showPane(
   run: TmuxRunner,
-  options: { main: string; agent: string; heightPercent?: number },
+  options: { pane: string; after: string },
 ): Promise<void> {
-  const height = `${options.heightPercent ?? DEFAULT_LAYOUT.agentHeight}%`;
-  await run(["join-pane", "-v", "-l", height, "-s", options.agent, "-t", options.main]);
+  await run(["join-pane", "-d", "-v", "-s", options.pane, "-t", options.after]);
+}
+
+/** Zooms the workspace window's active pane, or ends the zoom. */
+export async function toggleZoom(run: TmuxRunner): Promise<void> {
+  await run(["resize-pane", "-Z", "-t", WORKSPACE_TARGET]);
+}
+
+/** Exchanges the places of two panes, leaving the focus where it is. */
+export async function swapPanes(run: TmuxRunner, a: string, b: string): Promise<void> {
+  await run(["swap-pane", "-d", "-s", a, "-t", b]);
 }
 
 /** Sends an open agent's pane back to its own background window. The session keeps running. */
@@ -309,6 +305,8 @@ export interface PaneStatus {
   dead: boolean;
   /** True when the pane is in the workspace window (visible), false when it is in the pool. */
   inWorkspace: boolean;
+  /** True for the pane of its window that has the focus. */
+  active: boolean;
 }
 
 export function parsePaneList(output: string): PaneStatus[] {
@@ -316,11 +314,17 @@ export function parsePaneList(output: string): PaneStatus[] {
     .split("\n")
     .filter((line) => line.trim() !== "")
     .map((line) => {
-      const [paneId = "", dead = "0", ...window] = line.split(" ");
-      return { paneId, dead: dead === "1", inWorkspace: window.join(" ") === WORKSPACE_WINDOW };
+      const [paneId = "", dead = "0", active = "0", ...window] = line.split(" ");
+      return {
+        paneId,
+        dead: dead === "1",
+        active: active === "1",
+        inWorkspace: window.join(" ") === WORKSPACE_WINDOW,
+      };
     });
 }
 
+/** Every pane of the session. Those of one window come in that window's pane order. */
 export async function listPanes(run: TmuxRunner): Promise<PaneStatus[]> {
   const output = await run([
     "list-panes",
@@ -328,7 +332,7 @@ export async function listPanes(run: TmuxRunner): Promise<PaneStatus[]> {
     "-t",
     `=${SESSION}`,
     "-F",
-    "#{pane_id} #{pane_dead} #{window_name}",
+    "#{pane_id} #{pane_dead} #{pane_active} #{window_name}",
   ]);
   return parsePaneList(output);
 }

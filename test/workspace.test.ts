@@ -34,11 +34,19 @@ let links: Map<string, string>;
 let scheduled: (() => void)[];
 /** Timers for giving a session its task, with their delay; a test runs them by hand. */
 let taskTimers: { run: () => void; ms: number }[];
+/** Timers that wait for the window's size to settle; a test runs them by hand. */
+let layoutTimers: (() => void)[];
 /** The text of role files; a role not listed here has an empty file. */
 let roles: Record<string, string>;
 /** Other files the workspace can see, by full path, and the commands on PATH. */
 let disk: Record<string, string>;
 let commands: string[];
+
+/** The size of a pane's cell in the layout last applied, as "WxH"; null when it has none. */
+function cell(pane: string): string | null {
+  const found = new RegExp(`(\\d+x\\d+),\\d+,\\d+,${pane.slice(1)}(?!\\d)`).exec(tmux.layout ?? "");
+  return found?.[1] ?? null;
+}
 
 beforeEach(() => {
   config = structuredClone(baseConfig);
@@ -47,6 +55,7 @@ beforeEach(() => {
   links = new Map();
   scheduled = [];
   taskTimers = [];
+  layoutTimers = [];
   roles = {};
   disk = {};
   commands = [];
@@ -73,6 +82,7 @@ beforeEach(() => {
     wrapperConfigDir: () => "/home/me/.claude-me",
     schedule: (callback) => scheduled.push(callback),
     taskTimer: (run, ms) => taskTimers.push({ run, ms }),
+    layoutTimer: (run) => layoutTimers.push(run),
     env: {},
     newId: () => `id-${++id}`,
     now: () => 1000 + id,
@@ -198,15 +208,22 @@ describe("config", () => {
     config.agents = [{ name: "bad name" }, { name: "x", profile: "nope" }, { name: "ok" }];
     const state = await workspace.up();
     expect(state.agents.map((agent) => agent.name)).toEqual(["ok"]);
-    const shown = tmux.commands("display-message").map((command) => command.at(-1));
+    const shown = tmux
+      .commands("display-message")
+      .filter((command) => !command.includes("-p"))
+      .map((command) => command.at(-1));
     expect(shown[0]).toContain('Could not start agent "bad name"');
     expect(shown[1]).toContain('Unknown profile "nope"');
   });
 
   test("the feed is shown at the start, and hidden and shown again at its width", async () => {
     config.layout = { feed_width: 44 };
-    expect((await workspace.up()).feed).toEqual({ open: true });
+    const up = await workspace.up();
+    expect(up.feed).toEqual({ open: true });
+    const main = up.main?.paneId ?? "";
     const feed = [...tmux.panes].find(([, pane]) => pane.argv.at(-1) === "feed")?.[0] ?? "";
+    const right = [...tmux.panes].find(([, pane]) => pane.argv.at(-1) === "agents")?.[0] ?? "";
+    expect([cell(main), cell(feed)]).toEqual(["89x47", "44x47"]);
     expect(await workspace.toggleFeed()).toEqual({ open: false });
     expect(tmux.commands("break-pane").at(-1)).toEqual([
       "break-pane",
@@ -216,48 +233,53 @@ describe("config", () => {
       "-n",
       "feed",
     ]);
-    // The resize hook no longer names the hidden feed.
-    expect(tmux.commands("set-hook").at(-1)?.at(-1)).not.toContain(feed);
+    // Main takes the feed's columns.
+    expect([cell(main), cell(feed)]).toEqual(["134x47", null]);
     expect((await workspace.state()).feed).toEqual({ open: false });
     expect(await workspace.toggleFeed()).toEqual({ open: true });
-    expect(tmux.commands("join-pane").at(-1)).toEqual(
-      expect.arrayContaining(["-d", "-h", "-l", "44", "-s", feed]),
-    );
-    expect(tmux.commands("set-hook").at(-1)?.at(-1)).toContain(`-t ${feed} -x 44`);
+    expect(tmux.commands("join-pane").at(-1)).toEqual([
+      "join-pane",
+      "-d",
+      "-h",
+      "-s",
+      feed,
+      "-t",
+      right,
+    ]);
+    expect([cell(main), cell(feed)]).toEqual(["89x47", "44x47"]);
     // A feed pane that is gone is started again when it is shown.
-    tmux.panes.delete(feed);
+    tmux.run(["kill-pane", "-t", feed]);
     expect((await workspace.state()).feed).toBeNull();
+    expect(cell(main)).toBe("134x47");
     expect(await workspace.toggleFeed()).toEqual({ open: true });
     expect(tmux.commands("new-window").at(-1)).toEqual(expect.arrayContaining(["ui", "feed"]));
   });
 
   test("layout sizes from the config are applied", async () => {
     config.layout = { status_width: 24, agents_width: 40, agent_height: 55 };
-    await workspace.up();
-    // The top bar keeps its one row, the status pane and the feed their widths, and the agents
-    // pane its width through main's, now and on every resize: the agents pane and the feed
-    // share a border, so sizing one would undo the other.
-    expect(tmux.commands("resize-pane").map((command) => command.at(-1))).toEqual([
-      "1",
-      "24",
-      "40",
+    const { main } = await workspace.up();
+    const pane = (view: string) =>
+      [...tmux.panes].find(([, entry]) => entry.argv.at(-1) === view)?.[0] ?? "";
+    // One layout sets every pane: no pane is sized by itself.
+    expect(tmux.commands("resize-pane")).toEqual([]);
+    expect(tmux.layout?.slice(5, 24)).toBe("200x50,0,0[200x2,0,");
+    expect(["topbar", "status", "agents", "feed"].map((view) => cell(pane(view)))).toEqual([
+      "200x2",
+      "24x47",
+      "40x47",
+      "40x47",
     ]);
-    const main = (await workspace.state()).main?.paneId;
-    expect(tmux.commands("run-shell").at(-1)).toEqual([
-      "run-shell",
-      "-C",
-      `resize-pane -t ${main} -x #{e|-:#{window_width},107}`,
-    ]);
-    const hook = tmux.commands("set-hook").find((command) => command.includes("window-resized"));
-    expect(hook?.at(-1)).toContain(
-      `-x 40 ; run-shell -C 'resize-pane -t ${main} -x #{e|-:#{window_width},107}'`,
-    );
+    expect(cell(main?.paneId ?? "")).toBe("93x47");
+    // tmux reports a new window size to dwa, from the workspace window only.
+    const hook = tmux.commands("set-hook").find((command) => command.includes("-w"));
+    expect(hook?.slice(0, 4)).toEqual(["set-hook", "-w", "-t", "=dwa:workspace"]);
+    expect(hook?.at(-1)).toContain("key relayout");
     // Full width, above the columns, running the bar.
     const bar = tmux.commands("split-window").find((command) => command.includes("-f"));
     expect(bar).toEqual(expect.arrayContaining(["-v", "-b", "-l", "1", "ui", "topbar"]));
-    await workspace.spawn({ name: "a" });
+    const a = await workspace.spawn({ name: "a" });
     await workspace.open("a");
-    expect(tmux.commands("join-pane").at(-1)).toContain("55%");
+    expect([cell(main?.paneId ?? ""), cell(a.paneId)]).toEqual(["93x20", "93x26"]);
   });
 });
 
@@ -355,16 +377,20 @@ describe("agents", () => {
     expect(tmux.windowOf(a.paneId)).toBe(WORKSPACE_WINDOW);
     expect(tmux.commands("join-pane").at(-1)).toEqual([
       "join-pane",
+      "-d",
       "-v",
-      "-l",
-      "40%",
       "-s",
       a.paneId,
       "-t",
       main?.paneId ?? "",
     ]);
+    expect([cell(main?.paneId ?? ""), cell(a.paneId)]).toEqual(["93x27", "93x19"]);
+    expect((await workspace.state()).focused).toBe(a.id);
 
+    // A window this narrow has room for one: the other takes its place.
     await workspace.open("2");
+    expect(tmux.commands("join-pane").at(-1)?.slice(-4)).toEqual(["-s", b.paneId, "-t", a.paneId]);
+    expect(cell(b.paneId)).toBe("93x19");
     expect(tmux.windowOf(a.paneId)).toBe("a");
     expect(tmux.windowOf(b.paneId)).toBe(WORKSPACE_WINDOW);
     expect(tmux.windowOf(main?.paneId ?? "")).toBe(WORKSPACE_WINDOW);
@@ -373,6 +399,130 @@ describe("agents", () => {
     expect(state.agents.map((agent) => [agent.name, agent.open])).toEqual([
       ["a", false],
       ["b", true],
+    ]);
+    expect(state.focused).toBe(b.id);
+  });
+
+  test("a wide window shows several agents right of main, two to a column", async () => {
+    tmux.size = { width: 420, height: 70 };
+    const { main } = await workspace.up();
+    const agents: Awaited<ReturnType<typeof workspace.spawn>>[] = [];
+    for (const name of ["a", "b", "c", "d", "e"]) agents.push(await workspace.spawn({ name }));
+    const [a, b, c, d, e] = agents.map((agent) => agent.paneId) as [
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    const shown = () =>
+      tmux
+        .paneOrder(WORKSPACE_WINDOW)
+        .filter((pane) => agents.some((agent) => agent.paneId === pane));
+
+    await workspace.open("a");
+    // One agent: half of the centre each.
+    expect([cell(main?.paneId ?? ""), cell(a)]).toEqual(["135x67", "135x67"]);
+    for (const name of ["b", "c", "d"]) await workspace.open(name);
+    expect(shown()).toEqual([a, b, c, d]);
+    expect([main?.paneId ?? "", a, b, c, d].map(cell)).toEqual([
+      "91x67",
+      "89x33",
+      "89x33",
+      "89x33",
+      "89x33",
+    ]);
+    // The second column stands right of the first.
+    expect(tmux.layout).toContain(`[89x33,135,3,${a.slice(1)},89x33,135,37,${b.slice(1)}]`);
+    expect(tmux.layout).toContain(`[89x33,225,3,${c.slice(1)},89x33,225,37,${d.slice(1)}]`);
+
+    // No room for a fifth: it takes the place of the one opened longest ago.
+    await workspace.open("e");
+    expect(shown()).toEqual([e, b, c, d]);
+    expect(tmux.windowOf(a)).toBe("a");
+    // Opening a shown agent again makes it the newest, so the next to go is "c".
+    await workspace.open("b");
+    await workspace.open("a");
+    expect(shown()).toEqual([e, b, a, d]);
+    expect(tmux.windowOf(c)).toBe("c");
+    const state = await workspace.state();
+    expect(state.agents.filter((agent) => agent.open).map((agent) => agent.name)).toEqual([
+      "a",
+      "b",
+      "d",
+      "e",
+    ]);
+    expect(state.focused).toBe(agents[0]?.id);
+
+    // Hiding one leaves the others where they are, in less columns when they fit.
+    await workspace.toggle("e");
+    expect(shown()).toEqual([b, a, d]);
+    expect([b, a, d].map(cell)).toEqual(["89x33", "89x33", "89x67"]);
+    // The stopped one's place is taken up as well.
+    await workspace.stop("d");
+    expect([main?.paneId ?? "", b, a].map(cell)).toEqual(["135x67", "135x33", "135x33"]);
+  });
+
+  test("the layout follows the window's size, once it has settled", async () => {
+    tmux.size = { width: 420, height: 70 };
+    const { main } = await workspace.up();
+    const a = await workspace.spawn({ name: "a" });
+    const b = await workspace.spawn({ name: "b" });
+    const c = await workspace.spawn({ name: "c" });
+    for (const name of ["a", "b", "c"]) await workspace.open(name);
+    const applied = () => tmux.commands("select-layout").length;
+
+    // A terminal's edge being dragged reports many sizes: only the last is acted on.
+    const before = applied();
+    tmux.size = { width: 300, height: 60 };
+    workspace.resized();
+    tmux.size = { width: 200, height: 50 };
+    workspace.resized();
+    workspace.resized();
+    expect(layoutTimers).toHaveLength(3);
+    for (const timer of layoutTimers) timer();
+    await workspace.state();
+    expect(applied()).toBe(before + 1);
+    // tmux may ask again after each report.
+    expect(tmux.commands("set").filter((command) => command.includes("-wu")).length).toBe(4);
+
+    // Narrow: the agent opened last stays, under main; the others are in the pool, running.
+    expect([tmux.windowOf(a.paneId), tmux.windowOf(b.paneId)]).toEqual(["a", "b"]);
+    expect([cell(main?.paneId ?? ""), cell(c.paneId)]).toEqual(["93x27", "93x19"]);
+    expect((await workspace.state()).agents).toHaveLength(3);
+
+    // Wide again: the same agent stands right of main, and nothing comes back by itself.
+    tmux.size = { width: 420, height: 70 };
+    workspace.resized();
+    layoutTimers.at(-1)?.();
+    await workspace.state();
+    expect([cell(main?.paneId ?? ""), cell(c.paneId)]).toEqual(["135x67", "135x67"]);
+    expect(tmux.windowOf(a.paneId)).toBe("a");
+
+    // A window too small to plan is left as tmux has it.
+    tmux.size = { width: 50, height: 10 };
+    workspace.resized();
+    layoutTimers.at(-1)?.();
+    await workspace.state();
+    expect(applied()).toBe(before + 2);
+  });
+
+  test("a shown agent that ends by itself gives its room to the others", async () => {
+    tmux.size = { width: 420, height: 70 };
+    const { main } = await workspace.up();
+    const a = await workspace.spawn({ name: "a" });
+    const b = await workspace.spawn({ name: "b" });
+    await workspace.open("a");
+    await workspace.open("b");
+    expect(cell(b.paneId)).toBe("135x33");
+    const pane = tmux.panes.get(a.paneId);
+    if (pane) pane.dead = true;
+    const state = await workspace.state();
+    expect(state.agents.map((agent) => agent.name)).toEqual(["b"]);
+    expect([cell(main?.paneId ?? ""), cell(a.paneId), cell(b.paneId)]).toEqual([
+      "135x67",
+      null,
+      "135x67",
     ]);
   });
 
@@ -393,6 +543,28 @@ describe("agents", () => {
     expect((await workspace.state()).agents).toHaveLength(1);
   });
 
+  test("close hides the agent in focus, the one opened last, or the one named", async () => {
+    tmux.size = { width: 420, height: 70 };
+    const { main } = await workspace.up();
+    const a = await workspace.spawn({ name: "a" });
+    const b = await workspace.spawn({ name: "b" });
+    const c = await workspace.spawn({ name: "c" });
+    for (const name of ["a", "b", "c"]) await workspace.open(name);
+    const windows = () => [a, b, c].map((agent) => tmux.windowOf(agent.paneId));
+
+    await workspace.open("a");
+    await workspace.close();
+    expect(windows()).toEqual(["a", WORKSPACE_WINDOW, WORKSPACE_WINDOW]);
+    // The focus is on main now: the one opened last goes.
+    expect(tmux.activeOf(WORKSPACE_WINDOW)).toBe(main?.paneId ?? "");
+    await workspace.close();
+    expect(windows()).toEqual(["a", WORKSPACE_WINDOW, "c"]);
+    await workspace.open("a");
+    await workspace.focusMain();
+    await workspace.close("b");
+    expect(windows()).toEqual([WORKSPACE_WINDOW, "b", "c"]);
+  });
+
   test("toggle shows an agent, hides it again, and swaps with another", async () => {
     const { main } = await workspace.up();
     const a = await workspace.spawn({ name: "a" });
@@ -406,6 +578,7 @@ describe("agents", () => {
 
     expect((await workspace.toggle("b")).open).toBe(false);
     expect(tmux.windowOf(b.paneId)).toBe("b");
+    expect(cell(main?.paneId ?? "")).toBe("93x47");
     expect(tmux.commands("select-pane").at(-1)).toEqual(["select-pane", "-t", main?.paneId ?? ""]);
     expect((await workspace.state()).agents.every((agent) => !agent.open)).toBe(true);
   });
@@ -438,7 +611,7 @@ describe("agents", () => {
 describe("the shell pane", () => {
   const shellPane = () => store.getMeta("shell_pane") ?? "";
 
-  test("is started on first use under main, then hidden and shown again without restarting", async () => {
+  test("is started on first use in a row under main, then hidden and shown again without restarting", async () => {
     const { main } = await workspace.up();
     expect((await workspace.state()).shell).toBeNull();
 
@@ -448,14 +621,15 @@ describe("the shell pane", () => {
     expect(tmux.windowOf(pane)).toBe(WORKSPACE_WINDOW);
     expect(tmux.commands("join-pane").at(-1)).toEqual([
       "join-pane",
+      "-d",
       "-v",
-      "-l",
-      "40%",
       "-s",
       pane,
       "-t",
       main?.paneId ?? "",
     ]);
+    expect([cell(main?.paneId ?? ""), cell(pane)]).toEqual(["93x34", "93x12"]);
+    expect(tmux.activeOf(WORKSPACE_WINDOW)).toBe(pane);
     expect((await workspace.state()).shell).toEqual({ open: true });
 
     expect(await workspace.toggleShell()).toEqual({ open: false });
@@ -469,22 +643,55 @@ describe("the shell pane", () => {
     expect((await workspace.state()).agents).toEqual([]);
   });
 
-  test("shares the slot under main with the agents", async () => {
-    await workspace.up();
+  test("has a row of its own and takes no agent's place", async () => {
+    const { main } = await workspace.up();
     const a = await workspace.spawn({ name: "a" });
+    const b = await workspace.spawn({ name: "b" });
     await workspace.open("a");
     await workspace.toggleShell();
-    expect(tmux.windowOf(a.paneId)).toBe("a");
-    expect(tmux.windowOf(shellPane())).toBe(WORKSPACE_WINDOW);
-
-    await workspace.open("a");
-    expect(tmux.windowOf(shellPane())).toBe("shell");
     expect(tmux.windowOf(a.paneId)).toBe(WORKSPACE_WINDOW);
+    expect(tmux.windowOf(shellPane())).toBe(WORKSPACE_WINDOW);
+    // Main, the agent under it, and the shell's row under both.
+    expect([main?.paneId ?? "", a.paneId, shellPane()].map(cell)).toEqual([
+      "93x19",
+      "93x14",
+      "93x12",
+    ]);
 
-    await workspace.toggleShell();
+    // Another agent takes the first one's place, above the shell.
+    await workspace.open("b");
+    expect(tmux.windowOf(shellPane())).toBe(WORKSPACE_WINDOW);
+    expect(tmux.paneOrder(WORKSPACE_WINDOW).slice(2, 5)).toEqual([
+      main?.paneId ?? "",
+      b.paneId,
+      shellPane(),
+    ]);
+
+    // Close hides what has the focus: the agent, then with the focus on the shell, the shell.
+    await workspace.close();
+    expect(tmux.windowOf(b.paneId)).toBe("b");
+    expect(tmux.windowOf(shellPane())).toBe(WORKSPACE_WINDOW);
     await workspace.close();
     expect(tmux.windowOf(shellPane())).toBe("shell");
     expect((await workspace.state()).shell).toEqual({ open: false });
+  });
+
+  test("in a wide window its row lies under main and the agents", async () => {
+    tmux.size = { width: 420, height: 70 };
+    const { main } = await workspace.up();
+    const a = await workspace.spawn({ name: "a" });
+    await workspace.toggleShell();
+    await workspace.open("a");
+    expect(tmux.paneOrder(WORKSPACE_WINDOW).slice(2, 5)).toEqual([
+      main?.paneId ?? "",
+      a.paneId,
+      shellPane(),
+    ]);
+    expect([main?.paneId ?? "", a.paneId, shellPane()].map(cell)).toEqual([
+      "135x51",
+      "135x51",
+      "271x15",
+    ]);
   });
 
   test("is forgotten when the user exits it, and when the workspace stops", async () => {
@@ -538,6 +745,28 @@ describe("wizard popups", () => {
 });
 
 describe("zoom and detach", () => {
+  test("a layout that is due during a zoom waits for the zoom to end", async () => {
+    await workspace.up();
+    await workspace.zoom();
+    expect(tmux.commands("resize-pane").at(-1)).toEqual([
+      "resize-pane",
+      "-Z",
+      "-t",
+      "=dwa:workspace",
+    ]);
+    expect(tmux.zoomed).toBe(true);
+    const applied = tmux.commands("select-layout").length;
+    tmux.size = { width: 300, height: 60 };
+    workspace.resized();
+    layoutTimers.at(-1)?.();
+    await workspace.state();
+    // Applying a layout would end the zoom.
+    expect([tmux.zoomed, tmux.commands("select-layout").length]).toEqual([true, applied]);
+    await workspace.zoom();
+    expect(tmux.zoomed).toBe(false);
+    expect(tmux.layout).toContain(",300x60,0,0[");
+  });
+
   test("zoom gives main the window and detach lets the terminal go", async () => {
     const { main } = await workspace.up();
     await workspace.zoomMain();

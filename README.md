@@ -8,7 +8,7 @@ A terminal workspace for running several Claude Code sessions side by side and l
 
 - Run a main Claude Code session that is always visible, plus any number of agent sessions, all inside tmux.
 - Show the active agents in a side pane with their state: working, idle, waiting for you, waiting for another agent.
-- Open any agent's real session under the main one, so you can type to it directly.
+- Open any agent's real session beside the main one, so you can type to it directly. A wide terminal shows several at once.
 - Let agents message each other and you, report progress, and ask questions that block until someone answers. A question never times out.
 - Run workflows: a fixed graph of steps, each done by its own agent, with results handed from step to step.
 - Keep everything running when you close the terminal, and restore it when you attach again.
@@ -27,6 +27,20 @@ dwa starts the unmodified `claude` program with your own login. It does not use 
 │ reviewer asks │ (opens when you pick an agent)   │               │
 └───────────────┴──────────────────────────────────┴───────────────┘
 ```
+
+A bar with the menus runs across the top, and the event feed is a fourth column on the right until you hide it. In a wide terminal the side columns grow a little, and agents are shown right of the main session instead of under it, two to a column, as many columns as fit:
+
+```
+┌────────┬─────────────────┬────────────┬────────────┬────────┬──────┐
+│ STATUS │ main session    │ explore    │ reviewer   │ AGENTS │ FEED │
+│        │                 ├────────────┼────────────┤        │      │
+│        │                 │ developer  │ tester     │        │      │
+│        ├─────────────────┴────────────┴────────────┤        │      │
+│        │ shell (when shown)                        │        │      │
+└────────┴───────────────────────────────────────────┴────────┴──────┘
+```
+
+With the default sizes that starts at about 240 columns with the feed hidden and 310 with it shown; a second column of agents fits from about 325 and 380. When every place is taken, opening one more agent sends the one opened longest ago back to the background, where it keeps running. A terminal that gets narrower keeps the agents opened last.
 
 ## Requirements
 
@@ -176,29 +190,29 @@ bun run dwa workflow switch feature v2
 
 Press `Ctrl+Q`, release, then:
 
-| Key      | Action                                                 |
-| -------- | ------------------------------------------------------ |
-| `1`–`9`  | Open the agent at that position under the main session |
-| `x`      | Close the agent pane (the agent keeps running)         |
-| `s`      | Show or hide a plain shell under the main session      |
-| `w`      | Workflows: start a run, steer or edit a running one    |
-| `g`      | Workflow designer: workflows as a picture, history     |
-| `a`      | Start an agent: name, role, model, effort, first task  |
-| `t`      | Agent tools: what a session can use; block or allow    |
-| `r`      | Role settings: edit, create and delete roles, history  |
-| `l`      | Leader mode: whether the main session hands work over  |
-| `0`      | Focus the main session                                 |
-| `q`      | Answer open questions in a popup                       |
-| `p`      | Menu: sessions, agents, workflows, shell, stop         |
-| `z`      | Zoom the focused pane, and again to restore            |
-| `d`      | Detach (everything keeps running)                      |
-| `Ctrl+Q` | Send a real Ctrl+Q to the program in the pane          |
+| Key      | Action                                                  |
+| -------- | ------------------------------------------------------- |
+| `1`–`9`  | Open the agent at that position beside the main session |
+| `x`      | Hide the focused agent or shell (it keeps running)      |
+| `s`      | Show or hide a plain shell in a row under the sessions  |
+| `w`      | Workflows: start a run, steer or edit a running one     |
+| `g`      | Workflow designer: workflows as a picture, history      |
+| `a`      | Start an agent: name, role, model, effort, first task   |
+| `t`      | Agent tools: what a session can use; block or allow     |
+| `r`      | Role settings: edit, create and delete roles, history   |
+| `l`      | Leader mode: whether the main session hands work over   |
+| `0`      | Focus the main session                                  |
+| `q`      | Answer open questions in a popup                        |
+| `p`      | Menu: sessions, agents, workflows, shell, stop          |
+| `z`      | Zoom the focused pane, and again to restore             |
+| `d`      | Detach (everything keeps running)                       |
+| `Ctrl+Q` | Send a real Ctrl+Q to the program in the pane           |
 
 Popups are drawn on the black of your terminal's palette with its white for text, so they stand out from the panes behind them.
 
-Clicking a pane focuses it and dragging a border resizes it. In the agents pane, click an agent to show it under the main session and click it again to hide it; `j`/`k` or the arrow keys and `Enter` do the same, and `t` opens the tools of the selected agent. Under its title the pane says how many agents are doing what (`1 needs you · 2 working · 3 idle`, only the states some agent is in). At its bottom it lists the open questions and the messages to you: click a question to answer it, a message to read them all, or **Clear messages**; under those it shows what the selected agent can use. A `↻` after a name means the session is not as its role says any more: the role changed since it started, or it is about to restart.
+Clicking a pane focuses it and dragging a border resizes it, until the layout is next set: when a pane is shown or hidden or the terminal changes size. In the agents pane, click an agent to show it beside the main session and click it again to hide it; `j`/`k` or the arrow keys and `Enter` do the same, and `t` opens the tools of the selected agent. Under its title the pane says how many agents are doing what (`1 needs you · 2 working · 3 idle`, only the states some agent is in). At its bottom it lists the open questions and the messages to you: click a question to answer it, a message to read them all, or **Clear messages**; under those it shows what the selected agent can use. A `↻` after a name means the session is not as its role says any more: the role changed since it started, or it is about to restart.
 
-The status pane on the left ends with the shortcuts from the table above as buttons in four sections, with one line under them that names the prefix: **Workflows** (workflows, workflow designer), **Agents** (new agent, agent tools, role settings, answer), **Panes** (shell, focus main, zoom main, close pane) and **Workspace** (menu, detach), and the dwa version on the last line. Click one, or press its key alone while that pane has the focus. In a short terminal the sections are left out from the last one up so that agents that need you stay visible. The list above the buttons can be clicked too: a workflow run or one of its steps opens that run on its picture. The first two, and the menu, open a form in a popup where every row can be clicked: start a workflow or open a run on its picture; or start an agent with a role, model and effort. The shell is your own `$SHELL` in the project directory. It takes the same place as an open agent, so showing one hides the other, and it keeps running while hidden until you exit it.
+The status pane on the left ends with the shortcuts from the table above as buttons in four sections, with one line under them that names the prefix: **Workflows** (workflows, workflow designer), **Agents** (new agent, agent tools, role settings, answer), **Panes** (shell, focus main, zoom main, close pane) and **Workspace** (menu, detach), and the dwa version on the last line. Click one, or press its key alone while that pane has the focus. In a short terminal the sections are left out from the last one up so that agents that need you stay visible. The list above the buttons can be clicked too: a workflow run or one of its steps opens that run on its picture. The first two, and the menu, open a form in a popup where every row can be clicked: start a workflow or open a run on its picture; or start an agent with a role, model and effort. The shell is your own `$SHELL` in the project directory. It has a row of its own under the main session and the shown agents, so it hides none of them, and it keeps running while hidden until you exit it.
 
 The prefix can be changed in the config:
 
@@ -221,9 +235,12 @@ profile = "work"         # optional
 task = "Wait for review requests."
 
 [layout]
-status_width = 30        # columns
-agents_width = 34        # columns
-agent_height = 40        # percent of the centre column
+status_width = 30        # columns, in a terminal of 200 columns or fewer
+agents_width = 34        # columns, likewise
+side_scale_max = 140     # how far the side columns grow in a wider terminal, in percent
+agent_height = 40        # percent of the centre column, for the agent shown under main
+main_min_width = 90      # agents are shown right of main once main keeps this many columns
+agent_min_width = 70     # beside a column of agents this wide
 ```
 
 `dwa init` never overwrites a file; in a git repository it also adds `.dwa/run/` to `.gitignore`.

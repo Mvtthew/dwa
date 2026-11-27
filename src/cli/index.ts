@@ -20,7 +20,7 @@ Workspace
   up [--profile <name>] [--no-attach]   The same as running ${APP_NAME} alone; the options work there too
   attach                                Attach to the running workspace
   palette                               Menu of workspace actions (prefix key, then p)
-  shell                                 Show or hide a plain shell under the main session
+  shell                                 Show or hide a plain shell in a row under the sessions
   wizard <workflows|agent|tools|roles|design|menu> [session, role or workflow]
                                         The forms behind the status pane's buttons
   down                                  Stop every session and the workspace
@@ -37,8 +37,10 @@ Agents
                                         it can only take away from the role, and the new agent
                                         reports to that session (--keep: stays open afterwards)
   agent list [--json]
-  agent open <name|number>              Show an agent's session under the main session
-  agent close                           Hide the open agent (it keeps running)
+  agent open <name|number>              Show an agent's session under the main session, or
+                                        right of it in a wide terminal
+  agent close [<name|number>]           Hide a shown agent (it keeps running); the focused one
+                                        without a name
   agent stop <name|number>              End an agent's session
   agent send <name> <text>              Send a message to an agent
   agent tools <name|main> [--json]      What a session can use: tools, MCP servers, rules
@@ -202,7 +204,7 @@ async function agentCommand(projectRoot: string, args: string[]): Promise<number
       await call(projectRoot, "POST", "/agents/open", { target });
       return 0;
     case "close":
-      await call(projectRoot, "POST", "/agents/close");
+      await call(projectRoot, "POST", "/agents/close", target ? { target } : undefined);
       return 0;
     case "send": {
       const [, , ...words] = positionals;
@@ -257,6 +259,8 @@ async function keyCommand(projectRoot: string, args: string[]): Promise<number> 
     else if (action === "focus") await call(projectRoot, "POST", "/focus");
     else if (action === "shell") await call(projectRoot, "POST", "/shell/toggle");
     else if (action === "feed") await call(projectRoot, "POST", "/feed/toggle");
+    else if (action === "zoom") await call(projectRoot, "POST", "/zoom/toggle");
+    else if (action === "relayout") await call(projectRoot, "POST", "/layout/resized");
   } catch (error) {
     const message =
       action === "open" && /^No agent/.test((error as Error).message)

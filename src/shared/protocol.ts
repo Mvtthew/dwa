@@ -66,7 +66,10 @@ export interface AgentInfo {
   reportDue?: boolean;
   /** The name of the session that started this one with `spawn_agent`, when one did. */
   startedBy?: string;
-  /** True when this agent's session is the pane shown under the main session. */
+  /**
+   * True when this agent's session is shown in the workspace window: under the main session, or
+   * right of it in a wide window, where several agents are shown at once.
+   */
   open: boolean;
   /** What the session was started with; null for one started before this was recorded. */
   capabilities: SessionSummary | null;
@@ -249,10 +252,16 @@ export interface WorkspaceState {
   inbox: MessageInfo[];
   /** Workflow runs in progress and the latest finished ones, newest first. */
   workflows: WorkflowRunInfo[];
-  /** The plain shell pane: null until it is first shown, then whether it is under main now. */
+  /** The plain shell pane: null until it is first shown, then whether its row is shown now. */
   shell: { open: boolean } | null;
   /** The event feed: null when its pane is gone, else whether it is shown. */
   feed: { open: boolean } | null;
+  /**
+   * The id of the shown agent the status pane and the feed's "selected" filter are about: the
+   * one with the focus, else the one that last had it, else the one opened last. Absent when no
+   * agent is shown.
+   */
+  focused?: string;
 }
 
 /**

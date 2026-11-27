@@ -93,24 +93,30 @@ import { listWorkflows, type WorkflowSummary } from "../shared/workflow.ts";
 import { menuArgs, popupArgs, selfCommand, tmuxQuote } from "../tmux/conf.ts";
 import type { TmuxRunner } from "../tmux/driver.ts";
 import {
+  applyLayout,
   createWorkspace,
   DEFAULT_LAYOUT,
-  fixFrame,
   focusPane,
   hasSession,
+  installResizeHook,
   killPane,
   type LayoutSizes,
   listPanes,
-  openUnderMain,
   type PaneCommand,
   type PaneStatus,
+  relayoutTaken,
   respawnPane,
   returnToPool,
   SESSION,
   showFeed,
+  showPane,
   spawnPoolWindow,
+  swapPanes,
   TOP_BAR_HEIGHT,
+  toggleZoom,
+  windowInfo,
 } from "../tmux/layout.ts";
+import { type LayoutPanes, layoutString, paneOrder, planLayout } from "../tmux/plan.ts";
 import { parseStatusline, reduceHook, sessionLine, snippet } from "./activity.ts";
 import type { AgentRow, Store } from "./db.ts";
 import { reportSuffix } from "./delegation.ts";
@@ -123,21 +129,36 @@ export { WorkspaceError };
 
 const NAME_PATTERN = /^[A-Za-z0-9][\w.-]{0,39}$/;
 const META_PROFILE = "workspace_profile";
-const META_AGENT_HEIGHT = "agent_height";
 const META_STARTED_AT = "started_at";
 const META_SHELL_PANE = "shell_pane";
-/** The panes whose size the layout keeps, and their sizes (`Frame`). */
+/** The panes every layout has, and the sizes it is planned with (`Frame`). */
 const META_FRAME = "frame";
+/** Ids of the agents shown in the workspace window, the one opened longest ago first. */
+const META_OPEN_ORDER = "open_order";
+/** How long the window's size must stay the same before the layout follows it. */
+const RESIZE_SETTLE_MS = 120;
 /** The event feed's pane, shown or in the pool. */
 const META_FEED_PANE = "feed_pane";
 const FEED_NAME = "feed";
 
-/** What the layout keeps sized, as stored in `meta`. The feed is added while it is shown. */
+/** The panes of every layout besides main, as stored in `meta`, with the configured sizes. */
 interface Frame {
   top: string;
   left: string;
   right: string;
   sizes: LayoutSizes;
+}
+
+/** What the workspace window holds now, read from tmux. */
+interface Shown {
+  /** Every pane of the window, in its pane order. */
+  order: string[];
+  /** The shown agents, in pane order. */
+  agents: Array<{ id: string; name: string; paneId: string }>;
+  shell: string | null;
+  feed: string | null;
+  /** The pane with the focus. */
+  active: string | null;
 }
 /** The id of the newest message to the user when they last cleared them. */
 const META_INBOX_CLEARED = "inbox_cleared";
@@ -200,6 +221,8 @@ export interface WorkspaceDeps {
   schedule?: (callback: () => void, ms: number) => void;
   /** Timer used for giving a session its task; replaced in tests. */
   taskTimer?: (callback: () => void, ms: number) => void;
+  /** Timer that waits for the window's size to settle; replaced in tests. */
+  layoutTimer?: (callback: () => void, ms: number) => void;
   now?: () => number;
 }
 
@@ -284,6 +307,15 @@ export class Workspace {
   /** Ids of the sessions that were started for a task and have not been given it yet. */
   private readonly awaitingTask = new Set<string>();
   private readonly taskTimer: (callback: () => void, ms: number) => void;
+  private readonly layoutTimer: (callback: () => void, ms: number) => void;
+  /** Counts the size changes reported, so only the last of a burst is acted on. */
+  private resizes = 0;
+  /** A layout was due while a pane was zoomed; applying it then would have ended the zoom. */
+  private layoutOwed = false;
+  /** A shown pane went away by itself; the next state request puts the layout right. */
+  private layoutStale = false;
+  /** The shown agent that last had the focus. */
+  private lastFocused: string | null = null;
 
   constructor(private readonly deps: WorkspaceDeps) {
     this.env = deps.env ?? process.env;
@@ -291,6 +323,8 @@ export class Workspace {
     this.now = deps.now ?? Date.now;
     // Not kept alive for: a daemon that is shutting down does not wait to hand out a task.
     this.taskTimer = deps.taskTimer ?? ((callback, ms) => void setTimeout(callback, ms).unref());
+    this.layoutTimer =
+      deps.layoutTimer ?? ((callback, ms) => void setTimeout(callback, ms).unref());
     this.feed = new Feed(deps.store, this.now);
     this.messaging = new Messaging({
       store: deps.store,
@@ -344,7 +378,12 @@ export class Workspace {
   }
 
   state(): Promise<WorkspaceState> {
-    return this.serial(() => this.snapshot());
+    return this.serial(async () => {
+      const state = await this.snapshot();
+      if (!this.layoutStale || !state.up) return state;
+      await this.relayout();
+      return this.snapshot();
+    });
   }
 
   up(request: UpRequest = {}): Promise<WorkspaceState> {
@@ -361,6 +400,10 @@ export class Workspace {
       this.deps.store.setMeta(META_STARTED_AT, String(this.now()));
       this.deps.store.setMeta(META_SHELL_PANE, null);
       this.deps.store.setMeta(META_FEED_PANE, null);
+      this.deps.store.setMeta(META_OPEN_ORDER, null);
+      this.layoutOwed = false;
+      this.layoutStale = false;
+      this.lastFocused = null;
       // Values saved "for the next agents of the role" belong to one run of the workspace.
       this.deps.store.setMeta(META_ROLE_RUN, null);
 
@@ -378,6 +421,9 @@ export class Workspace {
         agentsWidth: config.layout.agents_width ?? DEFAULT_LAYOUT.agentsWidth,
         feedWidth: config.layout.feed_width ?? DEFAULT_LAYOUT.feedWidth,
         agentHeight: config.layout.agent_height ?? DEFAULT_LAYOUT.agentHeight,
+        mainMinWidth: config.layout.main_min_width ?? DEFAULT_LAYOUT.mainMinWidth,
+        agentMinWidth: config.layout.agent_min_width ?? DEFAULT_LAYOUT.agentMinWidth,
+        sideScaleMax: config.layout.side_scale_max ?? DEFAULT_LAYOUT.sideScaleMax,
       };
       const panes = await createWorkspace(this.deps.run, {
         cwd: this.deps.projectRoot,
@@ -390,7 +436,6 @@ export class Workspace {
         },
         right: this.uiPane("agents", "agents"),
         feed: this.uiPane("feed", FEED_NAME),
-        sizes,
       });
       const frame: Frame = { top: panes.top, left: panes.left, right: panes.right, sizes };
       this.deps.store.setMeta(META_FRAME, JSON.stringify(frame));
@@ -401,10 +446,8 @@ export class Workspace {
         session,
         { main: true },
       );
-      this.deps.store.setMeta(
-        META_AGENT_HEIGHT,
-        config.layout.agent_height ? String(config.layout.agent_height) : null,
-      );
+      await this.followResizes();
+      await this.relayout();
       // The feed of a new workspace starts here: what earlier ones left is hidden, not deleted.
       this.feed.startSession({ agentId: id, agentName: "main", title: "new session" });
 
@@ -543,57 +586,75 @@ export class Workspace {
     }
   }
 
-  /** Shows an agent's session under main. `target` is a name, an id or a 1-based list position. */
+  /**
+   * Shows an agent's session: under main, or right of it in a wide window, where several fit.
+   * When there is no room left, the agent opened longest ago goes back to the pool and this one
+   * takes its place. `target` is a name, an id or a 1-based list position.
+   */
   open(target: string): Promise<AgentInfo> {
     return this.serial(async () => {
       const state = await this.requireUp();
       const agent = this.find(state, target);
-      if (!agent.open) {
-        await this.clearSlot(state);
-        await this.showUnderMain(state, agent.paneId);
-      }
-      await focusPane(this.deps.run, agent.paneId);
+      await this.showAgent(state, agent);
       return { ...agent, open: true };
     });
   }
 
-  /** Shows an agent's session under main, or hides it when it is the one shown. */
+  /** Shows an agent's session, or hides it when it is shown. */
   toggle(target: string): Promise<AgentInfo> {
     return this.serial(async () => {
       const state = await this.requireUp();
       const agent = this.find(state, target);
-      await this.clearSlot(state);
       if (agent.open) {
-        await focusPane(this.deps.run, state.main.paneId);
+        await this.hideAgent(agent);
+        await this.relayout();
+        await this.focus(state.main.paneId);
         return { ...agent, open: false };
       }
-      await this.showUnderMain(state, agent.paneId);
-      await focusPane(this.deps.run, agent.paneId);
+      await this.showAgent(state, agent);
       return { ...agent, open: true };
     });
   }
 
-  /** Sends whatever is shown under main back to the pool; main gets the full height again. */
-  close(): Promise<void> {
+  /**
+   * Sends one shown pane back to the pool and focuses main. Without a target it is the agent or
+   * the shell that has the focus; with the focus elsewhere, the agent opened last, and the shell
+   * when no agent is shown.
+   */
+  close(target?: string): Promise<void> {
     return this.serial(async () => {
       const state = await this.requireUp();
-      await this.clearSlot(state);
-      await focusPane(this.deps.run, state.main.paneId);
+      const shown = await this.shown();
+      const open = state.agents.filter((agent) => agent.open);
+      const focused = open.find((agent) => agent.paneId === shown.active);
+      const shellFocused = shown.shell !== null && shown.active === shown.shell;
+      const order = this.openOrder();
+      const newest = [...open].sort((a, b) => order.indexOf(b.id) - order.indexOf(a.id))[0];
+      const agent = target ? this.find(state, target) : (focused ?? (shellFocused ? null : newest));
+      if (agent?.open) {
+        await this.hideAgent(agent);
+      } else if (!target && shown.shell) {
+        await returnToPool(this.deps.run, { agent: shown.shell, name: SHELL_NAME });
+      }
+      await this.relayout();
+      await this.focus(state.main.paneId);
     });
   }
 
   /**
-   * Shows a plain shell under main, in the slot agents open in, or hides it. The shell is started
-   * the first time and keeps running in the background while hidden, like an agent's session.
+   * Shows a plain shell in a row of its own under main and the shown agents, or hides it. The
+   * shell is started the first time and keeps running in the background while hidden, like an
+   * agent's session. It takes no agent's place.
    */
   toggleShell(): Promise<{ open: boolean }> {
     return this.serial(async () => {
       const { run, store } = this.deps;
       const state = await this.requireUp();
-      const wasOpen = state.shell?.open === true;
-      await this.clearSlot(state);
-      if (wasOpen) {
-        await focusPane(run, state.main.paneId);
+      if (state.shell?.open) {
+        const shell = store.getMeta(META_SHELL_PANE) ?? "";
+        await returnToPool(run, { agent: shell, name: SHELL_NAME });
+        await this.relayout();
+        await this.focus(state.main.paneId);
         return { open: false };
       }
       let pane = state.shell ? store.getMeta(META_SHELL_PANE) : null;
@@ -605,8 +666,11 @@ export class Workspace {
         });
         store.setMeta(META_SHELL_PANE, pane);
       }
-      await this.showUnderMain(state, pane);
-      await focusPane(run, pane);
+      // After the last agent in the window's pane order, which is where a layout has its row.
+      const shown = await this.shown();
+      await showPane(run, { pane, after: shown.agents.at(-1)?.paneId ?? state.main.paneId });
+      await this.relayout();
+      await this.focus(pane);
       return { open: true };
     });
   }
@@ -619,11 +683,11 @@ export class Workspace {
     return this.serial(async () => {
       const { run, store } = this.deps;
       const state = await this.requireUp();
-      const frame = parseJson<Frame>(store.getMeta(META_FRAME));
+      const frame = this.frame();
       if (!frame) throw new WorkspaceError("This workspace has no room for the feed; restart it.");
       if (state.feed?.open) {
         await returnToPool(run, { agent: store.getMeta(META_FEED_PANE) ?? "", name: FEED_NAME });
-        await fixFrame(run, { ...frame, main: state.main.paneId }, frame.sizes);
+        await this.relayout();
         return { open: false };
       }
       let pane = state.feed ? store.getMeta(META_FEED_PANE) : null;
@@ -635,9 +699,45 @@ export class Workspace {
         });
         store.setMeta(META_FEED_PANE, pane);
       }
-      await showFeed(run, { feed: pane, right: frame.right, width: frame.sizes.feedWidth });
-      await fixFrame(run, { ...frame, main: state.main.paneId, feed: pane }, frame.sizes);
+      await showFeed(run, { feed: pane, right: frame.right });
+      await this.relayout();
       return { open: true };
+    });
+  }
+
+  /**
+   * Called when tmux reports that the workspace window's size changed. The layout follows once
+   * the size has stayed the same for a moment: a terminal's edge being dragged reports many.
+   */
+  resized(): void {
+    const turn = ++this.resizes;
+    const { run } = this.deps;
+    // Taken up: tmux may ask again for the next change.
+    void this.serial(() => relayoutTaken(run)).catch(() => undefined);
+    this.layoutTimer(() => {
+      if (turn !== this.resizes) return;
+      void this.serial(async () => {
+        if (await hasSession(run)) await this.relayout();
+      }).catch(() => undefined);
+    }, RESIZE_SETTLE_MS);
+  }
+
+  /**
+   * For a daemon that starts while the workspace runs: makes tmux report size changes to this
+   * one, and puts the layout right for the size the window has now.
+   */
+  resumeLayout(): Promise<void> {
+    return this.serial(async () => {
+      if (!(await hasSession(this.deps.run))) return;
+      await this.followResizes();
+      await this.relayout();
+    });
+  }
+
+  private async followResizes(): Promise<void> {
+    const self = selfCommand(this.deps.selfArgv, this.deps.projectRoot);
+    await installResizeHook(this.deps.run, self).catch((error) => {
+      console.error(`Could not follow the window's size: ${(error as Error).message}`);
     });
   }
 
@@ -664,6 +764,17 @@ export class Workspace {
       const state = await this.requireUp();
       await focusPane(this.deps.run, state.main.paneId);
       await this.deps.run(["resize-pane", "-Z", "-t", state.main.paneId]);
+      if (this.layoutOwed) await this.relayout();
+    });
+  }
+
+  /** Gives the pane with the focus the whole window, or the layout back. */
+  zoom(): Promise<void> {
+    return this.serial(async () => {
+      await this.requireUp();
+      await toggleZoom(this.deps.run);
+      // A layout that was due during the zoom is applied now that it has ended.
+      if (this.layoutOwed) await this.relayout();
     });
   }
 
@@ -675,27 +786,163 @@ export class Workspace {
     });
   }
 
-  /** Empties the slot under main: the open agent, or the shell, goes back to the pool. */
-  private async clearSlot(state: WorkspaceState): Promise<void> {
-    const current = state.agents.find((agent) => agent.open);
-    if (current) await returnToPool(this.deps.run, { agent: current.paneId, name: current.name });
-    const shell = state.shell?.open ? this.deps.store.getMeta(META_SHELL_PANE) : null;
-    if (shell) await returnToPool(this.deps.run, { agent: shell, name: SHELL_NAME });
+  private frame(): Frame | undefined {
+    const frame = parseJson<Frame>(this.deps.store.getMeta(META_FRAME));
+    // A frame stored by an earlier version has fewer sizes.
+    return frame ? { ...frame, sizes: { ...DEFAULT_LAYOUT, ...frame.sizes } } : undefined;
   }
 
-  private async showUnderMain(state: { main: AgentInfo }, pane: string): Promise<void> {
-    const height = Number(this.deps.store.getMeta(META_AGENT_HEIGHT)) || undefined;
-    await openUnderMain(this.deps.run, {
-      main: state.main.paneId,
-      agent: pane,
-      heightPercent: height,
-    });
+  private openOrder(): string[] {
+    return parseJson<string[]>(this.deps.store.getMeta(META_OPEN_ORDER)) ?? [];
+  }
+
+  private async shown(): Promise<Shown> {
+    const { run, store } = this.deps;
+    const panes = (await listPanes(run)).filter((pane) => pane.inWorkspace);
+    const order = panes.map((pane) => pane.paneId);
+    const rows = new Map(
+      store
+        .running()
+        .filter((row) => row.kind === "agent")
+        .map((row) => [row.paneId, row]),
+    );
+    const one = (pane: string | null) => (pane && order.includes(pane) ? pane : null);
+    return {
+      order,
+      agents: order.flatMap((paneId) => {
+        const row = rows.get(paneId);
+        return row ? [{ id: row.id, name: row.name, paneId }] : [];
+      }),
+      shell: one(store.getMeta(META_SHELL_PANE)),
+      feed: one(store.getMeta(META_FEED_PANE)),
+      active: panes.find((pane) => pane.active)?.paneId ?? null,
+    };
+  }
+
+  /** The shown agents, the one opened longest ago first. One the order does not know is oldest. */
+  private oldestFirst(agents: Shown["agents"]): Shown["agents"] {
+    const order = this.openOrder();
+    return [...agents].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  }
+
+  /**
+   * Gives every pane of the workspace window its place and size for the size the window has now
+   * (`planLayout`). Agents the window has no room for go back to the pool, the one opened longest
+   * ago first. A failure is reported and leaves the panes as tmux has them.
+   */
+  private async relayout(): Promise<void> {
+    try {
+      await this.relayoutNow();
+    } catch (error) {
+      console.error(`Could not lay out the workspace: ${(error as Error).message}`);
+    }
+  }
+
+  private async relayoutNow(): Promise<void> {
+    const { run, store } = this.deps;
+    this.layoutStale = false;
+    const frame = this.frame();
+    const main = store.running().find((row) => row.kind === "main");
+    if (!frame || !main) return;
+    const window = await windowInfo(run);
+    if (window.zoomed) {
+      // select-layout ends a zoom (docs/spikes.md, S13); the layout waits until the user does.
+      this.layoutOwed = true;
+      return;
+    }
+    this.layoutOwed = false;
+    let shown = await this.shown();
+    const planFor = (now: Shown) =>
+      planLayout({
+        ...window,
+        sizes: frame.sizes,
+        feed: now.feed !== null,
+        shell: now.shell !== null,
+        agents: now.agents.map((agent) => agent.paneId),
+      });
+    let plan = planFor(shown);
+    if (!plan) return;
+    const extra = shown.agents.length - plan.capacity;
+    if (extra > 0) {
+      for (const agent of this.oldestFirst(shown.agents).slice(0, extra)) {
+        await returnToPool(run, { agent: agent.paneId, name: agent.name });
+      }
+      shown = await this.shown();
+      plan = planFor(shown);
+      if (!plan) return;
+    }
+    const panes: LayoutPanes = {
+      top: frame.top,
+      left: frame.left,
+      main: main.paneId,
+      right: frame.right,
+      ...(shown.feed ? { feed: shown.feed } : {}),
+      ...(shown.shell ? { shell: shown.shell } : {}),
+    };
+    const want = paneOrder(
+      panes,
+      shown.agents.map((agent) => agent.paneId),
+    );
+    const have = [...shown.order];
+    // A pane dwa did not put there: no layout of ours fits the window.
+    if (want.length !== have.length || want.some((pane) => !have.includes(pane))) return;
+    // tmux gives a layout's cells to the panes in their order, so the order is put right first.
+    for (let index = 0; index < want.length; index++) {
+      const pane = want[index] ?? "";
+      const there = have[index] ?? "";
+      if (pane === there) continue;
+      await swapPanes(run, pane, there);
+      have[have.indexOf(pane)] = there;
+      have[index] = pane;
+    }
+    await applyLayout(run, layoutString(plan, panes));
+  }
+
+  /** Moves the focus to a pane. That ends a zoom, so a layout that waited for it is applied. */
+  private async focus(pane: string): Promise<void> {
+    await focusPane(this.deps.run, pane);
+    if (this.layoutOwed) await this.relayout();
+  }
+
+  /** Shows an agent that is in the pool, counts it as the one opened last, and focuses it. */
+  private async showAgent(state: { main: AgentInfo }, agent: AgentInfo): Promise<void> {
+    const { run, store } = this.deps;
+    if (!agent.open) {
+      const shown = await this.shown();
+      const frame = this.frame();
+      const plan = frame
+        ? planLayout({
+            ...(await windowInfo(run)),
+            sizes: frame.sizes,
+            feed: shown.feed !== null,
+            shell: shown.shell !== null,
+            agents: shown.agents.map((other) => other.paneId),
+          })
+        : null;
+      const oldest = this.oldestFirst(shown.agents)[0];
+      if (oldest && shown.agents.length >= (plan?.capacity ?? 1)) {
+        // No room: this one takes the place of the agent opened longest ago.
+        await showPane(run, { pane: agent.paneId, after: oldest.paneId });
+        await returnToPool(run, { agent: oldest.paneId, name: oldest.name });
+      } else {
+        const after = shown.agents.at(-1)?.paneId ?? state.main.paneId;
+        await showPane(run, { pane: agent.paneId, after });
+      }
+    }
+    const order = this.openOrder().filter((id) => id !== agent.id);
+    store.setMeta(META_OPEN_ORDER, JSON.stringify([...order, agent.id]));
+    if (!agent.open) await this.relayout();
+    await this.focus(agent.paneId);
+  }
+
+  private async hideAgent(agent: AgentInfo): Promise<void> {
+    await returnToPool(this.deps.run, { agent: agent.paneId, name: agent.name });
   }
 
   focusMain(): Promise<void> {
     return this.serial(async () => {
       const state = await this.requireUp();
-      await focusPane(this.deps.run, state.main.paneId);
+      await this.focus(state.main.paneId);
     });
   }
 
@@ -705,6 +952,8 @@ export class Workspace {
       const agent = this.find(state, target);
       await killPane(this.deps.run, agent.paneId);
       this.markStopped(agent.id);
+      // The others take the room of one that was shown.
+      if (agent.open) await this.relayout();
       return { ...agent, state: "stopped", open: false };
     });
   }
@@ -917,6 +1166,8 @@ export class Workspace {
         // The session ended on its own (or the server is gone). Dead panes are kept by
         // remain-on-exit, so remove an agent's leftover pane.
         if (pane && row.kind === "agent") await killPane(run, row.paneId).catch(() => undefined);
+        // Its room, if it was shown, goes to the others.
+        if (row.kind === "agent") this.layoutStale = true;
         this.markStopped(row.id);
         continue;
       }
@@ -945,6 +1196,7 @@ export class Workspace {
         feed = { open: pane.inWorkspace };
       } else {
         if (pane) await killPane(run, feedPane).catch(() => undefined);
+        this.layoutStale = true;
         store.setMeta(META_FEED_PANE, null);
       }
     }
@@ -957,9 +1209,27 @@ export class Workspace {
         shell = { open: pane.inWorkspace };
       } else {
         if (pane) await killPane(run, shellPane).catch(() => undefined);
+        this.layoutStale = true;
         store.setMeta(META_SHELL_PANE, null);
       }
     }
+
+    // The order agents were opened in holds exactly the shown ones.
+    const open = live.filter((agent) => agent.open);
+    const stored = up ? this.openOrder() : [];
+    const kept = stored.filter((id) => open.some((agent) => agent.id === id));
+    const order = [...kept, ...open.filter((agent) => !kept.includes(agent.id)).map((a) => a.id)];
+    if (up && order.join() !== stored.join()) {
+      store.setMeta(META_OPEN_ORDER, JSON.stringify(order));
+    }
+    // The agent the panes are about: the shown one with the focus, else the one that last had
+    // it, else the one opened last.
+    const active = open.find((agent) => {
+      const pane = panes.get(agent.paneId);
+      return pane?.active === true;
+    });
+    if (active) this.lastFocused = active.id;
+    const focused = order.includes(this.lastFocused ?? "") ? this.lastFocused : order.at(-1);
 
     const questions = this.messaging.openQuestions();
     for (const agent of live) {
@@ -986,6 +1256,7 @@ export class Workspace {
       workflows: workflowRuns(store),
       shell,
       feed,
+      ...(focused ? { focused } : {}),
     };
   }
 

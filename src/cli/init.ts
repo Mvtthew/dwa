@@ -99,10 +99,13 @@ effort = "medium"
 # prefix = "C-q"        # tmux key notation
 
 # [layout]
-# status_width = 30     # columns
-# agents_width = 34     # columns
-# feed_width = 40       # columns of the event feed (prefix, then e, shows or hides it)
-# agent_height = 40     # percent of the centre column
+# status_width = 30     # columns, in a terminal of 200 columns or fewer
+# agents_width = 34     # columns, likewise
+# feed_width = 40       # columns of the event feed (prefix, then e, shows or hides it), likewise
+# side_scale_max = 140  # how far these three grow in a wider terminal, in percent; 100: not at all
+# agent_height = 40     # percent of the centre column, for the agent shown under main
+# main_min_width = 90   # agents are shown right of main, two to a column, once main keeps
+# agent_min_width = 70  # this many columns beside a column of that width
 `;
 
 export interface InitResult {

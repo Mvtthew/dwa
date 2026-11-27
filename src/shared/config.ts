@@ -110,7 +110,7 @@ const AgentSchema = z
   .superRefine(refuseBothToolLists);
 
 const LayoutSchema = z.strictObject({
-  /** Width of the status pane in columns. */
+  /** Width of the status pane in columns, in a window of 200 columns or fewer. */
   status_width: z.number().int().min(16).max(80).optional(),
   /** Width of the agents pane in columns. */
   agents_width: z.number().int().min(16).max(80).optional(),
@@ -118,6 +118,12 @@ const LayoutSchema = z.strictObject({
   feed_width: z.number().int().min(16).max(80).optional(),
   /** Height of the agent pane opened under main, in percent of the centre column. */
   agent_height: z.number().int().min(10).max(90).optional(),
+  /** The narrowest main gets, in columns, while agents are shown right of it. */
+  main_min_width: z.number().int().min(60).max(200).optional(),
+  /** The narrowest a column of agents right of main gets, in columns. */
+  agent_min_width: z.number().int().min(40).max(200).optional(),
+  /** How far the side columns grow in a wide window, in percent of their width. 100: not at all. */
+  side_scale_max: z.number().int().min(100).max(200).optional(),
 });
 
 const ConfigSchema = z.strictObject({

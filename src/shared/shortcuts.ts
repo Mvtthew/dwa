@@ -57,7 +57,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { key: "s", label: "Shell", category: "Panes", action: { key: ["shell"] } },
   { key: "e", label: "Event feed", category: "Panes", action: { key: ["feed"] } },
   { key: "0", label: "Focus main", category: "Panes", action: { key: ["focus"] } },
-  { key: "z", label: "Zoom pane", category: "Panes", action: { tmux: "resize-pane -Z" } },
+  { key: "z", label: "Zoom pane", category: "Panes", action: { key: ["zoom"] } },
   { key: "x", label: "Close pane", category: "Panes", action: { key: ["close"] } },
   { key: "p", label: "Menu", category: "Workspace", action: { popup: "palette" } },
   {

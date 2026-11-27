@@ -17,6 +17,7 @@ Experiments run on 2026-11-24 with Claude Code 2.1.331, tmux 3.8, Bun 1.4.3 on m
 | S9    | What does a short list of built-in tools save, and can built-in skills be kept out for good?      | About 16k tokens per session. All 20 skills switch off by id; the hook sees the name of any other.                |
 | S11   | Can a hook hand the model a reminder without refusing the tool call?                              | Yes: `additionalContext` after a tool call, also a failed one. Nothing is shown on screen.                        |
 | S12   | Does the Claude command's browser integration work under dwa's isolation flags?                   | Yes, with `--chrome` alone. Tools that only look run without an allow rule; tools that act need one in `dontAsk`. |
+| S13   | Can one generated layout string set every pane of the workspace window at once?                   | Yes, with `select-layout` and the old string format. Cells go by pane order. A resize hook fires once per size.   |
 
 ## S1. tmux composition
 
@@ -296,7 +297,7 @@ Run on 2026-11-26 with tmux 3.8 in a private server (`tmux -L dwaspike -f /dev/n
 
 - **A menu opened on a mouse press closes on the release** when the release is outside the menu, which it is for a menu under a button. The top bar opens menus on the release.
 - **Such a menu takes clicks only with `-M`.** Driven through a real client in a pty (with `mouse on`): a click on an item ran nothing without `-M` and ran the item's command with it; the item's key worked either way.
-- **Two neighbouring panes cannot both be sized with `resize-pane -x`.** tmux moves the right border of a pane, or the left one of the last pane in a row, so the agents pane and the feed both move the border they share and the second resize undoes the first (the feed came out 8 columns wide). The agents pane is sized through main's width instead: `run-shell -C 'resize-pane -t <main> -x #{e|-:#{window_width},<others>}'` expands the format first, and works in the `window-resized` hook as well (checked at 200 and 170 columns).
+- **Two neighbouring panes cannot both be sized with `resize-pane -x`.** tmux moves the right border of a pane, or the left one of the last pane in a row, so the agents pane and the feed both move the border they share and the second resize undoes the first (the feed came out 8 columns wide). The agents pane is sized through main's width instead: `run-shell -C 'resize-pane -t <main> -x #{e|-:#{window_width},<others>}'` expands the format first, and works in the `window-resized` hook as well (checked at 200 and 170 columns). S13 replaced this sizing with one layout string.
 
 Not tested: where the menu appears on the screen (an overlay is not part of `capture-pane`), and two clients attached at once.
 
@@ -338,3 +339,21 @@ Also seen, and not about the browser: a plugin MCP server (`easel`, one tool) an
 Found afterwards with the role itself (a `web-chrome` agent told to open a page): the tools that only look run without an allow rule, but one that acts is refused in `dontAsk` ("Permission to use mcp__claude-in-chrome__tabs_context_mcp has been denied because Claude Code is running in don't ask mode" for the call that creates the session's tab). With `allow: ["mcp__claude-in-chrome"]` the agent created its own tab, opened a page, read it and closed the tab, and the tools named in `deny` were not in its tool list.
 
 What dwa does with it: the built-in `web-chrome` role names the profile `chrome` (a profile with `args = ["--chrome"]`), has a short `tools` list, allows the browser tools as a whole and takes away with deny rules what it must not do in the browser.
+
+## S13. The whole window from one layout string
+
+Run on 2026-11-27 with tmux 3.8 on the spike server (`spikes/s13/run.ts`, `bun spikes/s13/run.ts`). The panes ran `spikes/s13/pane.sh`, which writes a line for every `SIGWINCH` it gets, so redraws could be counted. The window was sized with `resize-window` and with control-mode clients (`tmux -C attach`, `refresh-client -C <width>x<height>`).
+
+- **`select-layout` takes a layout string and sets every pane's place and size at once.** The string is `<checksum>,<cell>`, where a cell is `WxH,X,Y,<pane number>` for a pane, `WxH,X,Y{...}` for cells side by side and `WxH,X,Y[...]` for cells above each other; neighbours are one cell apart, for the border. The checksum is tmux's own: for each character, rotate a 16-bit sum right by one and add the character. A wide layout with four agents in two columns and a shell row under main and the columns came out exactly as written, at 420x70.
+- **tmux 3.8 prints `#{window_layout}` as JSON** (`{"V":2,"L":{...}}`) and no longer as that string, but `select-layout` takes both. dwa writes the old string, which tmux 3.7 knows too, and never reads the layout back.
+- **Cells are given to panes in the window's pane order; the pane numbers in the string are ignored** (a string with numbers 900 and up gave the same result). `join-pane -t X` puts the pane right after X in that order and `-b` right before it; `split-window -f -b` puts it first.
+- **The order `top bar, status, main, agents, shell, agents list, feed` fits the narrow and the wide layout alike**, so going from one agent under main to the same agent right of main is one `select-layout` and no pane moves.
+- **A pane in the first row gives its first line to the border title.** With `pane-border-status top` the top bar's cell is 2 rows for 1 row of text, the border under it is row 2 and the columns start at row 3, so they have the window's height minus 3. Every other pane is as large as its cell.
+- **Applying the string a window already has redraws nothing** (no `SIGWINCH` in any pane), so a relayout that changes nothing is free.
+- **`join-pane`, `break-pane` and `select-layout` in one tmux call (`;` between them) resize a moved pane once**; as three calls, twice. Panes that keep their place are not resized either way.
+- **`join-pane` fails with "no space for a new pane" when the target is too small** (a pane 2 rows high). A target that the layout has sized is never that small.
+- **Errors.** A wrong checksum and a string with fewer cells than the window has panes are refused, with nothing changed. A string written for another window size is accepted and scaled, badly (the top bar came out 6 rows high), so the string must be made for the size the window has at that moment.
+- **A window hook, `set-hook -w -t <workspace window> window-resized`, runs once for each change of that window's size**: on `resize-window`, when the first client attaches, when a smaller second client attaches or leaves (`window-size latest`). It does not run for a pool window, nor after `select-layout`, `join-pane` or `break-pane`, so applying a layout from the hook cannot loop. 30 size steps in half a second ran it 30 times: what it starts has to be held back.
+- **Zoom.** A resize while a pane is zoomed runs the hook and keeps the zoom. `select-layout` on a zoomed window unzooms it.
+
+Not tested here: tmux 3.7, and a real Claude session through these changes (checked with the feature, in a scratch project).

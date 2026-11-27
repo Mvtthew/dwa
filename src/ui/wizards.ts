@@ -102,7 +102,7 @@ function spawnDetails(item: FeedDetail): [string, string][] {
 /**
  * One item of the event feed, whole: a recap's reply, a result, a message, or for a spawned
  * agent the task it was given and what it was started with. The session it is about can be
- * shown under main, or its tools opened, while it runs.
+ * shown beside main, or its tools opened, while it runs.
  */
 export async function feedScreen(api: WizardApi, id: string, now = Date.now()): Promise<Screen> {
   const item = await api.call<FeedDetail>("GET", `/feed/item?id=${encodeURIComponent(id)}`);
@@ -134,7 +134,7 @@ export async function feedScreen(api: WizardApi, id: string, now = Date.now()): 
       {
         kind: "button",
         label: session.open ? `Hide ${session.name}` : `Show ${session.name}`,
-        hint: "under main",
+        hint: "beside main",
         run: async () => {
           await api.call("POST", "/agents/toggle", { target: session.id });
           return { close: true };
@@ -205,7 +205,7 @@ export function agentScreen(api: WizardApi): Screen {
     { kind: "choice", key: "effort", label: "Effort", options: orDefault([...EFFORT_LEVELS]) },
     { kind: "input", key: "task", label: "First task", placeholder: "optional" },
     { kind: "button", label: "Start", tone: "good", run: start(false) },
-    { kind: "button", label: "Start and show it under main", tone: "good", run: start(true) },
+    { kind: "button", label: "Start and show it", tone: "good", run: start(true) },
     { kind: "button", label: "Cancel", run: () => ({ close: true }) },
   );
   return { title: "Start an agent", rows };
@@ -332,7 +332,7 @@ function sessionScreen(api: WizardApi, agent: AgentInfo): Screen {
   } else {
     rows.push({
       kind: "button",
-      label: agent.open ? "Hide it" : "Show it under main",
+      label: agent.open ? "Hide it" : "Show it",
       run: post("/agents/toggle", { target: agent.id }),
     });
   }
@@ -438,7 +438,7 @@ export async function menuScreen(
       label: state.shell?.open ? "Hide the shell" : "Show the shell",
       run: post("/shell/toggle"),
     },
-    { kind: "button", label: "Hide the pane under main", run: post("/agents/close") },
+    { kind: "button", label: "Hide the focused agent or shell", run: post("/agents/close") },
     {
       kind: "button",
       label: "Clear the feed…",

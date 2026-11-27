@@ -15,6 +15,7 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - dwa only launches the unmodified interactive Claude command. Never drive agents with `claude -p` or the Agent SDK: subscription logins are only allowed with the native CLI.
 - Never assume the executable is called `claude`. It comes from a profile (`src/shared/constants.ts` has the default and the env override).
 - Never touch the user's own tmux server or config. All tmux calls go to the private server (`tmux -L dwa -f <generated conf>`).
+- Every pane of the workspace window gets its place and size from `planLayout` (`src/tmux/plan.ts`, pure) and one `select-layout` (`Workspace.relayout`; docs/spikes.md, S13). Do not size a pane with `resize-pane` or a `-l` on a split or join. tmux gives a layout's cells to the panes in their order, so a pane joins the window right after the one it follows in `paneOrder`. A relayout never ends a zoom: it waits (`layoutOwed`).
 - Never write to `~/.claude` or the project's `.claude/settings.json`. Per-session settings are generated under `.dwa/run/` and passed with `--settings` and `--mcp-config`.
 - Agent state comes from hooks and the statusline JSON, not from reading the screen.
 - Sessions are isolated from the user's own Claude setup (`--setting-sources project,local`, `--strict-mcp-config`, and the generated settings; see docs/spikes.md, S5). Whatever a session gets must come from the project's Claude files or from dwa configuration, and `dwa statusline` prints only the one line the daemon gives it (`sessionLine` in `src/daemon/activity.ts`): Claude Code keeps a row for the status line even when it is empty.
@@ -48,7 +49,7 @@ Read `docs/architecture.md` before changing the design, and `docs/spikes.md` for
 - `src/cli/` command entry points
 - `src/shared/` constants, paths, config and profiles, environment cleaning, protocol types
 - `src/daemon/` one process per project: `workspace.ts` is the application service (all tmux changes go through its serial queue), `server.ts` the Unix-socket API, `db.ts` the SQLite store
-- `src/tmux/` private-server driver, generated config, layout operations
+- `src/tmux/` private-server driver, generated config, layout operations; `plan.ts` is the pure layout planner (sizes, narrow or wide, the layout string)
 - `src/providers/` the provider interface and the Claude Code launch command
 - `src/daemon/feed.ts` the event feed: recaps, spawns, results, messages, workflow steps and lifecycle items, written where each happens (a write never throws), read with `GET /feed` and `GET /feed/item`; a `session` item is the separator of a main session's start, and clearing only moves the `feed_cleared` point (`Feed.clear`, `POST /feed/clear`), no row is deleted for it
 - `src/daemon/activity.ts` turns hook events and statusline JSON into agent activity and telemetry

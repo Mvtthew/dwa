@@ -144,12 +144,20 @@ export function startServer(options: ServerOptions) {
       case "POST /zoom":
         await workspace.zoomMain();
         return json({ ok: true });
+      case "POST /zoom/toggle":
+        await workspace.zoom();
+        return json({ ok: true });
+      case "POST /layout/resized":
+        workspace.resized();
+        return json({ ok: true });
       case "POST /detach":
         await workspace.detach();
         return json({ ok: true });
-      case "POST /agents/close":
-        await workspace.close();
+      case "POST /agents/close": {
+        const { target } = await body<{ target?: unknown }>(request);
+        await workspace.close(typeof target === "string" && target !== "" ? target : undefined);
         return json({ ok: true });
+      }
       case "POST /inbox/clear":
         workspace.clearInbox();
         return json({ ok: true });

@@ -23,7 +23,7 @@ import { accent, tone } from "./theme.ts";
 /** Two lines of text plus a blank line between tiles. */
 const TILE_HEIGHT = 3;
 export interface AgentsActions {
-  /** Show this agent's session under main, or hide it when it is the one shown. */
+  /** Show this agent's session beside main, or hide it when it is shown. */
   toggle(agentId: string): void;
   /** Hide the open agent. */
   close(): void;
@@ -44,7 +44,7 @@ interface TileNodes {
 /**
  * The agents pane: how many agents are doing what, then one tile per running agent, at most
  * twelve visible, the rest reached by scrolling. Click a tile or press Enter on it to show that
- * agent under the main session, and again to hide it. Questions and messages to the user are in
+ * agent beside the main session, and again to hide it. Questions and messages to the user are in
  * the top bar and the event feed.
  */
 export function createAgentsView(renderer: CliRenderer, actions: AgentsActions): AgentsView {

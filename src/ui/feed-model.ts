@@ -29,11 +29,15 @@ export function filterOf(item: FeedItem): FeedFilter | null {
 }
 
 /**
- * The session "only selected" keeps to: the agent shown under main, or else main itself. The
+ * The session "only selected" keeps to: the shown agent in focus, or else main itself. The
  * same one the status pane is about.
  */
 export function feedSubject(state: WorkspaceState | null): { id: string; name: string } | null {
-  const subject = state?.agents.find((agent) => agent.open) ?? state?.main ?? null;
+  const subject =
+    state?.agents.find((agent) => agent.id === state.focused) ??
+    state?.agents.find((agent) => agent.open) ??
+    state?.main ??
+    null;
   return subject ? { id: subject.id, name: subject.name } : null;
 }
 

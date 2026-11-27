@@ -301,7 +301,7 @@ export interface Meter {
 }
 
 export interface StatusModel {
-  /** The session the status, model and cost belong to: the open agent, otherwise main. */
+  /** The session the status, model and cost belong to: the shown agent in focus, otherwise main. */
   subject: AgentInfo | null;
   subjectStyle: ActivityStyle | null;
   model: string | null;
@@ -329,7 +329,10 @@ function limitMeter(label: string, limit: UsageLimit | null | undefined, nowMs: 
 
 export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
   const everyone = [...(state.main ? [state.main] : []), ...state.agents];
-  const subject = state.agents.find((agent) => agent.open) ?? state.main;
+  const subject =
+    state.agents.find((agent) => agent.id === state.focused) ??
+    state.agents.find((agent) => agent.open) ??
+    state.main;
   const telemetry = subject?.telemetry ?? null;
   const main = state.main?.telemetry ?? null;
   return {

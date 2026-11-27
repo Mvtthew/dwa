@@ -74,6 +74,11 @@ agents_width = 40
     );
     expect(config.agents).toEqual([{ name: "rev", role: "reviewer", task: "review HEAD" }]);
     expect(config.layout).toEqual({ agents_width: 40 });
+    expect(
+      parseConfig("[layout]\nmain_min_width = 100\nagent_min_width = 80\nside_scale_max = 100", "c")
+        .layout,
+    ).toEqual({ main_min_width: 100, agent_min_width: 80, side_scale_max: 100 });
+    expect(() => parseConfig("[layout]\nside_scale_max = 90", "cfg")).toThrow(/side_scale_max/);
     expect(() => parseConfig("[layout]\nagents_width = 4", "cfg")).toThrow(/layout\.agents_width/);
     expect(() => parseConfig("[[agents]]\nrole = 'x'", "cfg")).toThrow(/agents\.0\.name/);
   });
@@ -477,7 +482,9 @@ describe("tmux helpers", () => {
     expect(conf).toContain("bind -n M-a display-popup -E -w 70% -h 80% -T ' New agent ' ");
     expect(conf).toContain("bind t display-popup -E -w 70% -h 90% -T ' Agent tools ' ");
     expect(conf).toContain("bind -n M-r display-popup -E -w 70% -h 90% -T ' Role settings ' ");
-    expect(conf).toContain("bind z resize-pane -Z");
+    // Zoom goes through dwa, which applies a layout that waited for the zoom to end.
+    expect(conf).toContain("bind z run-shell -b 'DWA_PROJECT=");
+    expect(conf).toContain(" key zoom'");
     // Detach is after the prefix only: Alt+D deletes a word in the programs in the panes.
     expect(conf).toContain("bind d detach-client");
     expect(conf).not.toContain("M-d");
@@ -503,10 +510,10 @@ describe("tmux helpers", () => {
     expect(menuArgs("dwa", "Panes", 0, 2)).toContain("run-shell -b 'dwa key shell'");
   });
 
-  test("parsePaneList reads pane id, dead flag and window", () => {
-    expect(parsePaneList("%0 0 workspace\n%3 1 my agent\n")).toEqual([
-      { paneId: "%0", dead: false, inWorkspace: true },
-      { paneId: "%3", dead: true, inWorkspace: false },
+  test("parsePaneList reads pane id, dead flag, focus and window", () => {
+    expect(parsePaneList("%0 0 1 workspace\n%3 1 0 my agent\n")).toEqual([
+      { paneId: "%0", dead: false, active: true, inWorkspace: true },
+      { paneId: "%3", dead: true, active: false, inWorkspace: false },
     ]);
   });
 });

@@ -128,6 +128,10 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
   // Runs that were in progress when the daemon last stopped carry on.
   workflows.resume().catch((error) => console.error("could not resume workflows:", error));
   delegation.resume().catch((error) => console.error("could not end reported sessions:", error));
+  // A workspace that kept running reports its window's size changes to this daemon from now on.
+  workspace
+    .resumeLayout()
+    .catch((error) => console.error("could not lay out the workspace:", error));
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
   console.log(`dwa daemon for ${projectRoot} listening on ${socketPath} (pid ${process.pid})`);

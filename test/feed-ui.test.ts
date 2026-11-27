@@ -80,7 +80,7 @@ describe("the feed model", () => {
     expect(filterOf(item(3, { kind: "question" }))).toBe("message");
   });
 
-  test("only the selected session: the one shown under main, or main", () => {
+  test("only the selected session: the shown agent in focus, or main", () => {
     expect(feedSubject(workspace([agent("dev")]))?.name).toBe("main");
     const state = workspace([agent("dev", { open: true })]);
     expect(feedSubject(state)?.id).toBe("id-dev");
