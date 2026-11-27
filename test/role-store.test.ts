@@ -33,6 +33,7 @@ describe("the role store on disk", () => {
     expect(places()).toEqual([
       ["designer", "project", false],
       ["developer", "project", false],
+      ["dwa-selfheal", "project", false],
       ["explore", "project", false],
       ["explore", "user", true],
       ["main", "project", false],

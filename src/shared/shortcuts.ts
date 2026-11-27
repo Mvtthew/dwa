@@ -44,6 +44,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { key: "r", label: "Role settings", category: "Agents", action: { popup: "roles" } },
   { key: "q", label: "Answer questions", category: "Agents", action: { popup: "questions" } },
   { key: "l", label: "Leader mode", category: "Agents", action: { popup: "leader" } },
+  { key: "f", label: "Review fixes", category: "Agents", action: { popup: "fixes" } },
   ...Array.from(
     { length: 9 },
     (_, i): Shortcut => ({

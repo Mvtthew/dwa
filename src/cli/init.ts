@@ -151,7 +151,15 @@ export function initProject(projectRoot: string, options: { roles: boolean }): I
   // Runtime state (database, logs, generated settings) should not be committed.
   const ignorePath = join(projectRoot, ".gitignore");
   if (existsSync(join(projectRoot, ".git"))) {
-    const current = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
+    let current = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
+    // Reports about dwa itself can quote a session's task and setup.
+    const reports = `.${APP_NAME}/reports/`;
+    if (!current.split("\n").some((line) => line.trim() === reports)) {
+      const gap = current === "" || current.endsWith("\n") ? "" : "\n";
+      writeFileSync(ignorePath, `${current}${gap}${reports}\n`);
+      result.created.push(`${ignorePath} (added ${reports})`);
+    }
+    current = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
     if (current.split("\n").some((line) => line.trim() === IGNORE_LINE)) {
       result.skipped.push(ignorePath);
     } else {

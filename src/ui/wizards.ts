@@ -12,6 +12,7 @@ import type {
 } from "../shared/protocol.ts";
 import { EFFORT_LEVELS } from "../shared/roles.ts";
 import type { WorkflowSummary } from "../shared/workflow.ts";
+import { fixesScreen, reportScreen } from "./fix-screens.ts";
 import { ago } from "./model.ts";
 import { type RoleStore, rolesScreen } from "./role-screens.ts";
 import { openRun } from "./run-screens.ts";
@@ -80,6 +81,7 @@ const FEED_TITLES: Record<FeedKind, string> = {
   answer: "Answer",
   step: "Workflow",
   lifecycle: "Session",
+  selfheal: "Self-heal",
   session: "New session",
 };
 
@@ -397,6 +399,14 @@ export async function menuScreen(
       run: () => ({ exec: ["answer"] }),
     });
   }
+  if ((state.fixes ?? 0) > 0) {
+    rows.push({
+      kind: "button",
+      label: `Review fixes (${state.fixes} waiting)`,
+      tone: "attention",
+      run: async () => ({ to: await fixesScreen(api) }),
+    });
+  }
   rows.push({ kind: "heading", text: "SESSIONS" });
   for (const agent of [...(state.main ? [state.main] : []), ...state.agents]) {
     rows.push({
@@ -432,6 +442,12 @@ export async function menuScreen(
       label: "Leader mode…",
       hint: "whether the main session hands work to agents",
       run: async () => ({ to: await leaderScreen(api) }),
+    },
+    {
+      kind: "button",
+      label: "Report a problem…",
+      hint: "a session or a role that lacks something",
+      run: async () => ({ to: await reportScreen(api) }),
     },
     {
       kind: "button",

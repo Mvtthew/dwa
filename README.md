@@ -314,12 +314,27 @@ The built-in roles, which `dwa init --roles` also copies into the project togeth
 | `designer`     | opus, high     | as `explore` (it extends it)                       | as `explore`                                                                                 | a design spec for a UI, and a review of how a UI change looks    |
 | `web-research` | sonnet, medium | WebSearch, WebFetch, Read, Grep, Glob              | never asks: searching and fetching are allowed, nothing else                                 | documentation and other answers that are on the web              |
 | `web-chrome`   | opus, medium   | only Read, Grep, Glob, Bash, and the browser tools | never asks: read-only git runs; running scripts in a page and uploading files are taken away | looking at pages in your Chrome; needs a `chrome` profile        |
+| `dwa-selfheal` | opus, medium   | only Read, Grep, Glob                              | never asks; it changes nothing and proposes fixes for you to decide on                       | started by dwa when a session reports a gap in its setup         |
 
 `web-chrome` drives your own Chrome through Claude in Chrome. Its sessions need the Claude command started with `--chrome`, so the role names the profile `chrome`: define `[profiles.chrome]` with `args = ["--chrome"]` and the command of your usual profile, and have the extension installed and connected. Until then the role is not offered. The role allows the browser tools as a whole, so it never stops at a prompt; what it may not do there is in its `deny` list and its prompt: look before you rely on it for pages that are not local.
 
 The `runner` role's list of allowed commands is a general one; add your project's own check commands to a copy of it. Your own rules for the main session ("tests always go to the runner", "ask me before more than three agents") go into the `main` role's `prompt`, which comes after dwa's own instructions for leading and has the last word.
 
 They are meant to be edited, by hand or in the role settings. Role files replace the `.claude/agents/<role>.md` files used before: move the prompt and settings of such a file into `.dwa/roles/<role>.toml`.
+
+### When a role does not fit
+
+A session that finds its role does not fit its task, or that lacks a tool, a skill, an MCP server or a permission, reports it with its `report_gap` tool instead of working around it. dwa starts a session of the built-in `dwa-selfheal` role, one for each role that is reported on, which reads the role's files and what the session was refused and then does one of three things: it tells the reporter how to do it with what it has, it proposes a change, or, when dwa itself misbehaved, it writes a report into `.dwa/reports/` (ignored by git).
+
+A proposed change waits for you: the top bar shows `✚` with a count, and prefix then `f` (or `dwa wizard fixes`) opens it. You see each change, with `▲` on the ones that give a session more than it had, and the role file as it would differ. Then you apply it to the role (the reporting sessions restart with their conversation when their turn ends; for the main session you choose when), give it to the reporting session alone without changing a file, or turn it down with a reason. Nothing is written before you decide, and what you turn down is remembered for that role and not proposed again.
+
+```sh
+dwa selfheal developer "developers should be able to run the linter"   # report it yourself, for a session or a role
+dwa selfheal --list            # fixes that wait for you
+dwa selfheal --memory          # what you turned down; --clear-memory [role] forgets it
+```
+
+A fix reaches role files and `[defaults]`. For the other parts of the config (`[mcp.X]`, `[plugins.X]`, `[profiles.X]`, `[[agents]]`) the selfheal session can only tell you what to change.
 
 ### Changing what a running session can use
 

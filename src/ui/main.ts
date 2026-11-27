@@ -13,6 +13,7 @@ import { parseRef } from "../shared/scope.ts";
 import { createAgentsView } from "./agents.ts";
 import { createDesigner } from "./designer.ts";
 import { createFeedView } from "./feed.ts";
+import { fixesScreen, fixScreen } from "./fix-screens.ts";
 import { roleScreen, rolesScreen } from "./role-screens.ts";
 import { diskRoleStore } from "./role-store.ts";
 import { openRun } from "./run-screens.ts";
@@ -245,15 +246,19 @@ export async function runWizard(
                 ? await feedScreen(api, subject ?? "")
                 : kind === "leader"
                   ? await leaderScreen(api)
-                  : kind === "tools"
+                  : kind === "fixes"
                     ? subject
-                      ? await toolsScreen(api, subject)
-                      : await toolsPickScreen(api)
-                    : kind === "roles"
+                      ? await fixScreen(api, Number(subject))
+                      : await fixesScreen(api)
+                    : kind === "tools"
                       ? subject
-                        ? roleScreen(api, store(), parseRef(subject))
-                        : rolesScreen(api, store())
-                      : await workflowsScreen(api, design);
+                        ? await toolsScreen(api, subject)
+                        : await toolsPickScreen(api)
+                      : kind === "roles"
+                        ? subject
+                          ? roleScreen(api, store(), parseRef(subject))
+                          : rolesScreen(api, store())
+                        : await workflowsScreen(api, design);
     }
   } catch (error) {
     console.error((error as Error).message);

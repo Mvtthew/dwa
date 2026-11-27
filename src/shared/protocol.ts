@@ -256,6 +256,8 @@ export interface WorkspaceState {
   shell: { open: boolean } | null;
   /** The event feed: null when its pane is gone, else whether it is shown. */
   feed: { open: boolean } | null;
+  /** How many proposed fixes wait for the user's decision; absent when none does. */
+  fixes?: number;
   /**
    * The id of the shown agent the status pane and the feed's "selected" filter are about: the
    * one with the focus, else the one that last had it, else the one opened last. Absent when no
@@ -277,6 +279,7 @@ export type FeedKind =
   | "answer"
   | "step"
   | "lifecycle"
+  | "selfheal"
   | "session";
 
 export const FEED_KINDS: readonly FeedKind[] = [
@@ -288,6 +291,7 @@ export const FEED_KINDS: readonly FeedKind[] = [
   "answer",
   "step",
   "lifecycle",
+  "selfheal",
   "session",
 ];
 
@@ -340,7 +344,8 @@ export type WizardKind =
   | "design"
   | "messages"
   | "feed"
-  | "leader";
+  | "leader"
+  | "fixes";
 
 /** Everything the daemon can show in a popup: the wizards, the question queue, the command menu. */
 export type PopupKind = WizardKind | "questions" | "palette";
@@ -354,6 +359,7 @@ export const POPUP_KINDS: readonly PopupKind[] = [
   "messages",
   "feed",
   "leader",
+  "fixes",
   "questions",
   "palette",
 ];
@@ -390,10 +396,97 @@ export interface SpawnRequest extends Omit<Capabilities, "effort"> {
   keep?: boolean;
 }
 
+/** One change of a proposed fix, as the approval shows it. */
+export interface FixLine {
+  id: string;
+  /** The file it changes, in words. */
+  file: string;
+  text: string;
+  why?: string;
+  /** It gives a session something it did not have. */
+  widens: boolean;
+  /** Set for a change that reaches far, with what it means. */
+  warning?: string;
+}
+
+/** A file a proposed fix changes, as it is and as it would be. */
+export interface FixFile {
+  label: string;
+  path: string;
+  /** The role is built into dwa and is copied into the project first. */
+  adopt: boolean;
+  before: string;
+  after: string;
+  /** The lines that differ, `-` and `+` with a little context. */
+  diff: string[];
+}
+
+/** A proposed fix waiting for the user, in one row. */
+export interface FixSummary {
+  id: number;
+  /** The role under repair; empty for sessions without a role. */
+  role: string;
+  summary: string;
+  reporters: string[];
+  createdAt: number;
+}
+
+/** Everything the approval of a proposed fix shows. */
+export interface FixView extends FixSummary {
+  reason: string;
+  reports: { id: number; reporter: string; what: string; tried?: string; gone: boolean }[];
+  lines: FixLine[];
+  files: FixFile[];
+  /** What the files were when this was worked out; sent back with the decision. */
+  base: string;
+  /** Running sessions the fix is for, by name. */
+  sessions: string[];
+  /** Why the fix cannot be given to those sessions alone; absent when it can. */
+  noSessionOnly?: string;
+  /** One of the sessions is the main one, which the user may want to restart later. */
+  main: boolean;
+  /** Set when the changes no longer fit the files; nothing can be applied then. */
+  error?: string;
+}
+
+/** The user's decision on a proposed fix. */
+export interface FixDecision {
+  id: number;
+  action: "role" | "session" | "refuse";
+  /** `FixView.base`, so that a fix is never applied to files the user did not see. */
+  base?: string;
+  /** Why not, for a refusal. */
+  reason?: string;
+  /** For the main session: restart it when its turn ends, or leave that to the user. */
+  restart?: "turn-end" | "later";
+}
+
+/** What deciding a proposed fix did. */
+export interface FixResult {
+  /** In words, for the screen. */
+  message: string;
+  /** Sessions that still run with the old setup. */
+  behind: string[];
+}
+
+/** A proposed fix the user turned down, which is not proposed again while it is kept. */
+export interface FixMemory {
+  id: number;
+  role: string;
+  summary: string;
+  reason: string;
+  createdAt: number;
+}
+
 export interface HookRequest {
   agentId: string;
   event: string;
   input: unknown;
+  /**
+   * On `PreToolUse`: the reason the session's hook refused the call by itself (a tool that was
+   * switched off, a skill the session was not given), so the daemon can keep a record of it.
+   */
+  refused?: string;
 }
 
 export interface StatuslineRequest {

@@ -357,3 +357,21 @@ Run on 2026-11-27 with tmux 3.8 on the spike server (`spikes/s13/run.ts`, `bun s
 - **Zoom.** A resize while a pane is zoomed runs the hook and keeps the zoom. `select-layout` on a zoomed window unzooms it.
 
 Not tested here: tmux 3.7, and a real Claude session through these changes (checked with the feature, in a scratch project).
+
+## S14. What a hook hears of a call the permissions refuse
+
+Run on 2026-11-27 with Claude Code 2.1.332, three real interactive sessions (`~/claude_me --model haiku`) in a private tmux server (`tmux -L dwa-spike14`), in a scratch project with the S5 isolation flags, `--tools Read,Bash,Glob,Grep` and `allow: ["Read", "Bash(ls *)"]`. Scripts are in `spikes/s14/`; `hook.ts` records every hook call. The hooks listened to were `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `PermissionDenied` and `Stop`.
+
+| Case                                            | What the model was told                                                                    | Hook events, in order                            |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| `dontAsk`, no allow rule (`touch made.txt`)     | "Permission to use Bash has been denied because Claude Code is running in don't ask mode." | `PreToolUse`, `Stop`                             |
+| `dontAsk`, a deny rule (`Bash(date*)`, `date`)  | "Permission to use Bash with command date has been denied."                                | `PreToolUse`, `Stop`                             |
+| `manual`, "No" in the dialog (`touch made.txt`) | Nothing: the turn is interrupted ("What should Claude do instead?").                       | `PreToolUse`, `PermissionRequest`, and no `Stop` |
+| A `PreToolUse` hook answers `deny` (`ls -la`)   | "PreToolUse:Bash hook error: <the reason>"                                                 | `PreToolUse`, `Stop`                             |
+| A call that runs (`date` in `dontAsk`)          | The output.                                                                                | `PreToolUse`, `PostToolUse`, `Stop`              |
+
+`PermissionDenied` fired in none of the cases. A refused call is known to a hook only by what is missing: a `PreToolUse` whose `tool_use_id` gets no `PostToolUse` or `PostToolUseFailure`. `date` needs no allow rule in `dontAsk`: the Claude command runs what it takes for a read-only command without one.
+
+Not tried: `auto` mode (where `PermissionDenied` may be what the classifier's refusal fires), MCP tools, a call the user interrupts while it runs (it would look the same as a refusal: no result).
+
+What dwa does with it: the daemon keeps the `PreToolUse` calls of a turn by `tool_use_id`, drops one when its result comes, and records what is left as a refusal ("did not run") when the turn ends or the next prompt comes (`Workspace.hook`). A call `dwa hook` refused itself is recorded from the `refused` field of the hook's own request instead. `PermissionDenied` is still listened to and recorded when it comes.

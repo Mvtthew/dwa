@@ -29,6 +29,7 @@ const POPUPS: Record<PopupKind, { title: string; command: string; width: number;
     messages: { title: "Messages to you", command: "wizard messages", width: 70, height: 70 },
     feed: { title: "Event", command: "wizard feed", width: 70, height: 80 },
     leader: { title: "Leader mode", command: "wizard leader", width: 70, height: 50 },
+    fixes: { title: "Proposed fixes", command: "wizard fixes", width: 80, height: 90 },
     questions: { title: "Questions", command: "answer", width: 80, height: 60 },
     palette: { title: APP_NAME, command: "palette", width: 60, height: 70 },
   };

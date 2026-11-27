@@ -63,6 +63,7 @@ import {
   findRole,
   findSkill,
   isRoleFile,
+  type Layers,
   listRoles,
   missingOnThisMachine,
   type ResolvedSession,
@@ -77,6 +78,7 @@ import {
   UnknownRoleError,
 } from "../shared/roles.ts";
 import { type Scope, scopeLabel } from "../shared/scope.ts";
+import { NO_REPORT_ROLES, SELFHEAL_ROLE } from "../shared/selfheal.ts";
 import type { ShortcutCategory } from "../shared/shortcuts.ts";
 import { SKILL_FILE, skillHeader } from "../shared/skill-file.ts";
 import { skillGuideEntries, skillGuidePrompt, skillTask } from "../shared/skill-guide.ts";
@@ -84,6 +86,7 @@ import {
   applyToolChanges,
   BLOCKED_FILE,
   blockedReason,
+  isBlocked,
   liveBlocks,
   SKILLS_FILE,
   type ToolSources,
@@ -167,7 +170,7 @@ const INBOX_SIZE = 20;
 const SHELL_NAME = "shell";
 
 /** What a session was asked to be started with; kept so it can be started again the same way. */
-interface StoredRequest {
+export interface StoredRequest {
   role?: string;
   main?: boolean;
   overrides?: Capabilities;
@@ -181,6 +184,35 @@ const META_ROLE_RUN = "role_run";
 /** How long a server's tool list and the "behind its files" check are trusted. */
 const TOOLS_TTL_MS = 5 * 60_000;
 const BEHIND_TTL_MS = 2000;
+
+/** What is known about a running session's setup, for a report about it. */
+export interface SessionSetup {
+  row: AgentRow;
+  stored: StoredRequest;
+  /** Values saved for this session alone. */
+  own: Capabilities;
+  /** What it would be started with now, and where each value comes from. */
+  layers: Layers;
+  /** What it was started with; undefined for a session from before that was kept. */
+  launch: ResolvedSession | undefined;
+  /** What its hook refuses since it was started. */
+  blocked: string[];
+}
+
+/** A tool call's input in a few words, for the record of a refusal. */
+function callDetail(input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  const { command, skill, file_path: file } = input as Record<string, unknown>;
+  const text =
+    typeof command === "string"
+      ? command
+      : typeof skill === "string"
+        ? skill
+        : typeof file === "string"
+          ? file
+          : JSON.stringify(input);
+  return text.length > 300 ? `${text.slice(0, 300)}…` : text;
+}
 
 function parseJson<T>(text: string | null): T | undefined {
   if (!text) return undefined;
@@ -289,6 +321,8 @@ export class Workspace {
   private readonly capabilities = new Map<string, SessionSummary | null>();
   /** What to tell a session once it is back after a restart or a change, by agent id. */
   private readonly notes = new Map<string, string>();
+  /** Tool calls of the turn under way that have no result yet, by session and by call id. */
+  private readonly calls = new Map<string, Map<string, { tool: string; detail: string | null }>>();
   /** What a leading main session has done itself in its current turn, by session id. */
   private readonly nudges = new Map<string, NudgeState>();
   /** `[main] check_commands`: undefined until read, null when the config has none. */
@@ -361,6 +395,7 @@ export class Workspace {
     this.feed.add({ kind: "lifecycle", agentId, agentName: name, title: "stopped" });
     this.telemetry.delete(agentId);
     this.capabilities.delete(agentId);
+    this.calls.delete(agentId);
     this.awaitingTask.delete(agentId);
     this.messaging.agentStopped(agentId);
     this.emit({ type: "stopped", agentId });
@@ -1015,6 +1050,54 @@ export class Workspace {
     return nudgeText(kind, roles);
   }
 
+  /**
+   * Keeps the record of calls that did not run. The Claude command tells a hook nothing when
+   * its permissions refuse a call (docs/spikes.md, S14), so such a call is known by what is
+   * missing: it was announced and no result followed by the time the turn ended. A call the
+   * user interrupted looks the same. What the hook refused itself is recorded as that.
+   */
+  private noteCall(
+    agentId: string,
+    request: HookRequest,
+    input: Record<string, unknown>,
+    now: number,
+  ): void {
+    const { store } = this.deps;
+    const tool = typeof input.tool_name === "string" ? input.tool_name : null;
+    const id = typeof input.tool_use_id === "string" ? input.tool_use_id : null;
+    const open =
+      this.calls.get(agentId) ?? new Map<string, { tool: string; detail: string | null }>();
+    this.calls.set(agentId, open);
+    const detail = callDetail(input.tool_input);
+    if (request.event === "PreToolUse" && tool) {
+      const blocks = parseJson<string[]>(store.getBlocked(agentId)) ?? [];
+      const blocked = isBlocked(tool, blocks);
+      if (blocked || request.refused) {
+        const source = blocked ? "blocked" : tool === "Skill" ? "skill" : "unreadable";
+        store.addRefusal({ agentId, at: now, source, tool, detail });
+      } else if (id) open.set(id, { tool, detail });
+    } else if (request.event === "PostToolUse" || request.event === "PostToolUseFailure") {
+      if (id) open.delete(id);
+    } else if (request.event === "PermissionDenied" && tool) {
+      if (id) open.delete(id);
+      store.addRefusal({ agentId, at: now, source: "permission", tool, detail });
+    } else if (request.event === "Stop" || request.event === "UserPromptSubmit") {
+      for (const call of open.values()) {
+        store.addRefusal({
+          agentId,
+          at: now,
+          source: "not-run",
+          tool: call.tool,
+          detail: call.detail,
+        });
+      }
+      open.clear();
+    } else if (request.event === "SessionStart") {
+      // A restart ends the calls that were under way; nothing refused them.
+      open.clear();
+    }
+  }
+
   hook(request: HookRequest): { deny?: string; context?: string } {
     const { store } = this.deps;
     const row = store.getRunning(request.agentId);
@@ -1024,6 +1107,7 @@ export class Workspace {
     ) as Record<string, unknown>;
     const change = reduceHook(request.event, input);
     const now = this.now();
+    this.noteCall(row.id, request, input, now);
     store.addEvent({
       agentId: row.id,
       at: now,
@@ -1256,6 +1340,7 @@ export class Workspace {
       workflows: workflowRuns(store),
       shell,
       feed,
+      ...(store.countPendingProposals() > 0 ? { fixes: store.countPendingProposals() } : {}),
       ...(focused ? { focused } : {}),
     };
   }
@@ -1728,6 +1813,60 @@ export class Workspace {
     });
   }
 
+  /** What is known about a running session's setup; null for one that is not running. */
+  async setup(agentId: string): Promise<SessionSetup | null> {
+    const { store } = this.deps;
+    const row = store.getRunning(agentId);
+    if (!row) return null;
+    const stored = this.storedRequest(row);
+    const own = this.agentOverrides(agentId);
+    const layers = resolveLayers(
+      this.sessionRequest(await this.deps.loadConfig(), stored, own),
+      this.roleContext(),
+    );
+    return {
+      row,
+      stored,
+      own,
+      layers,
+      launch: parseJson<ResolvedSession>(store.getLaunch(agentId)),
+      blocked: parseJson<string[]>(store.getBlocked(agentId)) ?? [],
+    };
+  }
+
+  /**
+   * Saves capability values for one running session and brings it in line with them. `delta`
+   * gets what the session has now and returns the values to lay over it. Nothing is kept when
+   * the session cannot be started with the result. With "later" the values are only saved, and
+   * the session has them from its next restart.
+   */
+  overrideSession(
+    target: string,
+    delta: (base: Capabilities) => Capabilities,
+    when: RestartWhen | "later",
+  ): Promise<Applied> {
+    return this.serial(async () => {
+      const agent = this.findSession(await this.requireUp(), target);
+      const config = await this.deps.loadConfig();
+      const stored = this.storedRequest(agent);
+      const own = this.agentOverrides(agent.id);
+      const base = resolveLayers(this.sessionRequest(config, stored, own), this.roleContext()).caps;
+      const nextOwn = layerCapabilities(own, delta(base));
+      // Worked out before anything is stored, so a session that cannot start so keeps its values.
+      this.resolve(agent.name, this.sessionRequest(config, stored, nextOwn));
+      this.deps.store.setOverrides(agent.id, JSON.stringify(nextOwn));
+      this.behind.at = 0;
+      if (when === "later") return "unchanged";
+      try {
+        return await this.bringUpToDate(agent, config, when);
+      } catch (error) {
+        this.deps.store.setOverrides(agent.id, JSON.stringify(own));
+        this.behind.at = 0;
+        throw error;
+      }
+    });
+  }
+
   /** Brings running sessions in line with their files and saved values. */
   refresh(request: RefreshRequest): Promise<RefreshResult> {
     return this.serial(async () => {
@@ -2028,7 +2167,14 @@ export class Workspace {
             command,
             args: [...args, "mcp"],
             // A leader's server offers the tools for leading; the others are not sent them.
-            env: { ...this.paneEnv(agentId), ...(session.leader ? { DWA_LEADER: "1" } : {}) },
+            // The same goes for the tools of the session that handles reports, and for the
+            // report tool, which that session and the two authors do not get.
+            env: {
+              ...this.paneEnv(agentId),
+              ...(session.leader ? { DWA_LEADER: "1" } : {}),
+              ...(session.role === SELFHEAL_ROLE ? { DWA_SELFHEAL: "1" } : {}),
+              ...(NO_REPORT_ROLES.includes(session.role ?? "") ? { DWA_NO_REPORT: "1" } : {}),
+            },
           },
           session,
           { ...this.pluginMcpServers(session), ...this.projectMcpServers(session) },

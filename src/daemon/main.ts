@@ -9,6 +9,7 @@ import { createTmux } from "../tmux/driver.ts";
 import { Store } from "./db.ts";
 import { Delegation } from "./delegation.ts";
 import { RoleAuthor } from "./role-author.ts";
+import { Selfheal } from "./selfheal.ts";
 import { startServer } from "./server.ts";
 import { Workflows } from "./workflows.ts";
 import { Workspace } from "./workspace.ts";
@@ -110,6 +111,13 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
     env,
   });
 
+  const selfheal = new Selfheal({
+    store,
+    workspace,
+    loadConfig: () => loadConfig(projectRoot, env),
+    env,
+  });
+
   const shutdown = () => {
     server.stop(true);
     store.close();
@@ -123,11 +131,13 @@ export async function runDaemon(projectRoot: string, selfArgv: string[]): Promis
     workflows,
     delegation,
     roleAuthor,
+    selfheal,
     onShutdown: shutdown,
   });
   // Runs that were in progress when the daemon last stopped carry on.
   workflows.resume().catch((error) => console.error("could not resume workflows:", error));
   delegation.resume().catch((error) => console.error("could not end reported sessions:", error));
+  selfheal.resume().catch((error) => console.error("could not end self-heal cases:", error));
   // A workspace that kept running reports its window's size changes to this daemon from now on.
   workspace
     .resumeLayout()

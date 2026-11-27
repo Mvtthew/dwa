@@ -1,4 +1,5 @@
 import type { ResolvedSession } from "../../shared/roles.ts";
+import { NO_REPORT_ROLES } from "../../shared/selfheal.ts";
 import type { PromptExtras } from "../provider.ts";
 
 /**
@@ -18,7 +19,9 @@ export function sessionPrompt(
     (session.tools ? session.tools.includes("Agent") : !session.denyTools.includes("Agent")) &&
     !session.deny.includes("Agent");
   const leader = session.leader === true;
-  const parts = [workspacePrompt(name, hasAgent, leader)];
+  // The session that handles reports, and those that write a role or a workflow, report none.
+  const reports = !NO_REPORT_ROLES.includes(session.role ?? "");
+  const parts = [workspacePrompt(name, hasAgent, leader, reports)];
   if (leader) parts.push(leaderPrompt());
   if (session.prompt) {
     const title = session.role ? `Your role: ${session.role}` : "Your role";
@@ -74,9 +77,19 @@ When a result comes back:
 /**
  * Explains the workspace and the dwa tools; the same for every session apart from the name,
  * whether it has the Claude command's own subagents (`builtinSubagents`), and whether it leads
- * (`leader`): a leader is not told to do the quick searches and reads itself.
+ * (`leader`): a leader is not told to do the quick searches and reads itself. `reports` says
+ * whether it has the tool for reporting a gap in its own setup.
  */
-export function workspacePrompt(name: string, builtinSubagents = false, leader = false): string {
+export function workspacePrompt(
+  name: string,
+  builtinSubagents = false,
+  leader = false,
+  reports = true,
+): string {
+  const report = reports
+    ? `
+- report_gap: when your role does not fit the task, when a tool, skill, MCP server or permission you need is missing or refused, or when dwa itself misbehaves. Say what you needed and what happened instead of working around a refusal. With blocking it waits for the outcome, with no time limit; without, you carry on and are told the outcome later.`
+    : "";
   const delegation = builtinSubagents
     ? ""
     : `
@@ -97,7 +110,7 @@ Use the dwa MCP tools to work with the others:
 - list_workflows / run_workflow / workflow_status: workflows are fixed sequences of steps defined for this project, each step done by its own agent. A run reports back with a message when it ends.
 - complete_step / fail_step: only when your first prompt says you are a step of a workflow. The step stays open until you call one of them; ending your turn does not complete it.
 - request_changes: only when your first prompt says your step reviews another step. It sends that step back for another pass with your feedback.
-- workflow_definition / edit_workflow: read and change the steps of a run in progress. Editing a step that has started makes it run again, so only do it when asked to or when the plan clearly has to change.${delegation}
+- workflow_definition / edit_workflow: read and change the steps of a run in progress. Editing a step that has started makes it run again, so only do it when asked to or when the plan clearly has to change.${report}${delegation}
 
 An MCP server can still be connecting when you get a prompt. If a tool you need is not there yet, wait for its server with WaitForMcpServers (or look for the tool with ToolSearch, which waits too) in the same turn; do not end your turn or report the tools as missing.
 

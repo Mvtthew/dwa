@@ -25,6 +25,8 @@ export function filterOf(item: FeedItem): FeedFilter | null {
   if (item.kind === "session") return null;
   if (item.kind === "recap") return item.main ? "main" : "recap";
   if (item.kind === "question" || item.kind === "answer") return "message";
+  // Reports of a gap and their fixes are part of a session's life.
+  if (item.kind === "selfheal") return "lifecycle";
   return item.kind;
 }
 
@@ -67,6 +69,7 @@ const GLYPHS: Record<FeedKind, string> = {
   answer: "↩",
   step: "▸",
   lifecycle: "·",
+  selfheal: "✚",
   session: "─",
 };
 

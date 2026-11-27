@@ -213,6 +213,7 @@ describe("the menu", () => {
       "[Start an agent…]",
       "[Workflows…]",
       "[Leader mode…] whether the main session hands work to agents",
+      "[Report a problem…] a session or a role that lacks something",
       "[Show the shell]",
       "[Hide the focused agent or shell]",
       "[Clear the feed…] entries stay stored, and are not shown again",

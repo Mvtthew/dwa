@@ -375,7 +375,7 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
 export type TopbarAction =
   | { menu: ShortcutCategory }
   | { toggle: "shell" | "feed" }
-  | { popup: "questions" | "messages" };
+  | { popup: "questions" | "messages" | "fixes" };
 
 export interface TopbarSegment {
   text: string;
@@ -391,7 +391,7 @@ export interface TopbarSegment {
 
 /**
  * The top bar, left to right: the shortcut categories (each opens its dropdown), the pane
- * toggles, what waits for the user (open questions to them, unread messages), and the keys at
+ * toggles, what waits for the user (proposed fixes, open questions, unread messages), and the keys at
  * the right edge when there is room. Segments that do not fit are left out from the right.
  */
 export function topbarModel(state: WorkspaceState | null, width: number): TopbarSegment[] {
@@ -408,7 +408,12 @@ export function topbarModel(state: WorkspaceState | null, width: number): Topbar
   const questions = state?.questions.filter((question) => question.to === "user").length ?? 0;
   const waiting = state?.questions.length ?? 0;
   const messages = state?.inbox.length ?? 0;
-  if (waiting > 0 || messages > 0) separator();
+  const fixes = state?.fixes ?? 0;
+  if (waiting > 0 || messages > 0 || fixes > 0) separator();
+  // A fix an agent's report led to waits for the user's decision.
+  if (fixes > 0) {
+    parts.push({ text: ` ✚ ${fixes} `, tone: "attention", action: { popup: "fixes" } });
+  }
   if (waiting > 0) {
     parts.push({
       text: ` ? ${waiting} `,

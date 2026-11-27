@@ -500,7 +500,7 @@ describe("tmux helpers", () => {
       "-x",
       "12",
       "-y",
-      "10",
+      "11",
       "-T",
       " Agents ",
     ]);

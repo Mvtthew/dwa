@@ -104,6 +104,11 @@ export function historyDir(projectRoot: string): string {
   return join(projectDir(projectRoot), "history");
 }
 
+/** Reports about dwa itself written by the selfheal role: `.dwa/reports`, kept out of git. */
+export function reportsDir(projectRoot: string): string {
+  return join(projectDir(projectRoot), "reports");
+}
+
 /** History of the personal roles, workflows and config: `~/.config/dwa/history`. */
 export function userHistoryDir(env: Env = process.env): string {
   return join(userDir(env), "history");

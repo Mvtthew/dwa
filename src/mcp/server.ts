@@ -77,6 +77,18 @@ export type Api = <T>(method: "GET" | "POST", path: string, body?: unknown) => P
 export interface McpOptions {
   /** The session leads: it gets the tools for leading, and more about each agent. */
   leader?: boolean;
+  /** The session looks into reports of a gap: it gets the tools for settling them. */
+  selfheal?: boolean;
+  /** The session does not get the tool for reporting a gap in its own setup. */
+  noReport?: boolean;
+}
+
+/** Where a report of a gap stands, as the daemon answers a reporter that waits. */
+interface ReportStatus {
+  id: number;
+  state: string;
+  outcome?: string;
+  question?: QuestionInfo;
 }
 
 export function createMcpServer(agentId: string, api: Api, options: McpOptions = {}): McpServer {
@@ -335,6 +347,197 @@ export function createMcpServer(agentId: string, api: Api, options: McpOptions =
         return `Stopped agent "${agent.name}".`;
       }),
   );
+
+  if (!options.noReport) {
+    server.registerTool(
+      "report_gap",
+      {
+        description: `Report that your own setup does not fit your task: your role is not suited to it, a tool, skill, MCP server or permission you need is missing or was refused, or ${APP_NAME} itself misbehaved. A session made for this looks into it and either tells you how to do it with what you have, or proposes a change that the user decides on; when it is approved you are restarted with it and carry on. Do not work around a refusal instead. With blocking the call waits for the outcome, with no time limit: use it when you cannot go on without the missing thing. Without it you carry on and get the outcome as a message.`,
+        inputSchema: {
+          what: z
+            .string()
+            .optional()
+            .describe(
+              "What you needed, for which part of your task, and what happened when you tried: the exact tool, command, skill or refusal text.",
+            ),
+          tried: z.string().optional().describe("What you tried instead, if anything."),
+          blocking: z.boolean().optional().describe("Wait here for the outcome."),
+          report_id: z
+            .number()
+            .int()
+            .optional()
+            .describe("Wait for a report you made earlier instead of making a new one."),
+        },
+      },
+      ({ what, tried, blocking, report_id }, extra) =>
+        tool(async () => {
+          let id = report_id;
+          if (id === undefined) {
+            if (!what) return "Say what you needed and what happened (what).";
+            const receipt = await api<{ id: number; selfheal: string; joined: boolean }>(
+              "POST",
+              "/selfheal/reports",
+              { from: agentId, what, tried, blocking },
+            );
+            id = receipt.id;
+            if (!blocking) {
+              return `Report #${id} is with ${receipt.selfheal}. Carry on with what you can do; the outcome reaches you as a message. If you cannot go on without it, call report_gap again with report_id ${id} and blocking.`;
+            }
+          }
+          let first = true;
+          while (!extra.signal.aborted) {
+            let status: ReportStatus;
+            try {
+              status = await api<ReportStatus>("POST", "/selfheal/status", {
+                id,
+                from: agentId,
+                ...(first ? { waiting: true } : {}),
+              });
+              first = false;
+            } catch (error) {
+              if (error instanceof ApiError) throw error;
+              await Bun.sleep(RETRY_MS);
+              continue;
+            }
+            if (status.state !== "open") return `Report #${id}: ${status.outcome}`;
+            if (status.question) {
+              const asked = status.question;
+              return [
+                `Report #${id} is not settled: the session that looks into it asked you a question and waits for the answer.`,
+                "",
+                `Question #${asked.id}: ${asked.question}`,
+                ...(asked.options.length > 0
+                  ? [`Suggested answers: ${asked.options.join(" | ")}`]
+                  : []),
+                "",
+                `Give the answer with the "answer" tool (question_id: ${asked.id}), then call report_gap again with report_id ${id} and blocking to keep waiting. The same question may still reach you as a message; it needs no second answer.`,
+              ].join("\n");
+            }
+            await Bun.sleep(RETRY_MS);
+          }
+          await api("POST", "/selfheal/status", { id, from: agentId, waiting: false }).catch(
+            () => undefined,
+          );
+          return `Stopped waiting for report #${id}. Its outcome will reach you as a message.`;
+        }),
+    );
+  }
+
+  if (options.selfheal) {
+    server.registerTool(
+      "selfheal_context",
+      {
+        description:
+          "Everything about the reports you were started for: who reported what, what each session was started with and would get now and from which file each value comes, the calls that did not run, the role's files, the defaults, what the config offers, and what the user turned down before. Call it first, and again when you are told a report joined.",
+      },
+      () =>
+        tool(async () => {
+          const context = await api<{ text: string }>("POST", "/selfheal/context", {
+            from: agentId,
+          });
+          return context.text;
+        }),
+    );
+
+    server.registerTool(
+      "propose_fix",
+      {
+        description:
+          "Hand in the change that closes the gap. You write nothing yourself: the change is checked as a start of a session would check it, then shown to the user, who applies it to the role, gives it to the reporting sessions alone, or turns it down. You get a message with the decision; end your turn after this call. A new proposal replaces the one that waits. Each change is one item added to or removed from a list, or one value set or unset, so the user can switch single ones off: propose the least that closes the gap.",
+        inputSchema: {
+          summary: z.string().describe("One line: what changes, for whom."),
+          reason: z
+            .string()
+            .describe(
+              "Why this closes the gap, what it lets the role do that it could not before, and any doubt the user should weigh.",
+            ),
+          changes: z
+            .array(
+              z.object({
+                file: z
+                  .string()
+                  .optional()
+                  .describe(
+                    "role:<name>, personal-role:<name>, defaults or personal-defaults. Without it: the role under repair. Use the file the value comes from now (selfheal_context says which).",
+                  ),
+                key: z
+                  .string()
+                  .describe(
+                    "A list: tools, deny_tools, allow, deny, mcp, plugins, skills, off_mcp, off_plugins, off_skills, builtin_skills. Or one value: model, effort, permission_mode, memory, subagents, prompt, description, when_to_use.",
+                  ),
+                add: z.string().optional().describe("An item to add to a list."),
+                remove: z.string().optional().describe("An item to take out of a list."),
+                set: z
+                  .union([z.string(), z.boolean()])
+                  .optional()
+                  .describe("The new value; for prompt the whole new text."),
+                unset: z.boolean().optional().describe("Take the key out of the file."),
+                why: z.string().optional().describe("What this one change is for."),
+              }),
+            )
+            .min(1),
+        },
+      },
+      ({ summary, reason, changes }) =>
+        tool(async () => {
+          const made = await api<{ id: number; lines: string[] }>("POST", "/selfheal/propose", {
+            from: agentId,
+            summary,
+            reason,
+            changes,
+          });
+          return `Fix #${made.id} waits for the user's decision:\n${made.lines.map((line) => `- ${line}`).join("\n")}\nEnd your turn now. The reporters are told the outcome by ${APP_NAME}; you get a message if the fix has to be reworked.`;
+        }),
+    );
+
+    server.registerTool(
+      "answer_report",
+      {
+        description:
+          "Settle reports without a change: the reporter can do what it needs with what it has (say exactly how), the user turned the same thing down before (give their reason), or it should not have it. The reporter gets your text as the outcome.",
+        inputSchema: {
+          answer: z.string(),
+          reports: z
+            .array(z.number().int())
+            .optional()
+            .describe("The report numbers this settles. Without it: every open report."),
+        },
+      },
+      ({ answer, reports }) =>
+        tool(async () => {
+          const done = await api<{ settled: number[] }>("POST", "/selfheal/answer", {
+            from: agentId,
+            answer,
+            reports,
+          });
+          return `Settled report ${done.settled.map((id) => `#${id}`).join(", ")}.`;
+        }),
+    );
+
+    server.registerTool(
+      "file_bug",
+      {
+        description: `Settle the open reports as a defect in ${APP_NAME} itself: it did not do what its role files and config say, and no change to them would mend it. Writes a report for the user into the project's .${APP_NAME}/reports folder and tells the reporters.`,
+        inputSchema: {
+          title: z.string().describe("One line that names the defect."),
+          what: z.string().describe("What happened, with the exact texts and names."),
+          steps: z.string().describe("How to make it happen again."),
+          expected: z.string().optional().describe("What should have happened."),
+        },
+      },
+      ({ title, what, steps, expected }) =>
+        tool(async () => {
+          const filed = await api<{ path: string }>("POST", "/selfheal/bug", {
+            from: agentId,
+            title,
+            what,
+            steps,
+            expected,
+          });
+          return `Report written to ${filed.path}. The reporters and the user are told.`;
+        }),
+    );
+  }
 
   if (options.leader) {
     server.registerTool(
@@ -632,7 +835,11 @@ export async function runMcp(env: Env = process.env): Promise<void> {
     return data;
   };
 
-  const server = createMcpServer(agentId, api, { leader: env.DWA_LEADER === "1" });
+  const server = createMcpServer(agentId, api, {
+    leader: env.DWA_LEADER === "1",
+    selfheal: env.DWA_SELFHEAL === "1",
+    noReport: env.DWA_NO_REPORT === "1",
+  });
   reportReady(server, agentId, api);
   await server.connect(new StdioServerTransport());
 }

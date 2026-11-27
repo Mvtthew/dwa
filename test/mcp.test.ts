@@ -87,6 +87,7 @@ describe("the dwa tools", () => {
       "list_agents",
       "list_roles",
       "list_workflows",
+      "report_gap",
       "report_progress",
       "request_changes",
       "run_workflow",

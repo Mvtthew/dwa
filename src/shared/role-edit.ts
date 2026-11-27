@@ -134,19 +134,26 @@ function tomlChanges(changes: RoleChanges): Record<string, TomlValue | undefined
   return out;
 }
 
+/** A file as it is and as it would be with some values changed. */
+export interface ValueEdit {
+  file: Tracked;
+  before: string;
+  after: string;
+}
+
 /**
- * Writes values into a role file or into `[defaults]`. The new text has to be a valid role or
- * config, otherwise nothing is written. Returns the version the file is at afterwards.
+ * Works out the text of a role file or of a config with values changed in it, and writes
+ * nothing. The new text has to be a valid role or config. `text` stands in for the file's own
+ * text: that of a built-in role that is not copied into a file yet.
  */
-export function saveValues(
+export function editValues(
   target: FileTarget,
   changes: RoleChanges,
-  source: string,
   ctx: RoleContext,
-  now: Date = new Date(),
-): Version {
-  const file = tracked(target, ctx);
-  const before = existsSync(file.path) ? readFileSync(file.path, "utf8") : "";
+  text?: { path: string; before: string },
+): ValueEdit {
+  const file = text ? { ...trackedPlace(target, ctx, text.path) } : tracked(target, ctx);
+  const before = text ? text.before : existsSync(file.path) ? readFileSync(file.path, "utf8") : "";
   const edits = tomlChanges(changes);
   // Removing a key that is not there is not a change.
   for (const key of Object.keys(edits)) {
@@ -168,6 +175,31 @@ export function saveValues(
     parseRole(after, file.path);
     if (changes.extends != null) checkParents(target.name, changes.extends, ctx);
   }
+  return { file, before, after };
+}
+
+/** Where a role that has no file yet would be kept, for `editValues`. */
+function trackedPlace(target: FileTarget, ctx: RoleContext, path: string): Tracked {
+  if (target.kind === "defaults") return trackedConfig(ctx.projectRoot, target.source, ctx.env);
+  return trackedRole(
+    { name: target.name, source: target.source ?? "project", path },
+    ctx.projectRoot,
+    ctx.env,
+  );
+}
+
+/**
+ * Writes values into a role file or into `[defaults]`. The new text has to be a valid role or
+ * config, otherwise nothing is written. Returns the version the file is at afterwards.
+ */
+export function saveValues(
+  target: FileTarget,
+  changes: RoleChanges,
+  source: string,
+  ctx: RoleContext,
+  now: Date = new Date(),
+): Version {
+  const { file, after } = editValues(target, changes, ctx);
   return saveTracked(file, after, source, now);
 }
 

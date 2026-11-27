@@ -53,6 +53,12 @@ Agents
                                         Start a session again with its conversation and the
                                         role as it is now
 
+  selfheal <session|role> "<what is wrong>"
+                                        Report a session or a role that lacks something; a
+                                        ${APP_NAME}-selfheal session proposes the fix (see: selfheal)
+  selfheal --list | --memory | --clear-memory [role]
+                                        Fixes that wait for you, and the ones you turned down
+
 Roles and configuration
   role list [--json]                    Roles in .dwa/roles and your personal ones
   role show <role> | --main [--json]    What a session of a role is started with, after all layers
@@ -330,6 +336,8 @@ async function main(argv: string[]): Promise<number> {
         return (await import("../ui/main.ts")).runWizard("design", projectRoot, selfArgv, subject);
       }
       return (await import("./workflow.ts")).workflowCommand(projectRoot, rest);
+    case "selfheal":
+      return (await import("./selfheal.ts")).selfhealCommand(projectRoot, rest);
     case "role":
       return (await import("./roles.ts")).roleCommand(projectRoot, rest);
     case "config":
@@ -364,6 +372,7 @@ async function main(argv: string[]): Promise<number> {
         "messages",
         "feed",
         "leader",
+        "fixes",
         "menu",
       ] as const;
       const known = kinds.find((entry) => entry === kind);

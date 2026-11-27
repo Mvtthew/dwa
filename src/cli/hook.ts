@@ -121,17 +121,20 @@ export async function hookCommand(
     event === "PreToolUse" && typeof tool === "string" && env.DWA_PROJECT
       ? localVerdict(env.DWA_PROJECT, agentId, tool)
       : undefined;
-  const reply = (await post(env, "/hook", { agentId, event, input })) as {
+  const skill =
+    event === "PreToolUse" && tool === "Skill" && env.DWA_PROJECT
+      ? skillVerdict(env.DWA_PROJECT, agentId, input)
+      : null;
+  // What this hook refuses by itself goes along in the one request it makes anyway, so the
+  // daemon can keep a record of it; nothing more is sent or printed for that.
+  const refused = local || skill || undefined;
+  const reply = (await post(env, "/hook", { agentId, event, input, refused })) as {
     deny?: unknown;
     context?: unknown;
   } | null;
   // The session's own list decides; the daemon's answer only when there is no list.
   const blocked = local !== undefined ? local : typeof reply?.deny === "string" ? reply.deny : null;
-  const deny =
-    blocked ||
-    (event === "PreToolUse" && tool === "Skill" && env.DWA_PROJECT
-      ? skillVerdict(env.DWA_PROJECT, agentId, input)
-      : null);
+  const deny = blocked || skill;
   if (event === "PreToolUse" && deny) {
     console.log(
       JSON.stringify({

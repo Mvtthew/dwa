@@ -365,7 +365,7 @@ export function skillRefusal(skill: string, allowed: string[]): string | null {
   );
   if (ok) return null;
   const has = allowed.length > 0 ? `It has: ${allowed.join(", ")}.` : "It has no skills.";
-  return `The skill "${name}" is not one this session was given in ${APP_NAME}. ${has} Skills built into the Claude command are off unless the session's role names them (builtin_skills). Do the work without the skill, or say what you could not do.`;
+  return `The skill "${name}" is not one this session was given in ${APP_NAME}. ${has} Skills built into the Claude command are off unless the session's role names them (builtin_skills). Do the work without the skill, or report that you need it with the ${APP_NAME} tool report_gap.`;
 }
 
 /** Name of the file in a session's run folder that lists what it is refused. */

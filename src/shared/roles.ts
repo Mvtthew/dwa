@@ -407,7 +407,7 @@ function isSkill(dir: string, files: RoleFiles): boolean {
   return files.exists(join(dir, SKILL_FILE));
 }
 
-function projectSkillNames(ctx: RoleContext): string[] {
+export function projectSkillNames(ctx: RoleContext): string[] {
   const files = ctx.files ?? diskFiles;
   const dir = projectSkillsDir(ctx.projectRoot);
   return files

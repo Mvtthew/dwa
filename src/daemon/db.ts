@@ -126,6 +126,80 @@ export interface WorkflowStepRow {
   questionId: number | null;
 }
 
+/** A call a session made that did not run because something refused it. */
+export interface RefusalRow {
+  id: number;
+  agentId: string;
+  at: number;
+  /** `blocked` and `skill` are the hook's own refusals, `permission` the Claude command's. */
+  source: string;
+  tool: string;
+  detail: string | null;
+}
+
+/** The selfheal session that looks into the reports about one role. */
+export interface CaseRow {
+  id: number;
+  /** The role under repair; empty for sessions without a role. */
+  roleKey: string;
+  agentId: string;
+  state: "open" | "closed";
+  createdAt: number;
+  closedAt: number | null;
+}
+
+export type ReportState = "open" | "answered" | "applied" | "refused" | "bug" | "cancelled";
+
+/** One report of a gap, from a session or from the user. */
+export interface ReportRow {
+  id: number;
+  caseId: number;
+  /** An agent's id, or `user`. */
+  reporterId: string;
+  reporterName: string;
+  /** The session the report is about; null for a role nobody runs. */
+  subjectId: string | null;
+  roleKey: string;
+  what: string;
+  tried: string | null;
+  blocking: boolean;
+  state: ReportState;
+  outcome: string | null;
+  /** What the subject was started with and was refused, as JSON, taken when it reported. */
+  evidence: string | null;
+  seenAt: number | null;
+  createdAt: number;
+  closedAt: number | null;
+}
+
+export type ProposalState = "pending" | "applied" | "refused" | "stale" | "superseded";
+
+/** What a selfheal session wants changed, waiting for the user or decided. */
+export interface ProposalRow {
+  id: number;
+  caseId: number;
+  state: ProposalState;
+  summary: string;
+  reason: string;
+  /** `Change[]` as JSON. */
+  changes: string;
+  decidedAs: string | null;
+  refusalReason: string | null;
+  createdAt: number;
+  decidedAt: number | null;
+}
+
+/** A proposal the user turned down, kept so the same one is not made twice. */
+export interface MemoryRow {
+  id: number;
+  roleKey: string;
+  summary: string;
+  changes: string;
+  reason: string;
+  createdAt: number;
+  clearedAt: number | null;
+}
+
 /** Applied in order; `PRAGMA user_version` records how many have run. Only ever append. */
 const MIGRATIONS = [
   `CREATE TABLE IF NOT EXISTS agents (
@@ -233,6 +307,63 @@ const MIGRATIONS = [
      body        TEXT NOT NULL DEFAULT '',
      data        TEXT
    );`,
+  // Self-heal: calls a session was refused, reports of a gap, the case that looks into the
+  // reports about one role, what it proposes, and the proposals the user turned down.
+  `CREATE TABLE refusals (
+     id        INTEGER PRIMARY KEY AUTOINCREMENT,
+     agent_id  TEXT NOT NULL,
+     at        INTEGER NOT NULL,
+     source    TEXT NOT NULL,
+     tool      TEXT NOT NULL,
+     detail    TEXT
+   );
+   CREATE INDEX refusals_agent ON refusals (agent_id, id);
+   CREATE TABLE selfheal_cases (
+     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+     role_key    TEXT NOT NULL,
+     agent_id    TEXT NOT NULL,
+     state       TEXT NOT NULL,
+     created_at  INTEGER NOT NULL,
+     closed_at   INTEGER
+   );
+   CREATE TABLE selfheal_reports (
+     id             INTEGER PRIMARY KEY AUTOINCREMENT,
+     case_id        INTEGER NOT NULL,
+     reporter_id    TEXT NOT NULL,
+     reporter_name  TEXT NOT NULL,
+     subject_id     TEXT,
+     role_key       TEXT NOT NULL,
+     what           TEXT NOT NULL,
+     tried          TEXT,
+     blocking       INTEGER NOT NULL DEFAULT 0,
+     state          TEXT NOT NULL,
+     outcome        TEXT,
+     evidence       TEXT,
+     seen_at        INTEGER,
+     created_at     INTEGER NOT NULL,
+     closed_at      INTEGER
+   );
+   CREATE TABLE selfheal_proposals (
+     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+     case_id         INTEGER NOT NULL,
+     state           TEXT NOT NULL,
+     summary         TEXT NOT NULL,
+     reason          TEXT NOT NULL,
+     changes         TEXT NOT NULL,
+     decided_as      TEXT,
+     refusal_reason  TEXT,
+     created_at      INTEGER NOT NULL,
+     decided_at      INTEGER
+   );
+   CREATE TABLE selfheal_memory (
+     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+     role_key    TEXT NOT NULL,
+     summary     TEXT NOT NULL,
+     changes     TEXT NOT NULL,
+     reason      TEXT NOT NULL,
+     created_at  INTEGER NOT NULL,
+     cleared_at  INTEGER
+   );`,
 ];
 
 const HANDOVER_COLUMNS = `id, name, state, detail, spawned_by AS spawnedBy, keep,
@@ -254,6 +385,26 @@ const RUN_COLUMNS = `id, name, definition, input, state, started_by AS startedBy
 const STEP_COLUMNS = `run_id AS runId, step_id AS stepId, attempt, state, agent_id AS agentId,
   result, error, reminders, started_at AS startedAt, finished_at AS finishedAt, feedback,
   question_id AS questionId`;
+
+const REFUSAL_COLUMNS = "id, agent_id AS agentId, at, source, tool, detail";
+
+const CASE_COLUMNS = `id, role_key AS roleKey, agent_id AS agentId, state,
+  created_at AS createdAt, closed_at AS closedAt`;
+
+const REPORT_COLUMNS = `id, case_id AS caseId, reporter_id AS reporterId,
+  reporter_name AS reporterName, subject_id AS subjectId, role_key AS roleKey, what, tried,
+  blocking, state, outcome, evidence, seen_at AS seenAt, created_at AS createdAt,
+  closed_at AS closedAt`;
+
+const PROPOSAL_COLUMNS = `id, case_id AS caseId, state, summary, reason, changes,
+  decided_as AS decidedAs, refusal_reason AS refusalReason, created_at AS createdAt,
+  decided_at AS decidedAt`;
+
+const MEMORY_COLUMNS = `id, role_key AS roleKey, summary, changes, reason,
+  created_at AS createdAt, cleared_at AS clearedAt`;
+
+/** Refusals kept for one session; older ones are dropped. */
+export const MAX_REFUSALS = 50;
 
 /** Events kept in the log; older ones are dropped. */
 const MAX_EVENTS = 5000;
@@ -898,6 +1049,264 @@ export class Store {
       )
       .run(state, now, id);
     return changes > 0;
+  }
+
+  /** Records a call that was refused and keeps the session's latest `MAX_REFUSALS`. */
+  addRefusal(refusal: Omit<RefusalRow, "id">): void {
+    this.db
+      .query("INSERT INTO refusals (agent_id, at, source, tool, detail) VALUES (?, ?, ?, ?, ?)")
+      .run(refusal.agentId, refusal.at, refusal.source, refusal.tool, refusal.detail);
+    this.db
+      .query(
+        `DELETE FROM refusals WHERE agent_id = ?1 AND id NOT IN
+           (SELECT id FROM refusals WHERE agent_id = ?1 ORDER BY id DESC LIMIT ?2)`,
+      )
+      .run(refusal.agentId, MAX_REFUSALS);
+  }
+
+  /** A session's refused calls, oldest first. */
+  refusals(agentId: string): RefusalRow[] {
+    return this.db
+      .query(`SELECT ${REFUSAL_COLUMNS} FROM refusals WHERE agent_id = ? ORDER BY id`)
+      .all(agentId) as RefusalRow[];
+  }
+
+  addCase(roleKey: string, agentId: string, now: number): number {
+    const result = this.db
+      .query(
+        "INSERT INTO selfheal_cases (role_key, agent_id, state, created_at) VALUES (?, ?, 'open', ?)",
+      )
+      .run(roleKey, agentId, now);
+    return Number(result.lastInsertRowid);
+  }
+
+  getCase(id: number): CaseRow | null {
+    return this.db
+      .query(`SELECT ${CASE_COLUMNS} FROM selfheal_cases WHERE id = ?`)
+      .get(id) as CaseRow | null;
+  }
+
+  /** The case that is open for a role, if there is one. */
+  openCaseOf(roleKey: string): CaseRow | null {
+    return this.db
+      .query(
+        `SELECT ${CASE_COLUMNS} FROM selfheal_cases WHERE role_key = ? AND state = 'open'
+         ORDER BY id DESC LIMIT 1`,
+      )
+      .get(roleKey) as CaseRow | null;
+  }
+
+  /** The open case a selfheal session works on, if it has one. */
+  openCaseOfAgent(agentId: string): CaseRow | null {
+    return this.db
+      .query(
+        `SELECT ${CASE_COLUMNS} FROM selfheal_cases WHERE agent_id = ? AND state = 'open'
+         ORDER BY id DESC LIMIT 1`,
+      )
+      .get(agentId) as CaseRow | null;
+  }
+
+  openCases(): CaseRow[] {
+    return this.db
+      .query(`SELECT ${CASE_COLUMNS} FROM selfheal_cases WHERE state = 'open' ORDER BY id`)
+      .all() as CaseRow[];
+  }
+
+  closeCase(id: number, now: number): void {
+    this.db
+      .query("UPDATE selfheal_cases SET state = 'closed', closed_at = ? WHERE id = ?")
+      .run(now, id);
+  }
+
+  addReport(report: {
+    caseId: number;
+    reporterId: string;
+    reporterName: string;
+    subjectId: string | null;
+    roleKey: string;
+    what: string;
+    tried: string | null;
+    blocking: boolean;
+    evidence: string | null;
+    createdAt: number;
+  }): number {
+    const result = this.db
+      .query(
+        `INSERT INTO selfheal_reports (case_id, reporter_id, reporter_name, subject_id, role_key,
+           what, tried, blocking, state, evidence, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
+      )
+      .run(
+        report.caseId,
+        report.reporterId,
+        report.reporterName,
+        report.subjectId,
+        report.roleKey,
+        report.what,
+        report.tried,
+        report.blocking ? 1 : 0,
+        report.evidence,
+        report.createdAt,
+      );
+    return Number(result.lastInsertRowid);
+  }
+
+  private report(
+    row: (Omit<ReportRow, "blocking"> & { blocking: number }) | null,
+  ): ReportRow | null {
+    return row ? { ...row, blocking: row.blocking === 1 } : null;
+  }
+
+  getReport(id: number): ReportRow | null {
+    return this.report(
+      this.db.query(`SELECT ${REPORT_COLUMNS} FROM selfheal_reports WHERE id = ?`).get(id) as never,
+    );
+  }
+
+  /** The reports of a case, oldest first. */
+  reportsOf(caseId: number): ReportRow[] {
+    const rows = this.db
+      .query(`SELECT ${REPORT_COLUMNS} FROM selfheal_reports WHERE case_id = ? ORDER BY id`)
+      .all(caseId) as never[];
+    return rows.map((row) => this.report(row) as ReportRow);
+  }
+
+  /** The report a session or the user has open about a role, if any. */
+  openReportBy(reporterId: string, roleKey: string): ReportRow | null {
+    return this.report(
+      this.db
+        .query(
+          `SELECT ${REPORT_COLUMNS} FROM selfheal_reports
+           WHERE reporter_id = ? AND role_key = ? AND state = 'open' ORDER BY id DESC LIMIT 1`,
+        )
+        .get(reporterId, roleKey) as never,
+    );
+  }
+
+  /** Ends a report that is open. False when it was settled before. */
+  settleReport(id: number, state: ReportState, outcome: string, now: number): boolean {
+    const result = this.db
+      .query(
+        `UPDATE selfheal_reports SET state = ?, outcome = ?, closed_at = ?
+         WHERE id = ? AND state = 'open'`,
+      )
+      .run(state, outcome, now, id);
+    return result.changes > 0;
+  }
+
+  setReportBlocking(id: number, blocking: boolean): void {
+    this.db
+      .query("UPDATE selfheal_reports SET blocking = ? WHERE id = ?")
+      .run(blocking ? 1 : 0, id);
+  }
+
+  markReportSeen(id: number, now: number): void {
+    this.db
+      .query("UPDATE selfheal_reports SET seen_at = ? WHERE id = ? AND seen_at IS NULL")
+      .run(now, id);
+  }
+
+  addProposal(proposal: {
+    caseId: number;
+    summary: string;
+    reason: string;
+    changes: string;
+    createdAt: number;
+  }): number {
+    // One proposal at a time for a case: a new one takes the place of the one that waits.
+    this.db
+      .query(
+        "UPDATE selfheal_proposals SET state = 'superseded', decided_at = ? WHERE case_id = ? AND state = 'pending'",
+      )
+      .run(proposal.createdAt, proposal.caseId);
+    const result = this.db
+      .query(
+        `INSERT INTO selfheal_proposals (case_id, state, summary, reason, changes, created_at)
+         VALUES (?, 'pending', ?, ?, ?, ?)`,
+      )
+      .run(
+        proposal.caseId,
+        proposal.summary,
+        proposal.reason,
+        proposal.changes,
+        proposal.createdAt,
+      );
+    return Number(result.lastInsertRowid);
+  }
+
+  getProposal(id: number): ProposalRow | null {
+    return this.db
+      .query(`SELECT ${PROPOSAL_COLUMNS} FROM selfheal_proposals WHERE id = ?`)
+      .get(id) as ProposalRow | null;
+  }
+
+  /** Proposals waiting for the user, oldest first. */
+  pendingProposals(): ProposalRow[] {
+    return this.db
+      .query(
+        `SELECT ${PROPOSAL_COLUMNS} FROM selfheal_proposals WHERE state = 'pending' ORDER BY id`,
+      )
+      .all() as ProposalRow[];
+  }
+
+  countPendingProposals(): number {
+    const row = this.db
+      .query("SELECT COUNT(*) AS n FROM selfheal_proposals WHERE state = 'pending'")
+      .get() as { n: number };
+    return row.n;
+  }
+
+  /** Decides a proposal that waits. False when it was decided before. */
+  decideProposal(
+    id: number,
+    state: ProposalState,
+    decided: { as?: string; reason?: string },
+    now: number,
+  ): boolean {
+    const result = this.db
+      .query(
+        `UPDATE selfheal_proposals SET state = ?, decided_as = ?, refusal_reason = ?, decided_at = ?
+         WHERE id = ? AND state = 'pending'`,
+      )
+      .run(state, decided.as ?? null, decided.reason ?? null, now, id);
+    return result.changes > 0;
+  }
+
+  addMemory(memory: Omit<MemoryRow, "id" | "clearedAt">): void {
+    this.db
+      .query(
+        "INSERT INTO selfheal_memory (role_key, summary, changes, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(memory.roleKey, memory.summary, memory.changes, memory.reason, memory.createdAt);
+  }
+
+  /** The turned-down proposals that still count, for one role or for all; oldest first. */
+  memory(roleKey?: string): MemoryRow[] {
+    return (
+      roleKey === undefined
+        ? this.db.query(
+            `SELECT ${MEMORY_COLUMNS} FROM selfheal_memory WHERE cleared_at IS NULL ORDER BY id`,
+          )
+        : this.db.query(
+            `SELECT ${MEMORY_COLUMNS} FROM selfheal_memory
+             WHERE cleared_at IS NULL AND role_key = ?1 ORDER BY id`,
+          )
+    ).all(...(roleKey === undefined ? [] : [roleKey])) as MemoryRow[];
+  }
+
+  /** Stops turned-down proposals from counting. No row is deleted. Returns how many. */
+  clearMemory(now: number, roleKey?: string): number {
+    const result =
+      roleKey === undefined
+        ? this.db
+            .query("UPDATE selfheal_memory SET cleared_at = ? WHERE cleared_at IS NULL")
+            .run(now)
+        : this.db
+            .query(
+              "UPDATE selfheal_memory SET cleared_at = ? WHERE cleared_at IS NULL AND role_key = ?",
+            )
+            .run(now, roleKey);
+    return result.changes;
   }
 
   getMeta(key: string): string | null {

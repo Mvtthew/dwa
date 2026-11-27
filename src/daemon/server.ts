@@ -9,6 +9,7 @@ import type {
 } from "../shared/protocol.ts";
 import {
   FEED_CLEAR_SCOPES,
+  type FixDecision,
   type LeaderRequest,
   POPUP_KINDS,
   type RefreshRequest,
@@ -22,6 +23,7 @@ import { TmuxError } from "../tmux/driver.ts";
 import type { Delegation } from "./delegation.ts";
 import { USER } from "./messaging.ts";
 import type { RoleAuthor } from "./role-author.ts";
+import type { Selfheal } from "./selfheal.ts";
 import type { Workflows } from "./workflows.ts";
 import { type Workspace, WorkspaceError } from "./workspace.ts";
 
@@ -31,6 +33,7 @@ export interface ServerOptions {
   workflows: Workflows;
   delegation: Delegation;
   roleAuthor: RoleAuthor;
+  selfheal: Selfheal;
   /** Called after `/down` has answered, to stop the daemon process. */
   onShutdown: () => void;
 }
@@ -69,7 +72,7 @@ function sender(value: unknown): string {
 
 /** The daemon's local API on a Unix socket. The CLI and the UI panes are its clients. */
 export function startServer(options: ServerOptions) {
-  const { workspace, workflows, delegation, roleAuthor } = options;
+  const { workspace, workflows, delegation, roleAuthor, selfheal } = options;
   const { messaging } = workspace;
 
   const route = async (request: Request): Promise<Response> => {
@@ -333,6 +336,101 @@ export function startServer(options: ServerOptions) {
             personal: input.personal === true,
           }),
         );
+      }
+      case "POST /selfheal/reports": {
+        const input = await body<{
+          from?: string;
+          target?: string;
+          what?: string;
+          tried?: string;
+          blocking?: boolean;
+        }>(request);
+        return json(
+          await selfheal.report({
+            from: sender(input.from),
+            target: typeof input.target === "string" ? input.target : undefined,
+            what: text(input.what, "what"),
+            tried: typeof input.tried === "string" ? input.tried : undefined,
+            blocking: input.blocking === true,
+          }),
+        );
+      }
+      case "POST /selfheal/status": {
+        const input = await body<{ id?: unknown; from?: string; waiting?: boolean }>(request);
+        if (typeof input.waiting === "boolean") {
+          selfheal.waiting(Number(input.id), sender(input.from), input.waiting);
+        }
+        return json(selfheal.status(Number(input.id), sender(input.from)));
+      }
+      case "POST /selfheal/context": {
+        const input = await body<{ from?: string }>(request);
+        return json({ text: await selfheal.context(sender(input.from)) });
+      }
+      case "POST /selfheal/propose": {
+        const input = await body<{
+          from?: string;
+          summary?: string;
+          reason?: string;
+          changes?: unknown;
+        }>(request);
+        if (!Array.isArray(input.changes)) throw new WorkspaceError('Missing "changes".');
+        return json(
+          await selfheal.propose(sender(input.from), {
+            summary: text(input.summary, "summary"),
+            reason: text(input.reason, "reason"),
+            changes: input.changes,
+          }),
+        );
+      }
+      case "POST /selfheal/answer": {
+        const input = await body<{ from?: string; answer?: string; reports?: unknown }>(request);
+        return json(
+          await selfheal.answer(
+            sender(input.from),
+            text(input.answer, "answer"),
+            Array.isArray(input.reports) ? input.reports.map(Number) : undefined,
+          ),
+        );
+      }
+      case "POST /selfheal/bug": {
+        const input = await body<{
+          from?: string;
+          title?: string;
+          what?: string;
+          steps?: string;
+          expected?: string;
+        }>(request);
+        return json(
+          await selfheal.fileBug(sender(input.from), {
+            title: text(input.title, "title"),
+            what: text(input.what, "what"),
+            steps: text(input.steps, "steps"),
+            expected: typeof input.expected === "string" ? input.expected : undefined,
+          }),
+        );
+      }
+      case "GET /selfheal/proposals":
+        return json({ proposals: selfheal.proposals() });
+      case "GET /selfheal/proposal": {
+        const id = Number(new URL(request.url).searchParams.get("id"));
+        return json(await selfheal.view(id));
+      }
+      case "POST /selfheal/decide": {
+        const input = await body<FixDecision>(request);
+        if (!["role", "session", "refuse"].includes(input.action)) {
+          throw new WorkspaceError('Unknown action: use "role", "session" or "refuse".');
+        }
+        return json(await selfheal.decide({ ...input, id: Number(input.id) }));
+      }
+      case "GET /selfheal/memory": {
+        const role = new URL(request.url).searchParams.get("role");
+        return json({ memory: selfheal.memory(role ?? undefined) });
+      }
+      case "POST /selfheal/memory/clear": {
+        const input = await body<{ role?: unknown }>(request);
+        return json({
+          cleared: selfheal.clearMemory(typeof input.role === "string" ? input.role : undefined),
+        });
       }
       case "POST /workflows/view": {
         const input = await body<{ id?: unknown }>(request);
