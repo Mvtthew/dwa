@@ -13,7 +13,8 @@ import { parseRef } from "../shared/scope.ts";
 import { createAgentsView } from "./agents.ts";
 import { createDesigner } from "./designer.ts";
 import { createFeedView } from "./feed.ts";
-import { fixesScreen, fixScreen } from "./fix-screens.ts";
+import { fixesScreen, fixScreen, reportScreen } from "./fix-screens.ts";
+import { REPORT_SUBJECT } from "./model.ts";
 import { roleScreen, rolesScreen } from "./role-screens.ts";
 import { diskRoleStore } from "./role-store.ts";
 import { openRun } from "./run-screens.ts";
@@ -94,7 +95,7 @@ export async function runUi(view: UiView, projectRoot: string): Promise<never> {
         ? createTopbarView(renderer, (action, x) => {
             if ("menu" in action) return post("/menu", { category: action.menu, x });
             if ("toggle" in action) return post(`/${action.toggle}/toggle`);
-            return post("/popup", { kind: action.popup });
+            return post("/popup", { kind: action.popup, subject: action.subject });
           })
         : createStatusView(renderer, {
             version: pkg.version,
@@ -247,9 +248,11 @@ export async function runWizard(
                 : kind === "leader"
                   ? await leaderScreen(api)
                   : kind === "fixes"
-                    ? subject
-                      ? await fixScreen(api, Number(subject))
-                      : await fixesScreen(api)
+                    ? subject === REPORT_SUBJECT
+                      ? await reportScreen(api)
+                      : subject
+                        ? await fixScreen(api, Number(subject))
+                        : await fixesScreen(api)
                     : kind === "tools"
                       ? subject
                         ? await toolsScreen(api, subject)

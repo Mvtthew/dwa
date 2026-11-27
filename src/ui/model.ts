@@ -371,11 +371,14 @@ export function statusModel(state: WorkspaceState, nowMs: number): StatusModel {
   };
 }
 
+/** The subject that opens the popup of fixes on its form for reporting a problem. */
+export const REPORT_SUBJECT = "report";
+
 /** What a click on a part of the top bar does. */
 export type TopbarAction =
   | { menu: ShortcutCategory }
   | { toggle: "shell" | "feed" }
-  | { popup: "questions" | "messages" | "fixes" };
+  | { popup: "questions" | "messages" | "fixes"; subject?: string };
 
 export interface TopbarSegment {
   text: string;
@@ -391,7 +394,8 @@ export interface TopbarSegment {
 
 /**
  * The top bar, left to right: the shortcut categories (each opens its dropdown), the pane
- * toggles, what waits for the user (proposed fixes, open questions, unread messages), and the keys at
+ * toggles, the button for reporting a problem, what waits for the user (proposed fixes, open
+ * questions, unread messages), and the keys at
  * the right edge when there is room. Segments that do not fit are left out from the right.
  */
 export function topbarModel(state: WorkspaceState | null, width: number): TopbarSegment[] {
@@ -405,6 +409,9 @@ export function topbarModel(state: WorkspaceState | null, width: number): Topbar
   const shell = state?.shell?.open ?? false;
   parts.push({ text: " Shell ", on: shell, action: { toggle: "shell" } });
   parts.push({ text: " Feed ", on: state?.feed?.open ?? false, action: { toggle: "feed" } });
+  separator();
+  // Always there: a session or a role that lacks something is reported from here.
+  parts.push({ text: " Report ", action: { popup: "fixes", subject: REPORT_SUBJECT } });
   const questions = state?.questions.filter((question) => question.to === "user").length ?? 0;
   const waiting = state?.questions.length ?? 0;
   const messages = state?.inbox.length ?? 0;

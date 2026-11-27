@@ -670,6 +670,8 @@ describe("the top bar", () => {
       "Shell",
       "Feed",
       "│",
+      "Report",
+      "│",
       "? 2",
       "✉ 1",
       "Ctrl+Q then key · Alt+key",
@@ -699,8 +701,10 @@ describe("the top bar", () => {
     view.update(busy(), NOW);
     await harness.renderOnce();
     const line = harness.captureCharFrame().split("\n")[0] ?? "";
-    expect(line).toContain("Workflows  Agents  Panes  Workspace  │  Shell  Feed  │  ? 2  ✉ 1");
-    for (const label of ["Agents", "Shell", "Feed", "? 2", "✉ 1"]) {
+    expect(line).toContain(
+      "Workflows  Agents  Panes  Workspace  │  Shell  Feed  │  Report  │  ? 2  ✉ 1",
+    );
+    for (const label of ["Agents", "Shell", "Feed", "Report", "? 2", "✉ 1"]) {
       await harness.mockMouse.click(line.indexOf(label), 0);
     }
     harness.renderer.destroy();
@@ -708,6 +712,7 @@ describe("the top bar", () => {
       [{ menu: "Agents" }, line.indexOf("Agents") - 1],
       [{ toggle: "shell" }, line.indexOf("Shell") - 1],
       [{ toggle: "feed" }, line.indexOf("Feed") - 1],
+      [{ popup: "fixes", subject: "report" }, line.indexOf("Report") - 1],
       [{ popup: "questions" }, line.indexOf("? 2") - 1],
       [{ popup: "messages" }, line.indexOf("✉ 1") - 1],
     ]);

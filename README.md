@@ -334,6 +334,8 @@ dwa selfheal --list            # fixes that wait for you
 dwa selfheal --memory          # what you turned down; --clear-memory [role] forgets it
 ```
 
+The **Report** button in the top bar opens the same form: pick a session or a role and say what is wrong.
+
 A fix reaches role files and the config: `[defaults]`, `[main]`, and whole entries or single keys of `[mcp.X]`, `[plugins.X]`, `[profiles.X]` and `[[agents]]`, changed in place with the rest of the file left as it is. A change that adds a program to run (an MCP server's command, a profile) carries a warning on the screen.
 
 ### Changing what a running session can use
