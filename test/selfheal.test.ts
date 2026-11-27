@@ -6,13 +6,16 @@ import {
   describeChange,
   expandChanges,
   formatFile,
+  keptChanges,
   maskSecrets,
   parseFile,
   sessionOnlyPossible,
   slug,
+  textHunks,
   valuesAfter,
   warningOf,
   widens,
+  withoutHunks,
 } from "../src/shared/selfheal.ts";
 
 const role = { kind: "role" as const, name: "developer" };
@@ -223,5 +226,34 @@ describe("texts that leave the daemon", () => {
   test("a title becomes a file name part", () => {
     expect(slug("A granted skill is REFUSED!")).toBe("a-granted-skill-is-refused");
     expect(slug("???")).toBe("report");
+  });
+});
+
+describe("the parts of a changed text", () => {
+  const before = "one\ntwo\nthree\nfour\n";
+  const after = "ONE\ntwo\nthree\nfour\nfive\n";
+
+  test("runs of lines that differ are found in order", () => {
+    expect(textHunks(before, after)).toEqual([
+      { index: 0, at: 0, remove: ["one"], add: ["ONE"] },
+      { index: 1, at: 4, remove: [], add: ["five"] },
+    ]);
+    expect(textHunks(before, before)).toEqual([]);
+  });
+
+  test("leaving parts out gives the text with the rest", () => {
+    expect(withoutHunks(before, after, [])).toBe(after);
+    expect(withoutHunks(before, after, [0])).toBe("one\ntwo\nthree\nfour\nfive\n");
+    expect(withoutHunks(before, after, [1])).toBe("ONE\ntwo\nthree\nfour\n");
+    expect(withoutHunks(before, after, [0, 1])).toBe(before);
+  });
+
+  test("switched-off changes and parts are taken out of a proposal", () => {
+    const all = changes({ key: "allow", add: "x" }, { key: "prompt", set: after });
+    expect(keptChanges(all, ["c1"], before).map((change) => change.id)).toEqual(["c2"]);
+    const [, prompt] = keptChanges(all, ["c2#0"], before);
+    expect(prompt).toMatchObject({ key: "prompt", value: "one\ntwo\nthree\nfour\nfive\n" });
+    // A prompt change with every part off is no change at all.
+    expect(keptChanges(all, ["c2#0", "c2#1"], before).map((change) => change.id)).toEqual(["c1"]);
   });
 });

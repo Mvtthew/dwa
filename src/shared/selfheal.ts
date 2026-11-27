@@ -341,3 +341,94 @@ export function bugReportText(report: BugReport): string {
   lines.push("", "## Setup", "", "```", report.setup.trim(), "```", "");
   return lines.join("\n");
 }
+
+/** A run of lines that differ between two texts: what goes at line `at` of the first, and what comes. */
+export interface Hunk {
+  index: number;
+  /** The line of the first text the hunk starts at, from 0. */
+  at: number;
+  remove: string[];
+  add: string[];
+}
+
+/** The runs of lines in which `after` differs from `before`, in order. */
+export function textHunks(before: string, after: string): Hunk[] {
+  const left = before.split("\n");
+  const right = after.split("\n");
+  // Longest common subsequence, filled from the end so the walk below reads forwards.
+  const width = right.length + 1;
+  const table = new Uint32Array((left.length + 1) * width);
+  for (let i = left.length - 1; i >= 0; i--) {
+    for (let j = right.length - 1; j >= 0; j--) {
+      table[i * width + j] =
+        left[i] === right[j]
+          ? (table[(i + 1) * width + j + 1] ?? 0) + 1
+          : Math.max(table[(i + 1) * width + j] ?? 0, table[i * width + j + 1] ?? 0);
+    }
+  }
+  const hunks: Hunk[] = [];
+  let open: Hunk | null = null;
+  let i = 0;
+  let j = 0;
+  while (i < left.length || j < right.length) {
+    if (i < left.length && j < right.length && left[i] === right[j]) {
+      open = null;
+      i++;
+      j++;
+      continue;
+    }
+    if (!open) {
+      open = { index: hunks.length, at: i, remove: [], add: [] };
+      hunks.push(open);
+    }
+    const down = i < left.length ? (table[(i + 1) * width + j] ?? 0) : -1;
+    const across = j < right.length ? (table[i * width + j + 1] ?? 0) : -1;
+    if (down >= across) open.remove.push(left[i++] as string);
+    else open.add.push(right[j++] as string);
+  }
+  return hunks;
+}
+
+/** `before` with the hunks that lead to `after`, except the ones named in `dropped`. */
+export function withoutHunks(before: string, after: string, dropped: number[]): string {
+  if (dropped.length === 0) return after;
+  const left = before.split("\n");
+  const out: string[] = [];
+  let at = 0;
+  for (const hunk of textHunks(before, after)) {
+    out.push(...left.slice(at, hunk.at));
+    if (dropped.includes(hunk.index)) out.push(...hunk.remove);
+    else out.push(...hunk.add);
+    at = hunk.at + hunk.remove.length;
+  }
+  out.push(...left.slice(at));
+  return out.join("\n");
+}
+
+/** The id of one hunk of a change to a text, as the approval's switches name it. */
+export function hunkId(changeId: string, index: number): string {
+  return `${changeId}#${index}`;
+}
+
+/**
+ * The changes that are left when the user switched some off. `dropped` holds change ids and,
+ * for a change to the prompt, ids of single hunks (`hunkId`); `prompt` is the text the hunks
+ * are worked out against. A prompt change whose hunks are all off is left out.
+ */
+export function keptChanges(changes: Change[], dropped: string[], prompt: string): Change[] {
+  const kept: Change[] = [];
+  for (const change of changes) {
+    if (dropped.includes(change.id)) continue;
+    if (change.op === "set" && change.key === "prompt" && typeof change.value === "string") {
+      const hunks = textHunks(prompt, change.value);
+      const off = hunks
+        .filter((hunk) => dropped.includes(hunkId(change.id, hunk.index)))
+        .map((hunk) => hunk.index);
+      if (off.length > 0 && off.length === hunks.length) continue;
+      kept.push({ ...change, value: withoutHunks(prompt, change.value, off) });
+      continue;
+    }
+    kept.push(change);
+  }
+  return kept;
+}

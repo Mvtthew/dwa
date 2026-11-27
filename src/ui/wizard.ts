@@ -89,6 +89,11 @@ export type Row =
       fixed?: string;
       /** More about this row, reached with → or a click on the hint (which should end in ›). */
       more?: (values: Values) => Outcome | Promise<Outcome>;
+      /**
+       * Called with the form's values after the switch changed, for a screen that shows what
+       * the switches amount to: what it returns is carried out like a button's outcome.
+       */
+      changed?: (values: Values) => Outcome | Promise<Outcome>;
     }
   | { kind: "input"; key: string; label: string; placeholder?: string }
   | {
@@ -307,6 +312,21 @@ export function createForm(renderer: CliRenderer, options: FormOptions): Form {
       options.changed?.({ ...values });
     }
     clickFocus(index);
+    if (!row.fixed && row.changed) void follow(row.changed);
+  };
+
+  /** Carries out what a switch's `changed` returns, as `activate` does for a button. */
+  const follow = async (changed: (values: Values) => Outcome | Promise<Outcome>) => {
+    busy = true;
+    try {
+      const outcome = await changed({ ...values });
+      busy = false;
+      options.outcome(outcome);
+    } catch (error) {
+      busy = false;
+      message = { text: (error as Error).message, tone: "bad" };
+      paint();
+    }
   };
 
   const build = (row: Row, index: number): RowNode => {

@@ -407,6 +407,10 @@ export interface FixLine {
   widens: boolean;
   /** Set for a change that reaches far, with what it means. */
   warning?: string;
+  /** For one part of a changed text: the lines that go (`-`) and come (`+`). */
+  detail?: string[];
+  /** False when the user switched it off: it is then left out of what is applied. */
+  on: boolean;
 }
 
 /** A file a proposed fix changes, as it is and as it would be. */
@@ -447,6 +451,8 @@ export interface FixView extends FixSummary {
   main: boolean;
   /** Set when the changes no longer fit the files; nothing can be applied then. */
   error?: string;
+  /** Every change is switched off, so there is nothing to apply. */
+  empty?: boolean;
 }
 
 /** The user's decision on a proposed fix. */
@@ -459,6 +465,8 @@ export interface FixDecision {
   reason?: string;
   /** For the main session: restart it when its turn ends, or leave that to the user. */
   restart?: "turn-end" | "later";
+  /** The ids of the changes (`FixLine.id`) the user switched off. */
+  dropped?: string[];
 }
 
 /** What deciding a proposed fix did. */

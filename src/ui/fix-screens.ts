@@ -10,16 +10,12 @@ import type {
   FixView,
   WorkspaceState,
 } from "../shared/protocol.ts";
-import { ago, wrapAll } from "./model.ts";
-import type { Outcome, Row, Screen, Values } from "./wizard.ts";
+import { ago } from "./model.ts";
+import { OFF, ON, type Outcome, type Row, type Screen, type Values } from "./wizard.ts";
 import type { WizardApi } from "./wizards.ts";
 
 const back: Row = { kind: "button", label: "Back", run: () => ({ back: true }) };
 const close: Row = { kind: "button", label: "Close", run: () => ({ close: true }) };
-
-/** A popup's notes are not wrapped by the form, so prose is wrapped here, to its narrowest size. */
-const WIDTH = 76;
-const prose = (text: string) => wrapAll(text, WIDTH).join("\n");
 
 /** The value of the choice that says when the main session restarts. */
 const LATER = "later";
@@ -68,19 +64,38 @@ export async function fixesScreen(api: WizardApi, now = Date.now()): Promise<Scr
   return { title: "Proposed fixes", rows };
 }
 
-/** The rows that show what a fix changes: each change, then each file as it would differ. */
-export function changeRows(view: FixView): Row[] {
+/** The ids of the changes whose switch is off. */
+function droppedIn(view: FixView, values: Values): string[] {
+  return view.lines.filter((line) => values[line.id] === OFF).map((line) => line.id);
+}
+
+/**
+ * The rows that show what a fix changes: a switch for each change, then each file as it would
+ * differ with the changes that are on. `changed` is what a switch does once it has changed.
+ */
+export function changeRows(
+  view: FixView,
+  changed?: (values: Values) => Outcome | Promise<Outcome>,
+): Row[] {
   const rows: Row[] = [{ kind: "heading", text: "CHANGES" }];
   for (const line of view.lines) {
     rows.push({
-      kind: "note",
-      tone: line.warning ? "bad" : line.widens ? "attention" : undefined,
-      text: [
-        `${line.widens ? "▲" : "·"} ${line.file}: ${line.text}`,
-        ...(line.warning ? [`  far-reaching: ${line.warning}`] : []),
-        ...(line.why ? [prose(`  ${line.why}`)] : []),
-      ].join("\n"),
+      kind: "check",
+      key: line.id,
+      label: `${line.widens ? "▲ " : ""}${line.file}: ${line.text}`,
+      ...(changed ? { changed } : {}),
     });
+    const tone = line.warning ? "bad" : line.widens ? "attention" : "muted";
+    const under = [
+      ...(line.warning ? [`far-reaching: ${line.warning}`] : []),
+      ...(line.why ? [line.why] : []),
+    ];
+    if (under.length > 0) {
+      rows.push({ kind: "note", tone, text: under.map((text) => `      ${text}`).join("\n") });
+    }
+    if (line.detail) {
+      rows.push({ kind: "note", text: line.detail.map((text) => `      ${text}`).join("\n") });
+    }
   }
   if (view.lines.some((line) => line.widens)) {
     rows.push({ kind: "note", tone: "muted", text: "▲ gives a session more than it had" });
@@ -94,17 +109,45 @@ export function changeRows(view: FixView): Row[] {
         text: `This role is built into ${APP_NAME}. Applying copies it into the project first; from then on\nthe file is the role here and no longer follows ${APP_NAME}'s own updates.`,
       });
     }
-    rows.push({
-      kind: "note",
-      text: file.diff.length > 0 ? file.diff.join("\n") : "The file already says so.",
-    });
+    rows.push(
+      {
+        kind: "note",
+        text: file.diff.length > 0 ? file.diff.join("\n") : "The file already says so.",
+      },
+      {
+        kind: "button",
+        label: "Whole file before",
+        hint: "›",
+        run: () => ({ to: textScreen(`${file.label}, as it is`, file.before) }),
+      },
+      {
+        kind: "button",
+        label: "Whole file after",
+        hint: "›",
+        run: () => ({ to: textScreen(`${file.label}, with the fix`, file.after) }),
+      },
+    );
   }
   return rows;
 }
 
-/** One proposed fix with everything needed to decide on it. */
-export async function fixScreen(api: WizardApi, id: number): Promise<Screen> {
-  const view = await api.call<FixView>("GET", `/selfheal/proposal?id=${id}`);
+function textScreen(title: string, text: string): Screen {
+  return { title, rows: [{ kind: "note", text: text.trimEnd() || "(empty)" }, back] };
+}
+
+/**
+ * One proposed fix with everything needed to decide on it. `dropped` are the changes switched
+ * off: the files are shown, and the fix is applied, without them.
+ */
+export async function fixScreen(
+  api: WizardApi,
+  id: number,
+  dropped: string[] = [],
+): Promise<Screen> {
+  const view = await api.call<FixView>(
+    "GET",
+    `/selfheal/proposal?id=${id}${dropped.length > 0 ? `&drop=${encodeURIComponent(dropped.join(","))}` : ""}`,
+  );
   const title = `Fix #${view.id} for ${about(view.role)}`;
   const decide = async (decision: Omit<FixDecision, "id" | "base">): Promise<Outcome> => {
     const result = await api.call<FixResult>("POST", "/selfheal/decide", {
@@ -114,43 +157,50 @@ export async function fixScreen(api: WizardApi, id: number): Promise<Screen> {
     });
     return { home: resultScreen(api, title, result) };
   };
+  // A switch redraws the screen from the daemon's answer for the changes that are still on.
+  const redraw = async (values: Values): Promise<Outcome> => ({
+    replace: await fixScreen(api, id, droppedIn(view, values)),
+  });
   const rows: Row[] = [
-    { kind: "note", text: prose(view.summary) },
-    { kind: "note", text: prose(view.reason) },
+    { kind: "note", text: view.summary },
+    { kind: "note", text: view.reason },
     { kind: "note", text: "" },
     { kind: "heading", text: "REPORTED BY" },
     ...view.reports.map(
       (report): Row => ({
         kind: "note",
-        text: prose(
-          `${report.reporter}${report.gone ? " (ended)" : ""}: ${report.what}${report.tried ? `\n  tried: ${report.tried}` : ""}`,
-        ),
+        text: `${report.reporter}${report.gone ? " (ended)" : ""}: ${report.what}${report.tried ? `\n  tried: ${report.tried}` : ""}`,
       }),
     ),
     { kind: "note", text: "" },
-    ...changeRows(view),
+    ...changeRows(view, redraw),
     { kind: "note", text: "" },
   ];
+  const values: Values = Object.fromEntries(
+    view.lines.map((line) => [line.id, line.on ? ON : OFF]),
+  );
   const refuse: Row = {
     kind: "button",
     label: "Turn down…",
     tone: "bad",
     run: () => ({ to: refuseScreen(view, decide) }),
   };
-  if (view.error) {
+  if (view.error || view.empty) {
     rows.push(
       {
         kind: "note",
-        tone: "bad",
-        text: `This no longer fits the files as they are, so it cannot be applied:\n${view.error}`,
+        tone: view.error ? "bad" : "attention",
+        text: view.error
+          ? `This no longer fits the files as they are, so it cannot be applied:\n${view.error}`
+          : "Every change is switched off, so there is nothing to apply.",
       },
       refuse,
       back,
     );
-    return { title, rows };
+    return { title, rows, values };
   }
   const sessions = view.sessions.join(", ");
-  const restart = (values: Values) => (values.restart === LATER ? "later" : "turn-end");
+  const restart = (form: Values) => (form.restart === LATER ? "later" : "turn-end");
   if (view.main) {
     rows.push({
       kind: "choice",
@@ -162,14 +212,16 @@ export async function fixScreen(api: WizardApi, id: number): Promise<Screen> {
       ],
     });
   }
+  const off = view.lines.filter((line) => !line.on).length;
   rows.push({
     kind: "button",
-    label: "Apply to the role",
+    label: off > 0 ? `Apply to the role, without the ${off} switched off` : "Apply to the role",
     hint: sessions
       ? `every later session of it; ${sessions} restarts with its conversation`
       : "every later session of it",
     tone: "good",
-    run: (values) => decide({ action: "role", restart: restart(values) }),
+    run: (form) =>
+      decide({ action: "role", restart: restart(form), dropped: droppedIn(view, form) }),
   });
   if (view.noSessionOnly) {
     rows.push({
@@ -182,11 +234,12 @@ export async function fixScreen(api: WizardApi, id: number): Promise<Screen> {
       kind: "button",
       label: `Only for ${sessions}`,
       hint: "no file changes; gone when the session ends",
-      run: (values) => decide({ action: "session", restart: restart(values) }),
+      run: (form) =>
+        decide({ action: "session", restart: restart(form), dropped: droppedIn(view, form) }),
     });
   }
   rows.push(refuse, back);
-  return { title, rows, values: { restart: "turn-end" } };
+  return { title, rows, values };
 }
 
 function refuseScreen(
@@ -216,7 +269,7 @@ function resultScreen(api: WizardApi, title: string, result: FixResult): Screen 
   return {
     title,
     rows: [
-      { kind: "note", text: prose(result.message) },
+      { kind: "note", text: result.message },
       {
         kind: "button",
         label: "Other fixes",

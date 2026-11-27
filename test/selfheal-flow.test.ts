@@ -187,6 +187,7 @@ describe("self-heal", () => {
         text: "allow + Bash(git push *)",
         why: "to publish its work",
         widens: true,
+        on: true,
       },
     ]);
     expect(view.files[0]?.diff).toContain(
@@ -280,6 +281,73 @@ describe("self-heal", () => {
       allow: ["Bash(ls *)", "Bash(git push *)"],
     });
     expect(store.getReport(receipt.id)?.state).toBe("applied");
+  });
+
+  test("a change the user switched off is left out of what is written", async () => {
+    await workspace.up();
+    const { receipt } = await gap();
+    await selfheal.propose(healer(receipt.id), {
+      summary: "let it push, on opus",
+      reason: "it publishes",
+      changes: [push, { key: "model", set: "opus" }],
+    });
+    const view = await selfheal.view(1, ["c2"]);
+    expect(view.lines.map((line) => [line.id, line.on])).toEqual([
+      ["c1", true],
+      ["c2", false],
+    ]);
+    expect(view.files[0]?.after).not.toContain("opus");
+    // What was looked at with the switch off is not applied with it on.
+    await expect(selfheal.decide({ id: 1, action: "role", base: view.base })).rejects.toThrow(
+      "The files changed since you looked",
+    );
+    await selfheal.decide({ id: 1, action: "role", base: view.base, dropped: ["c2"] });
+    const text = readFileSync(file("developer.toml"), "utf8");
+    expect(text).toContain("Bash(git push *)");
+    expect(text).not.toContain("opus");
+    expect(store.getReport(receipt.id)?.outcome).not.toContain("model");
+  });
+
+  test("with every change switched off there is nothing to apply", async () => {
+    await workspace.up();
+    const { receipt } = await gap();
+    await selfheal.propose(healer(receipt.id), {
+      summary: "let it push",
+      reason: "it publishes",
+      changes: [push],
+    });
+    const view = await selfheal.view(1, ["c1"]);
+    expect(view).toMatchObject({ empty: true, files: [] });
+    await expect(selfheal.decide({ id: 1, action: "role", dropped: ["c1"] })).rejects.toThrow(
+      "Every change is switched off",
+    );
+    expect(store.getProposal(1)?.state).toBe("pending");
+  });
+
+  test("a changed prompt is shown part by part, and a part can be left out", async () => {
+    await workspace.up();
+    writeFileSync(
+      file("developer.toml"),
+      DEVELOPER.replace("You write code.\n", "You write code.\nYou test it.\nYou never push.\n"),
+    );
+    const { receipt } = await gap();
+    await selfheal.propose(healer(receipt.id), {
+      summary: "say it publishes",
+      reason: "the prompt forbids pushing",
+      changes: [
+        { key: "prompt", set: "You write clean code.\nYou test it.\nYou push when done.\n" },
+      ],
+    });
+    const view = await selfheal.view(1);
+    expect(view.lines.map((line) => [line.id, line.text, line.detail])).toEqual([
+      ["c1#0", "prompt, from line 1", ["- You write code.", "+ You write clean code."]],
+      ["c1#1", "prompt, from line 3", ["- You never push.", "+ You push when done."]],
+    ]);
+    const partial = await selfheal.view(1, ["c1#0"]);
+    await selfheal.decide({ id: 1, action: "role", base: partial.base, dropped: ["c1#0"] });
+    const text = readFileSync(file("developer.toml"), "utf8");
+    expect(text).toContain("You write code.\nYou test it.\nYou push when done.\n");
+    expect(text).toStartWith("# what the developer may do\n");
   });
 
   test("a change to the prompt cannot be given to one session", async () => {

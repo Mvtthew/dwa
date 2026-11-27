@@ -412,15 +412,22 @@ export function startServer(options: ServerOptions) {
       case "GET /selfheal/proposals":
         return json({ proposals: selfheal.proposals() });
       case "GET /selfheal/proposal": {
-        const id = Number(new URL(request.url).searchParams.get("id"));
-        return json(await selfheal.view(id));
+        const params = new URL(request.url).searchParams;
+        const dropped = (params.get("drop") ?? "").split(",").filter(Boolean);
+        return json(await selfheal.view(Number(params.get("id")), dropped));
       }
       case "POST /selfheal/decide": {
         const input = await body<FixDecision>(request);
         if (!["role", "session", "refuse"].includes(input.action)) {
           throw new WorkspaceError('Unknown action: use "role", "session" or "refuse".');
         }
-        return json(await selfheal.decide({ ...input, id: Number(input.id) }));
+        return json(
+          await selfheal.decide({
+            ...input,
+            id: Number(input.id),
+            dropped: Array.isArray(input.dropped) ? input.dropped.map(String) : [],
+          }),
+        );
       }
       case "GET /selfheal/memory": {
         const role = new URL(request.url).searchParams.get("role");

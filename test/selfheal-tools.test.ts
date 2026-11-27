@@ -155,15 +155,22 @@ describe("the screens of proposed fixes", () => {
     reason: "the role publishes its work",
     reports: [{ id: 1, reporter: "dev", what: "git push was refused", gone: false }],
     lines: [
-      { id: "c1", file: "role developer", text: "allow + Bash(git push *)", widens: true },
+      {
+        id: "c1",
+        file: "role developer",
+        text: "allow + Bash(git push *)",
+        widens: true,
+        on: true,
+      },
       {
         id: "c2",
         file: "role developer",
         text: 'permission_mode = "bypassPermissions"',
         widens: true,
         warning: "the session runs everything without asking and without rules",
+        on: true,
       },
-      { id: "c3", file: "role developer", text: 'model = "opus"', widens: false },
+      { id: "c3", file: "role developer", text: 'model = "opus"', widens: false, on: true },
     ],
     files: [
       {
@@ -205,17 +212,57 @@ describe("the screens of proposed fixes", () => {
   };
 
   test("a widening change is marked and a far-reaching one warned of", () => {
-    const notes = changeRows(view).filter(
-      (row): row is Extract<Row, { kind: "note" }> => row.kind === "note",
+    const rows = changeRows(view);
+    const switches = rows.filter(
+      (row): row is Extract<Row, { kind: "check" }> => row.kind === "check",
     );
-    expect(notes[0]).toMatchObject({
-      tone: "attention",
-      text: "▲ role developer: allow + Bash(git push *)",
+    expect(switches.map((row) => [row.key, row.label])).toEqual([
+      ["c1", "▲ role developer: allow + Bash(git push *)"],
+      ["c2", '▲ role developer: permission_mode = "bypassPermissions"'],
+      ["c3", 'role developer: model = "opus"'],
+    ]);
+    const notes = rows.filter((row): row is Extract<Row, { kind: "note" }> => row.kind === "note");
+    expect(notes[0]).toMatchObject({ tone: "bad" });
+    expect(notes[0]?.text).toContain("far-reaching: the session runs everything without asking");
+    expect(notes.map((note) => note.text)).toContain("- a\n+ b");
+  });
+
+  test("a switch redraws the fix without that change, and the decision leaves it out", async () => {
+    const asked: string[] = [];
+    const sent: unknown[] = [];
+    const calls: WizardApi = {
+      ...api(view, sent),
+      call: async <T>(method: string, path: string, body?: unknown) => {
+        if (path.startsWith("/selfheal/proposal?")) {
+          asked.push(path);
+          const off = path.includes("drop=c2");
+          return {
+            ...view,
+            base: off ? "without-c2" : "abc",
+            lines: view.lines.map((line) => ({ ...line, on: !(off && line.id === "c2") })),
+          } as T;
+        }
+        return api(view, sent).call<T>(method as "GET" | "POST", path, body);
+      },
+    };
+    const screen = await fixScreen(calls, 4);
+    expect(screen.values).toMatchObject({ c1: "on", c2: "on", c3: "on" });
+    const row = screen.rows.find((entry) => entry.kind === "check" && entry.key === "c2");
+    if (row?.kind !== "check" || !row.changed) throw new Error("no switch for c2");
+    const outcome = await row.changed({ c1: "on", c2: "off", c3: "on" });
+    if (!("replace" in outcome)) throw new Error("the screen is not redrawn");
+    expect(asked.at(-1)).toBe("/selfheal/proposal?id=4&drop=c2");
+    expect(outcome.replace.values).toMatchObject({ c2: "off" });
+    expect(labels(outcome.replace)).toContain("Apply to the role, without the 1 switched off");
+    await button(outcome.replace, "Apply to the role, without the 1 switched off").run({
+      c1: "on",
+      c2: "off",
+      c3: "on",
+      restart: "turn-end",
     });
-    expect(notes[1]?.tone).toBe("bad");
-    expect(notes[1]?.text).toContain("far-reaching: the session runs everything without asking");
-    expect(notes[2]).toMatchObject({ tone: undefined, text: '· role developer: model = "opus"' });
-    expect(notes.at(-1)?.text).toBe("- a\n+ b");
+    expect(sent).toEqual([
+      { action: "role", restart: "turn-end", dropped: ["c2"], id: 4, base: "without-c2" },
+    ]);
   });
 
   test("the list leads to a fix, which can be applied, given to the session or turned down", async () => {
@@ -224,12 +271,19 @@ describe("the screens of proposed fixes", () => {
     const sent: unknown[] = [];
     const screen = await fixScreen(api(view, sent), 4);
     expect(screen.title).toBe("Fix #4 for role developer");
-    expect(labels(screen)).toEqual(["Apply to the role", "Only for dev", "Turn down…", "Back"]);
+    expect(labels(screen)).toEqual([
+      "Whole file before",
+      "Whole file after",
+      "Apply to the role",
+      "Only for dev",
+      "Turn down…",
+      "Back",
+    ]);
     await button(screen, "Apply to the role").run({ restart: "turn-end" });
     await button(screen, "Only for dev").run({ restart: "turn-end" });
     expect(sent).toEqual([
-      { action: "role", restart: "turn-end", id: 4, base: "abc" },
-      { action: "session", restart: "turn-end", id: 4, base: "abc" },
+      { action: "role", restart: "turn-end", dropped: [], id: 4, base: "abc" },
+      { action: "session", restart: "turn-end", dropped: [], id: 4, base: "abc" },
     ]);
   });
 
@@ -239,7 +293,7 @@ describe("the screens of proposed fixes", () => {
     const choice = screen.rows.find((row) => row.kind === "choice");
     expect(choice).toMatchObject({ key: "restart", label: "Main session" });
     await button(screen, "Apply to the role").run({ restart: "later" });
-    expect(sent).toEqual([{ action: "role", restart: "later", id: 4, base: "abc" }]);
+    expect(sent).toEqual([{ action: "role", restart: "later", dropped: [], id: 4, base: "abc" }]);
   });
 
   test("a fix that no longer fits can only be turned down; one for no session has no session button", async () => {
@@ -249,7 +303,9 @@ describe("the screens of proposed fixes", () => {
       api({ ...view, sessions: [], noSessionOnly: "no session it was reported for is running" }),
       4,
     );
-    expect(labels(role)).toEqual(["Apply to the role", "Turn down…", "Back"]);
+    expect(labels(role).slice(-3)).toEqual(["Apply to the role", "Turn down…", "Back"]);
+    const empty = await fixScreen(api({ ...view, files: [], empty: true }), 4);
+    expect(labels(empty)).toEqual(["Turn down…", "Back"]);
   });
 
   test("the top bar counts the fixes that wait", () => {

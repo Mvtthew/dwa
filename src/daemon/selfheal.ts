@@ -50,11 +50,14 @@ import {
   describeChange,
   expandChanges,
   formatFile,
+  hunkId,
+  keptChanges,
   maskSecrets,
   NO_REPORT_ROLES,
   SELFHEAL_ROLE,
   sessionOnlyPossible,
   slug,
+  textHunks,
   valuesAfter,
   warningOf,
   widens,
@@ -750,24 +753,47 @@ export class Selfheal {
   }
 
   /** Everything the approval shows, worked out against the files as they are now. */
-  async view(id: number): Promise<FixView> {
+  async view(id: number, dropped: string[] = []): Promise<FixView> {
     const { store } = this.deps;
     const proposal = store.getProposal(id);
     if (!proposal) throw new WorkspaceError(`There is no proposed fix #${id}.`);
-    const changes = JSON.parse(proposal.changes) as Change[];
+    const all = JSON.parse(proposal.changes) as Change[];
+    const changes = this.kept(all, dropped);
     const subjects = this.subjects(proposal.caseId);
-    const lines: FixLine[] = changes.map((change) => ({
-      id: change.id,
-      file: describeTarget(change.file),
-      text: describeChange(change),
-      ...(change.why ? { why: change.why } : {}),
-      widens: widens(change),
-      ...(warningOf(change) ? { warning: warningOf(change) as string } : {}),
-    }));
+    const lines: FixLine[] = all.flatMap((change): FixLine[] => {
+      const line = {
+        file: describeTarget(change.file),
+        ...(change.why ? { why: change.why } : {}),
+        widens: widens(change),
+        ...(warningOf(change) ? { warning: warningOf(change) as string } : {}),
+      };
+      // A changed prompt is shown part by part, each with a switch of its own.
+      const hunks =
+        change.op === "set" && change.key === "prompt" && typeof change.value === "string"
+          ? textHunks(this.promptOf(change.file), change.value)
+          : [];
+      if (hunks.length < 2) {
+        return [
+          {
+            ...line,
+            id: change.id,
+            text: describeChange(change),
+            on: !dropped.includes(change.id),
+          },
+        ];
+      }
+      return hunks.map((hunk) => ({
+        ...line,
+        id: hunkId(change.id, hunk.index),
+        text: `prompt, from line ${hunk.at + 1}`,
+        detail: [...hunk.remove.map((text) => `- ${text}`), ...hunk.add.map((text) => `+ ${text}`)],
+        on: !dropped.includes(change.id) && !dropped.includes(hunkId(change.id, hunk.index)),
+      }));
+    });
     let files: FixFile[] = [];
     let error: string | undefined;
     try {
-      files = (await this.plan(changes)).map((plan) => ({
+      files = (changes.length === 0 ? [] : await this.plan(changes)).map((plan) => ({
         label: plan.label,
         path: plan.path,
         adopt: plan.adopt,
@@ -796,12 +822,42 @@ export class Selfheal {
       })),
       lines,
       files,
-      base: hash(files.flatMap((file) => [file.path, file.before])),
+      // What the user is shown: the files as they are and as they would be.
+      base: hash(files.flatMap((file) => [file.path, file.before, file.after])),
       sessions: subjects.map((subject) => subject.name),
       ...(noSessionOnly ? { noSessionOnly } : {}),
       main: subjects.some((subject) => subject.main),
       ...(error ? { error } : {}),
+      ...(changes.length === 0 ? { empty: true } : {}),
     };
+  }
+
+  /** The prompt a role's own file has now, which a changed prompt is compared with. */
+  private promptOf(file: FileTarget): string {
+    if (file.kind !== "role") return "";
+    const ctx = this.ctx;
+    const files = ctx.files ?? diskFiles;
+    try {
+      let path: string;
+      try {
+        path = requireRole(file, ctx).path;
+      } catch (error) {
+        const builtin = file.source === undefined ? builtinRole(file.name, ctx) : null;
+        if (!builtin) throw error;
+        path = builtin.path;
+      }
+      const own = Bun.TOML.parse(files.read(path) ?? "") as { prompt?: unknown };
+      return typeof own.prompt === "string" ? own.prompt : "";
+    } catch {
+      return "";
+    }
+  }
+
+  /** A proposal's changes without the ones the user switched off. */
+  private kept(changes: Change[], dropped: string[]): Change[] {
+    if (dropped.length === 0) return changes;
+    const prompts = changes.find((change) => change.op === "set" && change.key === "prompt");
+    return keptChanges(changes, dropped, prompts ? this.promptOf(prompts.file) : "");
   }
 
   /**
@@ -818,10 +874,13 @@ export class Selfheal {
       }
       const found = store.getCase(proposal.caseId);
       if (!found) throw new WorkspaceError(`The proposed fix #${decision.id} has no case.`);
-      const changes = JSON.parse(proposal.changes) as Change[];
+      const changes = this.kept(JSON.parse(proposal.changes) as Change[], decision.dropped ?? []);
       const lines = changes.map(describeChange).join("; ");
       const reports = this.openReports(found.id);
       const now = this.now();
+      if (decision.action !== "refuse" && changes.length === 0) {
+        throw new WorkspaceError("Every change is switched off. Turn the fix down instead.");
+      }
 
       if (decision.action === "refuse") {
         const reason = decision.reason?.trim() || "no reason given";
@@ -888,10 +947,10 @@ export class Selfheal {
       // A role changed in an editor gets its version in the history before it is changed here.
       if (!this.deps.files) noticeEdits(this.ctx);
       const plans = await this.plan(changes);
-      const base = hash(plans.flatMap((plan) => [plan.path, plan.before]));
+      const base = hash(plans.flatMap((plan) => [plan.path, plan.before, plan.after]));
       if (decision.base !== undefined && decision.base !== base) {
         throw new WorkspaceError(
-          "The files changed since you looked at this fix. Open it again to see it against the files as they are now.",
+          "The files changed since you looked at this fix, or it is not the set of changes you looked at. Open it again to see it against the files as they are now.",
         );
       }
       await this.check(plans, [found.roleKey]);

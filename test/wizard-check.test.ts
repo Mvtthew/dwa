@@ -115,3 +115,34 @@ describe("switch rows", () => {
     expect(await frame()).toContain("[x] github");
   });
 });
+
+describe("a switch that the screen follows", () => {
+  /** One switch and a note that says what it amounts to, made anew on every change. */
+  function following(on: boolean): Screen {
+    return {
+      title: "Fix",
+      values: { push: on ? ON : OFF },
+      rows: [
+        {
+          kind: "check",
+          key: "push",
+          label: "allow git push",
+          changed: (values) => ({ replace: following(values.push === ON) }),
+        },
+        { kind: "note", text: on ? "the file gets one more rule" : "nothing is applied" },
+        { kind: "button", label: "Close", run: () => ({ close: true }) },
+      ],
+    };
+  }
+
+  test("a click on it redraws the screen from what it returns", async () => {
+    const { frame, click } = await setup(following(true));
+    expect(await frame()).toContain("the file gets one more rule");
+    await click("allow git push");
+    const after = await frame();
+    expect(after).toContain("nothing is applied");
+    expect(after).not.toContain("the file gets one more rule");
+    await click("allow git push");
+    expect(await frame()).toContain("the file gets one more rule");
+  });
+});
