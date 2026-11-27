@@ -1,6 +1,6 @@
 {
   "name": "dwa",
-  "version": "0.3.1",
+  "version": "0.4.1",
   "description": "Terminal workspace for running and coordinating multiple Claude Code agent sessions in tmux",
   "license": "MIT",
   "type": "module",
