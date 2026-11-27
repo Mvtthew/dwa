@@ -462,16 +462,54 @@ export function createMcpServer(agentId: string, api: Api, options: McpOptions =
                   ),
                 key: z
                   .string()
+                  .optional()
                   .describe(
-                    "A list: tools, deny_tools, allow, deny, mcp, plugins, skills, off_mcp, off_plugins, off_skills, builtin_skills. Or one value: model, effort, permission_mode, memory, subagents, prompt, description, when_to_use.",
+                    "A list: tools, deny_tools, allow, deny, mcp, plugins, skills, off_mcp, off_plugins, off_skills, builtin_skills. Or one value: model, effort, permission_mode, memory, subagents, prompt, description, when_to_use. With table: a key of that table's entry.",
                   ),
                 add: z.string().optional().describe("An item to add to a list."),
                 remove: z.string().optional().describe("An item to take out of a list."),
                 set: z
-                  .union([z.string(), z.boolean()])
+                  .union([
+                    z.string(),
+                    z.boolean(),
+                    z.number(),
+                    z.array(z.string()),
+                    z.record(z.string(), z.string()),
+                  ])
                   .optional()
-                  .describe("The new value; for prompt the whole new text."),
+                  .describe(
+                    "The new value; for prompt the whole new text. With table: the key's whole new value (a text, a list of texts, or for env and headers a record of texts).",
+                  ),
                 unset: z.boolean().optional().describe("Take the key out of the file."),
+                table: z
+                  .string()
+                  .optional()
+                  .describe(
+                    "For a change to the config itself instead of a role: mcp, plugins, profiles, agents or main. The file is then config (the default) or personal-config.",
+                  ),
+                name: z
+                  .string()
+                  .optional()
+                  .describe("With table: the entry, such as the server's name. Not for main."),
+                body: z
+                  .record(
+                    z.string(),
+                    z.union([
+                      z.string(),
+                      z.boolean(),
+                      z.number(),
+                      z.array(z.string()),
+                      z.record(z.string(), z.string()),
+                    ]),
+                  )
+                  .optional()
+                  .describe(
+                    "With table and name: the keys of a new entry, such as { command, args } for an MCP server. A role that should use it needs the name in its mcp or plugins list as a change of its own.",
+                  ),
+                remove_table: z
+                  .boolean()
+                  .optional()
+                  .describe("With table and name: take the whole entry out."),
                 why: z.string().optional().describe("What this one change is for."),
               }),
             )

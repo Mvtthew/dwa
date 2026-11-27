@@ -24,12 +24,15 @@ import type {
 import {
   adoptRole,
   builtinRole,
+  type ConfigOp,
   describeTarget,
+  editConfig,
   editValues,
   type FileTarget,
   noticeEdits,
   type RoleChanges,
   requireRole,
+  saveConfig,
   saveValues,
 } from "../shared/role-edit.ts";
 import {
@@ -111,6 +114,8 @@ interface FilePlan {
   before: string;
   after: string;
   values: RoleChanges;
+  /** Changes to the config's own tables, for a config file. */
+  ops: ConfigOp[];
 }
 
 function hash(texts: string[]): string {
@@ -216,9 +221,10 @@ export class Selfheal {
       }
       if (setup) roleKey = setup.layers.role ?? "";
 
-      const existing = store.openReportBy(input.from, roleKey);
+      // A session that reports the same role again keeps its first report; it only waits or
+      // not. The user's reports each stand: they say different things.
+      const existing = input.from === USER ? null : store.openReportBy(input.from, roleKey);
       if (existing) {
-        // The same reporter about the same role: its first report stands, it only waits or not.
         store.setReportBlocking(existing.id, blocking);
         const open = store.getCase(existing.caseId);
         return {
@@ -229,15 +235,16 @@ export class Selfheal {
       }
 
       let found = store.openCaseOf(roleKey);
+      const alive = found ? store.getRunning(found.agentId) !== null : false;
       // A case whose session is gone carries on only while a proposal of it waits for the user.
-      if (found && !store.getRunning(found.agentId) && !this.pending(found.id)) {
+      if (found && !alive && !this.pending(found.id)) {
         this.cancel(found, "The session that looked into it ended before it was settled.");
         found = null;
       }
-      const joined = found !== null;
+      const joined = found !== null && alive;
       let caseId: number;
       let selfheal: string;
-      if (found) {
+      if (found && alive) {
         caseId = found.id;
         selfheal = store.getAgentName(found.agentId) ?? SELFHEAL_ROLE;
       } else {
@@ -252,7 +259,11 @@ export class Selfheal {
           name: `selfheal-${roleKey || "defaults"}`,
           task: `A report about ${about} came in. Call selfheal_context first: it holds the reports and everything you need to look into them. Then settle them with answer_report, propose_fix or file_bug.`,
         });
-        caseId = store.addCase(roleKey, agent.id, this.now());
+        // A case that still has a proposal waiting gets the new session; the proposal stays.
+        if (found) {
+          caseId = found.id;
+          store.setCaseAgent(found.id, agent.id);
+        } else caseId = store.addCase(roleKey, agent.id, this.now());
         selfheal = agent.name;
       }
       const id = store.addReport({
@@ -275,7 +286,7 @@ export class Selfheal {
         title: `reported a gap${roleKey ? ` in role ${roleKey}` : ""}`,
         body: input.what,
       });
-      if (joined && found && store.getRunning(found.agentId)) {
+      if (joined) {
         workspace.messaging.send(
           WORKSPACE,
           selfheal,
@@ -369,6 +380,18 @@ export class Selfheal {
       out.push("");
     }
     if (reports.length === 0) out.push("No report is open.", "");
+    const waiting = this.pending(found.id);
+    if (waiting) {
+      const lines = (JSON.parse(waiting.changes) as Change[]).map(describeChange).join("; ");
+      out.push(
+        `# Fix #${waiting.id} of this case waits for the user's decision`,
+        "",
+        `${waiting.summary} (${lines})`,
+        "",
+        "A new propose_fix takes its place, so a fix for a report that came later has to hold its changes as well, if they are still right.",
+        "",
+      );
+    }
 
     if (found.roleKey) {
       const layers = resolveLayers({ config, role: found.roleKey }, ctx);
@@ -403,6 +426,18 @@ export class Selfheal {
     out.push(`Plugins in the catalogue (key plugins): ${list(Object.keys(config.plugins))}`);
     out.push(`Profiles: ${list(Object.keys(config.profiles))}`);
     out.push(`Skills of the project (key skills): ${list(projectSkillNames(ctx))}`, "");
+    out.push(
+      "# The config's own tables (both files merged; credentials are masked)",
+      "",
+      `mcp: ${JSON.stringify(maskSecrets(config.mcp))}`,
+      `plugins: ${JSON.stringify(config.plugins)}`,
+      `profiles: ${JSON.stringify(maskSecrets(config.profiles))}`,
+      `main: ${JSON.stringify(config.main)}`,
+      `agents: ${JSON.stringify(maskSecrets(config.agents))}`,
+      "",
+      "A change to one of them names its table (and the entry, except for main) instead of a role's key, and goes into config or personal-config.",
+      "",
+    );
     const memory = store.memory(found.roleKey);
     if (memory.length > 0) {
       out.push("# Turned down by the user before, for this role", "");
@@ -525,10 +560,18 @@ export class Selfheal {
       const values = valuesAfter(base, group, {
         projectSkills: projectSkillNames(ctx),
       }) as RoleChanges;
-      const edit = editValues(target, values, ctx, text);
+      const ops = group.flatMap((change) => (change.op === "config" ? [change.config] : []));
+      const edit =
+        target.kind === "defaults"
+          ? editConfig(target.source ?? "project", values, ops, ctx)
+          : editValues(target, values, ctx, text);
       plans.push({
         target,
-        label: describeTarget(target),
+        ops,
+        label:
+          target.kind === "defaults" && ops.length > 0
+            ? this.configLabel(target)
+            : describeTarget(target),
         path: edit.file.path,
         adopt,
         before: edit.before,
@@ -537,6 +580,11 @@ export class Selfheal {
       });
     }
     return plans;
+  }
+
+  /** A config file in words, for a change that reaches more of it than `[defaults]`. */
+  private configLabel(target: FileTarget): string {
+    return target.source === "user" ? "your personal config.toml" : "config.toml";
   }
 
   /**
@@ -762,7 +810,7 @@ export class Selfheal {
     const subjects = this.subjects(proposal.caseId);
     const lines: FixLine[] = all.flatMap((change): FixLine[] => {
       const line = {
-        file: describeTarget(change.file),
+        file: change.op === "config" ? this.configLabel(change.file) : describeTarget(change.file),
         ...(change.why ? { why: change.why } : {}),
         widens: widens(change),
         ...(warningOf(change) ? { warning: warningOf(change) as string } : {}),
@@ -793,7 +841,8 @@ export class Selfheal {
     let files: FixFile[] = [];
     let error: string | undefined;
     try {
-      files = (changes.length === 0 ? [] : await this.plan(changes)).map((plan) => ({
+      const plans = changes.length === 0 ? [] : await this.plan(changes);
+      files = plans.map((plan) => ({
         label: plan.label,
         path: plan.path,
         adopt: plan.adopt,
@@ -801,6 +850,10 @@ export class Selfheal {
         after: plan.after,
         diff: diffLines(plan.before, plan.after),
       }));
+      // Shown with the reason when sessions could not start with what is left switched on.
+      if (plans.length > 0) {
+        await this.check(plans, [store.getCase(proposal.caseId)?.roleKey ?? ""]);
+      }
     } catch (problem) {
       error = (problem as Error).message;
     }
@@ -808,7 +861,7 @@ export class Selfheal {
       subjects.length === 0
         ? "no session it was reported for is running"
         : !sessionOnlyPossible(changes)
-          ? "it changes the prompt or the description, which only a role file holds"
+          ? "it changes a prompt, a description or the config's own tables, which only a file holds"
           : undefined;
     return {
       ...this.summary(proposal),
@@ -961,7 +1014,17 @@ export class Selfheal {
         if (plan.adopt && plan.target.kind === "role") {
           adoptRole(plan.target.name, this.ctx, { now: new Date(now) });
         }
-        const version = saveValues(plan.target, plan.values, source, this.ctx, new Date(now));
+        const version =
+          plan.target.kind === "defaults"
+            ? saveConfig(
+                plan.target.source ?? "project",
+                plan.values,
+                plan.ops,
+                source,
+                this.ctx,
+                new Date(now),
+              )
+            : saveValues(plan.target, plan.values, source, this.ctx, new Date(now));
         written.push(`${plan.label} (v${version.n})`);
       }
       store.decideProposal(proposal.id, "applied", { as: "role" }, now);

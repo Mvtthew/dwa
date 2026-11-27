@@ -257,3 +257,53 @@ describe("the parts of a changed text", () => {
     expect(keptChanges(all, ["c2#0", "c2#1"], before).map((change) => change.id)).toEqual(["c1"]);
   });
 });
+
+describe("changes to a config's own tables", () => {
+  test("a whole entry, a single key and [main] are told apart", () => {
+    const made = changes(
+      { table: "mcp", name: "jira", body: { command: "jira-mcp", env: { TOKEN: "secret" } } },
+      { table: "mcp", name: "jira", key: "args", set: ["serve"], file: "personal-config" },
+      { table: "profiles", name: "work", remove_table: true },
+      { table: "main", key: "model", unset: true },
+      { table: "agents", name: "watcher", body: { role: "explore" } },
+    );
+    expect(made.map((change) => [change.key, formatFile(change.file)])).toEqual([
+      ["[mcp.jira]", "defaults"],
+      ["[mcp.jira] args", "personal-defaults"],
+      ["[profiles.work]", "defaults"],
+      ["[main] model", "defaults"],
+      ["[[agents]] watcher", "defaults"],
+    ]);
+    expect(made.map(describeChange)).toEqual([
+      '[mcp.jira] added: command = "jira-mcp", env = {"TOKEN":"***"}',
+      '[mcp.jira] args = ["serve"]',
+      "[profiles.work] removed",
+      "[main] model removed",
+      '[[agents]] watcher added: role = "explore"',
+    ]);
+    expect(made.map(widens)).toEqual([true, true, false, false, true]);
+    expect(made.map((change) => warningOf(change) !== null)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      true,
+    ]);
+    expect(sessionOnlyPossible(made)).toBe(false);
+    // They are no values of a layer.
+    expect(valuesAfter({ model: "sonnet" }, made)).toEqual({});
+  });
+
+  test("what is not a table change is refused", () => {
+    expect(() => changes({ table: "keys", name: "x", body: {} })).toThrow("unknown table");
+    expect(() => changes({ table: "mcp", body: { command: "x" } })).toThrow("name the entry");
+    expect(() => changes({ table: "main", name: "x", key: "model", set: "opus" })).toThrow(
+      "[main] has no entries",
+    );
+    expect(() => changes({ table: "mcp", name: "x" })).toThrow("give either body");
+    expect(() => changes({ table: "mcp", name: "x", set: "y" })).toThrow("name the key");
+    expect(() => changes({ table: "mcp", name: "x", body: {}, file: "role:dev" })).toThrow(
+      "part of a config",
+    );
+  });
+});

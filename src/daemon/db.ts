@@ -1112,6 +1112,11 @@ export class Store {
       .all() as CaseRow[];
   }
 
+  /** Hands a case to another session, when the one that had it is gone. */
+  setCaseAgent(id: number, agentId: string): void {
+    this.db.query("UPDATE selfheal_cases SET agent_id = ? WHERE id = ?").run(agentId, id);
+  }
+
   closeCase(id: number, now: number): void {
     this.db
       .query("UPDATE selfheal_cases SET state = 'closed', closed_at = ? WHERE id = ?")

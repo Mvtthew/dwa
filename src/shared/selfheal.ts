@@ -10,7 +10,8 @@ import {
   NAME_PATTERN,
 } from "./capabilities.ts";
 import { APP_NAME } from "./constants.ts";
-import type { FileTarget } from "./role-edit.ts";
+import { CONFIG_TABLES, type ConfigOp, type ConfigTable, type FileTarget } from "./role-edit.ts";
+import type { TomlValue } from "./toml.ts";
 
 /** The built-in role of the session that looks into a report. */
 export const SELFHEAL_ROLE = `${APP_NAME}-selfheal`;
@@ -59,17 +60,34 @@ export type Change = { id: string; file: FileTarget; why?: string } & (
   | { op: "add" | "remove"; key: ListKey; item: string }
   | { op: "set"; key: ValueKey; value: string | boolean }
   | { op: "unset"; key: ListKey | ValueKey }
+  /**
+   * A change to one of a config's own tables (`[mcp.X]`, `[[agents]]`, `[main]`, ...). Its file
+   * is that config, named like its `[defaults]`; `key` says which table and entry, in words.
+   */
+  | { op: "config"; key: string; config: ConfigOp }
 );
 
 /** A change as the selfheal session hands it in. */
 export interface ChangeInput {
-  /** `role:<name>`, `personal-role:<name>`, `defaults` or `personal-defaults`. */
+  /**
+   * `role:<name>`, `personal-role:<name>`, `defaults` or `personal-defaults`; for a change to
+   * a config's own table also `config` and `personal-config`, which name the same two files.
+   */
   file?: string;
-  key: string;
+  /** A key of a role file or of `[defaults]`; with `table`, a key of that table's entry. */
+  key?: string;
   add?: string;
   remove?: string;
-  set?: string | boolean;
+  set?: TomlValue;
   unset?: boolean;
+  /** One of the config's own tables: mcp, plugins, profiles, agents or main. */
+  table?: string;
+  /** The entry of that table: a server, a plugin, a profile, an agent's name. Not for main. */
+  name?: string;
+  /** With `table` and `name` and no `key`: the keys of a new entry. */
+  body?: Record<string, TomlValue>;
+  /** With `table` and `name`: take the whole entry out. */
+  remove_table?: boolean;
   why?: string;
 }
 
@@ -83,8 +101,10 @@ function isValueKey(key: string): key is ValueKey {
 
 /** The file a change names, from the short form a selfheal session writes. */
 export function parseFile(text: string): FileTarget {
-  if (text === "defaults") return { kind: "defaults" };
-  if (text === "personal-defaults") return { kind: "defaults", source: "user" };
+  if (text === "defaults" || text === "config") return { kind: "defaults" };
+  if (text === "personal-defaults" || text === "personal-config") {
+    return { kind: "defaults", source: "user" };
+  }
   const [place, name, ...rest] = text.split(":");
   if (rest.length === 0 && name && NAME_PATTERN.test(name)) {
     if (place === "role") return { kind: "role", name };
@@ -108,6 +128,7 @@ export function formatFile(file: FileTarget): string {
 export function expandChanges(inputs: ChangeInput[], fallback: FileTarget): Change[] {
   if (inputs.length === 0) throw new ConfigError("A proposal needs at least one change.");
   return inputs.map((input, index) => {
+    if (input.table !== undefined) return configChange(input, index);
     const where = `Change ${index + 1} (${input.key})`;
     const file = input.file ? parseFile(input.file) : fallback;
     const base = { id: `c${index + 1}`, file, ...(input.why ? { why: input.why } : {}) };
@@ -120,7 +141,7 @@ export function expandChanges(inputs: ChangeInput[], fallback: FileTarget): Chan
     if (given !== 1) {
       throw new ConfigError(`${where}: give exactly one of add, remove, set and unset.`);
     }
-    const { key } = input;
+    const key = input.key ?? "";
     if (!isListKey(key) && !isValueKey(key)) {
       throw new ConfigError(
         `${where}: unknown key. Lists: ${LIST_KEYS.join(", ")}. Single values: ${VALUE_KEYS.join(", ")}.`,
@@ -151,6 +172,61 @@ export function expandChanges(inputs: ChangeInput[], fallback: FileTarget): Chan
     }
     return { ...base, op: "set" as const, key, value };
   });
+}
+
+/** A change to one of a config's own tables, from what a selfheal session handed in. */
+function configChange(input: ChangeInput, index: number): Change {
+  const table = input.table as ConfigTable;
+  const where = `Change ${index + 1} ([${input.table}${input.name ? `.${input.name}` : ""}])`;
+  if (!(CONFIG_TABLES as readonly string[]).includes(table)) {
+    throw new ConfigError(`${where}: unknown table. Tables: ${CONFIG_TABLES.join(", ")}.`);
+  }
+  const file = parseFile(input.file ?? "config");
+  if (file.kind !== "defaults") {
+    throw new ConfigError(`${where}: a table is part of a config; use config or personal-config.`);
+  }
+  if (table !== "main" && !input.name) throw new ConfigError(`${where}: name the entry (name).`);
+  if (table === "main" && input.name) throw new ConfigError(`${where}: [main] has no entries.`);
+  const label =
+    table === "agents"
+      ? `[[agents]] ${input.name}`
+      : `[${table}${input.name ? `.${input.name}` : ""}]`;
+  const base = { id: `c${index + 1}`, file, ...(input.why ? { why: input.why } : {}) };
+  const whole = input.body !== undefined || input.remove_table === true;
+  const single = input.set !== undefined || input.unset === true;
+  if (whole === single || (input.body !== undefined && input.remove_table === true)) {
+    throw new ConfigError(
+      `${where}: give either body (a new entry), remove_table, or key with set or unset.`,
+    );
+  }
+  if (input.add !== undefined || input.remove !== undefined) {
+    throw new ConfigError(`${where}: a table's key takes set with the whole new value.`);
+  }
+  if (whole) {
+    if (table === "main") throw new ConfigError(`${where}: change [main] key by key.`);
+    return {
+      ...base,
+      op: "config",
+      key: label,
+      config: { op: "table", table, name: input.name as string, body: input.body ?? null },
+    };
+  }
+  if (!input.key) throw new ConfigError(`${where}: name the key.`);
+  if (input.set !== undefined && input.unset === true) {
+    throw new ConfigError(`${where}: give set or unset, not both.`);
+  }
+  return {
+    ...base,
+    op: "config",
+    key: `${label} ${input.key}`,
+    config: {
+      op: "key",
+      table,
+      ...(input.name ? { name: input.name } : {}),
+      key: input.key,
+      value: input.unset === true ? null : (input.set as TomlValue),
+    },
+  };
 }
 
 function withItem(list: string[], item: string): string[] {
@@ -185,6 +261,8 @@ export function valuesAfter(
   const next: Record<string, unknown> = structuredClone(base);
   const list = (key: ListKey): string[] => (next[key] as string[] | undefined) ?? [];
   for (const change of changes) {
+    // A config's own tables are not values of a layer; they are edited as tables.
+    if (change.op === "config") continue;
     if (change.op === "set") next[change.key] = change.value;
     else if (change.op === "unset") delete next[change.key];
     else if (change.key === "tools") {
@@ -238,6 +316,11 @@ const SHRINKS: readonly ListKey[] = ["deny_tools", "deny", "off_mcp", "off_plugi
 
 /** Whether a change gives a session something it did not have. */
 export function widens(change: Change): boolean {
+  if (change.op === "config") {
+    return change.config.op === "table"
+      ? change.config.body !== null
+      : change.config.value !== null;
+  }
   if (change.op === "add") return GROWS.includes(change.key);
   if (change.op === "remove") return SHRINKS.includes(change.key);
   if (change.op === "unset") return (SHRINKS as readonly string[]).includes(change.key);
@@ -246,7 +329,24 @@ export function widens(change: Change): boolean {
 }
 
 /** What the user is warned of before approving a change that reaches far; null for the rest. */
+/** Keys of a catalogue entry that decide what is run or reached on the user's machine. */
+const RUNS: readonly string[] = ["command", "args", "env", "url", "headers", "path", "type"];
+
 export function warningOf(change: Change): string | null {
+  if (change.op === "config") {
+    const { config } = change;
+    if (config.op === "table" && config.body === null) return null;
+    if (config.table === "agents") {
+      return config.op === "table" ? "a session that starts with every workspace" : null;
+    }
+    if (config.table === "main") return null;
+    if (config.op === "key" && (config.value === null || !RUNS.includes(config.key))) return null;
+    return config.table === "mcp"
+      ? "a program or an address that sessions with this server run or reach on this machine"
+      : config.table === "profiles"
+        ? "the command every session of this profile is started with"
+        : "a plugin directory whose code sessions load";
+  }
   if (change.op === "add" && change.key === "tools" && change.item === ALL_TOOLS) {
     return "every built-in tool of the Claude command, also those a later version adds";
   }
@@ -268,6 +368,22 @@ export function warningOf(change: Change): string | null {
 
 /** One change in one line, as the approval and the feed show it. */
 export function describeChange(change: Change): string {
+  if (change.op === "config") {
+    const { config } = change;
+    const show = (value: unknown) => JSON.stringify(maskSecrets({ value }).value);
+    if (config.op === "table") {
+      if (config.body === null) return `${change.key} removed`;
+      const keys = Object.entries(maskSecrets(config.body)).map(
+        ([key, value]) => `${key} = ${JSON.stringify(value)}`,
+      );
+      return `${change.key} added: ${keys.join(", ")}`;
+    }
+    if (config.value === null) return `${change.key} removed`;
+    const value = SECRET_HOLDERS.includes(config.key)
+      ? show({ [config.key]: config.value }).replace(/^\{"[^"]+":|\}$/g, "")
+      : JSON.stringify(config.value);
+    return `${change.key} = ${value}`;
+  }
   if (change.op === "set") {
     const { value } = change;
     if (typeof value === "string" && (value.includes("\n") || value.length > 60)) {

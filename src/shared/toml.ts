@@ -2,7 +2,7 @@
 // that leave every other byte, comments included, as it was. Reading is Bun's own parser.
 
 /** A value dwa writes into a config or role file. */
-export type TomlValue = string | number | boolean | string[];
+export type TomlValue = string | number | boolean | string[] | { [key: string]: string };
 
 /** A file could not be changed without risking its other contents. */
 export class TomlEditError extends Error {}
@@ -31,11 +31,21 @@ export function tomlString(value: string): string {
 /** A value as it stands after `key = `. A long list goes on several lines, one item each. */
 export function tomlValue(value: TomlValue, key = ""): string {
   if (typeof value === "string") return tomlString(value);
+  if (typeof value === "object" && !Array.isArray(value)) return inlineTable(value);
   if (!Array.isArray(value)) return String(value);
   const items = value.map(tomlString);
   const oneLine = `[${items.join(", ")}]`;
   if (key.length + 3 + oneLine.length <= ONE_LINE && !oneLine.includes("\n")) return oneLine;
   return `[\n${items.map((item) => `  ${item},\n`).join("")}]`;
+}
+
+/** A flat record of strings as an inline table, such as an MCP server's `env`. */
+function inlineTable(value: { [key: string]: string }): string {
+  const parts = Object.entries(value).map(
+    ([key, item]) =>
+      `${/^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key)} = ${tomlString(item)}`,
+  );
+  return parts.length > 0 ? `{ ${parts.join(", ")} }` : "{}";
 }
 
 /** One `key = value` statement of a file, by position. */
@@ -380,12 +390,47 @@ export function setKeys(
   changes: Record<string, TomlValue | undefined>,
   last: string[] = [],
 ): string {
+  return setKeysIn(text, table, changes, last);
+}
+
+/**
+ * The same for one table of a list of tables (`[[agents]]`): the one at `index`, counted from 0
+ * in the order they are written.
+ */
+export function setKeysAt(
+  text: string,
+  table: string,
+  index: number,
+  changes: Record<string, TomlValue | undefined>,
+): string {
+  return setKeysIn(text, table, changes, [], index);
+}
+
+function setKeysIn(
+  text: string,
+  table: string | null,
+  changes: Record<string, TomlValue | undefined>,
+  last: string[],
+  index?: number,
+): string {
   const before = Bun.TOML.parse(text) as Record<string, unknown>;
   const { entries, headers } = layout(text);
-  if (headers.some((header) => header.table === table && header.array)) {
-    throw new TomlEditError(`"${table}" is a list of tables`);
+  const listed = headers.some((header) => header.table === table && header.array);
+  if (listed !== (index !== undefined)) {
+    throw new TomlEditError(
+      listed ? `"${table}" is a list of tables` : `"${table}" is not a list of tables`,
+    );
   }
-  const inTable = entries.filter((entry) => entry.table === table);
+  // One of a list of tables is the run of lines from its header to the next table's.
+  const own = index === undefined ? undefined : listBlocks(text, table as string)[index];
+  if (index !== undefined && !own) {
+    throw new TomlEditError(`there is no [[${table}]] number ${index + 1}`);
+  }
+  const inTable = entries.filter(
+    (entry) =>
+      entry.table === table &&
+      (!own || (entry.lineStart >= own.header.lineEnd && entry.lineEnd <= own.end)),
+  );
   const edits: Edit[] = [];
   const inserts: string[] = [];
   const nl = lineEnd(text);
@@ -411,7 +456,7 @@ export function setKeys(
     const block = inserts.join("");
     const anchor = inTable.filter((entry) => !last.includes(entry.key)).at(-1);
     const tail = inTable.find((entry) => last.includes(entry.key));
-    const header = headers.find((candidate) => candidate.table === table);
+    const header = own ? own.header : headers.find((candidate) => candidate.table === table);
     const firstHeader = headers[0];
     if (anchor) {
       const newline = text.endsWith("\n") || anchor.lineEnd < text.length ? "" : nl;
@@ -453,13 +498,19 @@ export function setKeys(
   const after = parseOrThrow(result);
   const expected = structuredClone(before);
   const path = table === null ? [] : table.split(".");
-  const target = dig(expected, path, true);
+  let target: Record<string, unknown> | undefined;
+  if (index === undefined) target = dig(expected, path, true);
+  else {
+    const holder = dig(expected, path.slice(0, -1));
+    const all = holder?.[path.at(-1) as string];
+    target = Array.isArray(all) ? (all[index] as Record<string, unknown>) : undefined;
+  }
   if (!target) throw new TomlEditError(`"${table}" is not a table`);
   for (const [key, value] of Object.entries(changes)) {
     if (value === undefined) delete target[key];
     else target[key] = value;
   }
-  pruneNew(expected, before, path);
+  if (index === undefined) pruneNew(expected, before, path);
   if (!same(sortKeys(after), sortKeys(expected))) {
     throw new TomlEditError("the change could not be made without touching other settings");
   }
@@ -587,8 +638,12 @@ function slot(text: string, table: string, before: string | null | undefined): n
     return target.start;
   }
   const parent = parentOf(table);
-  const siblings = all.filter((block) => parentOf(block.table) === parent);
-  return siblings.at(-1)?.end ?? text.length;
+  const last = all.findLast((block) => parentOf(block.table) === parent);
+  if (!last) return text.length;
+  // After the tables inside the last one too: they belong to it.
+  let at = all.indexOf(last);
+  while (all[at + 1]?.table.startsWith(`${last.table}.`)) at += 1;
+  return (all[at] as Block).end;
 }
 
 /**
@@ -740,5 +795,98 @@ export function replaceInValue(
   if (next === raw) return text;
   const result = text.slice(0, entry.valueStart) + next + text.slice(entry.valueEnd);
   parseOrThrow(result);
+  return result;
+}
+
+/** The tables of a list of tables (`[[name]]`), in the order they are written. */
+function listBlocks(text: string, table: string): Block[] {
+  return blocks(text).filter((block) => block.table === table && block.array);
+}
+
+/**
+ * Adds one more table to a list of tables (`[[agents]]`), after the last one of the list or at
+ * the end of the text. The rest of the text stays as it is.
+ */
+export function addArrayTable(
+  text: string,
+  table: string,
+  body: Record<string, TomlValue>,
+): string {
+  const before = Bun.TOML.parse(text) as Record<string, unknown>;
+  const path = table.split(".");
+  const holder = dig(before, path.slice(0, -1));
+  const existing = holder?.[path.at(-1) as string];
+  if (existing !== undefined && !Array.isArray(existing)) {
+    throw new TomlEditError(`"${table}" is not a list of tables`);
+  }
+  const nl = lineEnd(text);
+  const lines = Object.keys(body).map(
+    (key) => `${key} = ${tomlValue(body[key] as TomlValue, key)}${nl}`,
+  );
+  const at = listBlocks(text, table).at(-1)?.end ?? text.length;
+  const result = insertBlock(text, at, `[[${headerName(table)}]]${nl}${lines.join("")}`);
+  const expected = structuredClone(before);
+  const target = dig(expected, path.slice(0, -1), true);
+  if (!target) throw new TomlEditError(`[[${table}]] cannot be added here`);
+  target[path.at(-1) as string] = [...((existing as unknown[] | undefined) ?? []), { ...body }];
+  if (!same(sortKeys(parseOrThrow(result)), sortKeys(expected))) {
+    throw new TomlEditError("the table could not be added without touching other settings");
+  }
+  return result;
+}
+
+/** Removes the table at `index` of a list of tables, with the comment lines right above it. */
+export function removeArrayTable(text: string, table: string, index: number): string {
+  const before = Bun.TOML.parse(text) as Record<string, unknown>;
+  const block = listBlocks(text, table)[index];
+  if (!block) throw new TomlEditError(`there is no [[${table}]] number ${index + 1}`);
+  if (blocks(text).some((other) => other.table.startsWith(`${table}.`))) {
+    throw new TomlEditError(`[[${table}]] has tables inside it`);
+  }
+  const result = cutBlock(text, block);
+  const expected = structuredClone(before);
+  const path = table.split(".");
+  const holder = dig(expected, path.slice(0, -1));
+  const all = holder?.[path.at(-1) as string];
+  if (holder && Array.isArray(all)) {
+    all.splice(index, 1);
+    if (all.length === 0) delete holder[path.at(-1) as string];
+  }
+  if (!same(sortKeys(parseOrThrow(result)), sortKeys(expected))) {
+    throw new TomlEditError("the table could not be removed without touching other settings");
+  }
+  return result;
+}
+
+/**
+ * Removes a table together with the tables inside it (`[mcp.github]` and `[mcp.github.env]`),
+ * which `removeTable` refuses. A table written only through its inner tables goes the same way.
+ */
+export function removeTableTree(text: string, table: string): string {
+  const before = Bun.TOML.parse(text) as Record<string, unknown>;
+  const inside = blocks(text).filter(
+    (block) => block.table === table || block.table.startsWith(`${table}.`),
+  );
+  if (inside.length === 0) throw new TomlEditError(`there is no table [${table}]`);
+  if (inside.some((block) => block.array)) {
+    throw new TomlEditError(`[${table}] holds a list of tables`);
+  }
+  let result = text;
+  // From the end, so the earlier blocks keep their place.
+  for (const block of [...inside].reverse()) result = cutBlock(result, block);
+  const expected = structuredClone(before);
+  const path = table.split(".");
+  const holder = dig(expected, path.slice(0, -1));
+  if (holder) delete holder[path.at(-1) as string];
+  const after = parseOrThrow(result);
+  for (let depth = path.length - 1; depth > 0; depth--) {
+    const here = dig(expected, path.slice(0, depth));
+    if (!here || Object.keys(here).length > 0 || dig(after, path.slice(0, depth))) break;
+    const parent = dig(expected, path.slice(0, depth - 1));
+    if (parent) delete parent[path[depth - 1] as string];
+  }
+  if (!same(sortKeys(after), sortKeys(expected))) {
+    throw new TomlEditError("the table could not be removed without touching other settings");
+  }
   return result;
 }

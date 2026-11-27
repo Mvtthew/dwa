@@ -34,7 +34,16 @@ import {
   roleKind,
 } from "./roles.ts";
 import { type ItemEntry, type ItemRef, moveItem, requireItem, type Scope } from "./scope.ts";
-import { mapValues, setKeys, type TomlValue } from "./toml.ts";
+import {
+  addArrayTable,
+  addTable,
+  mapValues,
+  removeArrayTable,
+  removeTableTree,
+  setKeys,
+  setKeysAt,
+  type TomlValue,
+} from "./toml.ts";
 import { followRoleRename, roleMentions } from "./workflow-edit.ts";
 
 /**
@@ -203,8 +212,128 @@ export function saveValues(
   return saveTracked(file, after, source, now);
 }
 
+/** The tables of a config besides `[defaults]` that dwa changes in place. */
+export const CONFIG_TABLES = ["mcp", "plugins", "profiles", "agents", "main"] as const;
+export type ConfigTable = (typeof CONFIG_TABLES)[number];
+
+/**
+ * One change to a config's own tables: a whole entry of a catalogue (`[mcp.<name>]`,
+ * `[plugins.<name>]`, `[profiles.<name>]`) or of `[[agents]]` (by its `name`) added or, with a
+ * null body, removed; or one key of such an entry or of `[main]` set or, with null, removed.
+ */
+export type ConfigOp =
+  | {
+      op: "table";
+      table: Exclude<ConfigTable, "main">;
+      name: string;
+      body: Record<string, TomlValue> | null;
+    }
+  | { op: "key"; table: ConfigTable; name?: string; key: string; value: TomlValue | null };
+
+/** The place of the `[[agents]]` entry with that name; throws when there is none or two. */
+function agentIndex(text: string, name: string): number {
+  const parsed = Bun.TOML.parse(text) as { agents?: { name?: unknown }[] };
+  const found = (parsed.agents ?? []).flatMap((agent, index) =>
+    agent.name === name ? [index] : [],
+  );
+  if (found.length > 1) throw new ConfigError(`[[agents]] has "${name}" more than once.`);
+  if (found.length === 0) throw new ConfigError(`There is no [[agents]] entry "${name}".`);
+  return found[0] as number;
+}
+
+/**
+ * A config's text with changes to its own tables, everything else kept as it is. Whether the
+ * result is a valid config is for the caller to check.
+ */
+export function editConfigText(text: string, ops: ConfigOp[]): string {
+  let next = text;
+  for (const change of ops) {
+    const parsed = Bun.TOML.parse(next) as Record<string, unknown>;
+    const entries = (parsed[change.table] ?? {}) as Record<string, unknown>;
+    if (change.op === "table" && change.table === "agents") {
+      if (change.body === null) {
+        next = removeArrayTable(next, "agents", agentIndex(next, change.name));
+      } else {
+        const agents = (parsed.agents ?? []) as { name?: unknown }[];
+        if (agents.some((agent) => agent.name === change.name)) {
+          throw new ConfigError(`There is already an [[agents]] entry "${change.name}".`);
+        }
+        next = addArrayTable(next, "agents", { name: change.name, ...change.body });
+      }
+    } else if (change.op === "table") {
+      if (!NAME_PATTERN.test(change.name)) {
+        throw new ConfigError(`"${change.name}" cannot be a name in [${change.table}].`);
+      }
+      const table = `${change.table}.${change.name}`;
+      if (change.body === null) next = removeTableTree(next, table);
+      else if (change.name in entries) {
+        throw new ConfigError(`There is already a [${table}]; change its keys one by one.`);
+      } else next = addTable(next, table, change.body);
+    } else if (change.table === "main") {
+      if (change.value === null && !(change.key in entries)) continue;
+      next = setKeys(next, "main", { [change.key]: change.value ?? undefined });
+    } else if (change.table === "agents") {
+      const index = agentIndex(next, change.name ?? "");
+      const agent = (parsed.agents as Record<string, unknown>[])[index] ?? {};
+      if (change.value === null && !(change.key in agent)) continue;
+      next = setKeysAt(next, "agents", index, { [change.key]: change.value ?? undefined });
+    } else {
+      const entry = entries[change.name ?? ""] as Record<string, unknown> | undefined;
+      const table = `${change.table}.${change.name}`;
+      if (!entry) throw new ConfigError(`There is no [${table}].`);
+      if (change.value === null && !(change.key in entry)) continue;
+      next = setKeys(next, table, { [change.key]: change.value ?? undefined });
+    }
+  }
+  return next;
+}
+
+/**
+ * Works out a config's text with `[defaults]` values and its own tables changed, and writes
+ * nothing. The new text has to be a valid config.
+ */
+export function editConfig(
+  where: Scope,
+  changes: RoleChanges,
+  ops: ConfigOp[],
+  ctx: RoleContext,
+): ValueEdit {
+  const first = editValues({ kind: "defaults", source: where }, changes, ctx);
+  if (ops.length === 0) return first;
+  const after = editConfigText(first.after, ops);
+  // Relative paths in a config start from where that config is.
+  parseConfig(
+    after,
+    first.file.path,
+    where === "user" ? dirname(first.file.path) : ctx.projectRoot,
+  );
+  return { ...first, after };
+}
+
+/**
+ * Writes `[defaults]` values and changes to a config's own tables in one version. The new text
+ * has to be a valid config, otherwise nothing is written.
+ */
+export function saveConfig(
+  where: Scope,
+  changes: RoleChanges,
+  ops: ConfigOp[],
+  source: string,
+  ctx: RoleContext,
+  now: Date = new Date(),
+): Version {
+  const { file, after } = editConfig(where, changes, ops, ctx);
+  return saveTracked(file, after, source, now);
+}
+
 /** The `[main]` keys dwa writes itself. */
-export type MainChanges = { leader?: boolean | null };
+export type MainChanges = {
+  leader?: boolean | null;
+  role?: string | null;
+  model?: string | null;
+  effort?: string | null;
+  check_commands?: string[] | null;
+};
 
 /** What `[main]` holds in one of the two config files, as written there; empty without the file. */
 export function ownMain(where: Scope, ctx: RoleContext): Record<string, unknown> {

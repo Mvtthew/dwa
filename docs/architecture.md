@@ -160,7 +160,7 @@ Deterministic workflows on top of interactive sessions. The DAG runner, review l
 
 Each change has a switch on the fix screen, and a changed prompt one for each part of it (`textHunks`); a switch redraws the screen from the daemon's answer for the changes that are on (`changed` on a `check` row in `src/ui/wizard.ts`), and the decision names the ones that are off (`FixDecision.dropped`). The hash a decision carries covers the files as they are and as they would be, so what is applied is what was shown.
 
-Still to do for self-heal: in-place editing of `[mcp.X]`, `[plugins.X]`, `[profiles.X]`, `[[agents]]` and the other `[main]` keys so a fix can reach them.
+A fix also reaches a config's own tables. A change names its table and entry (`ConfigOp` in `src/shared/role-edit.ts`): a whole `[mcp.X]`, `[plugins.X]`, `[profiles.X]` or `[[agents]]` entry added or removed, or one key of an entry or of `[main]` set or removed. `editConfigText` makes them in place (`setKeysAt`, `addArrayTable`, `removeArrayTable` and `removeTableTree` in `src/shared/toml.ts`), and `saveConfig` writes them with the `[defaults]` values of the same fix as one version. Such a change is marked as giving more, with a warning where it decides what runs on the machine; credentials are masked in what the selfheal session is shown and in the change's one line, not in the file's own diff on the user's screen.
 
 Still to do, each as its own piece of work:
 

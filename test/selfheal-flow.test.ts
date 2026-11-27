@@ -350,6 +350,61 @@ describe("self-heal", () => {
     expect(text).toStartWith("# what the developer may do\n");
   });
 
+  test("a fix adds an MCP server to the config and gives it to the role, in one decision", async () => {
+    await workspace.up();
+    const configPath = join(project(), ".dwa", "config.toml");
+    const before =
+      '# the project\'s config\n[defaults]\nmodel = "sonnet" # cheap\n\n[mcp.github]\ncommand = "sh"\n';
+    writeFileSync(configPath, before);
+    const receipt = await selfheal.report({
+      from: "user",
+      target: "developer",
+      what: "developers need the tracker",
+    });
+    await selfheal.propose(healer(receipt.id), {
+      summary: "give developers the tracker",
+      reason: "tickets are filed from the code",
+      changes: [
+        {
+          table: "mcp",
+          name: "tracker",
+          body: {
+            command: "sh",
+            args: ["-c", "tracker-mcp"],
+            env: { TRACKER_TOKEN: "fill me in" },
+          },
+          why: "the server itself",
+        },
+        { key: "mcp", add: "tracker" },
+        { table: "main", key: "effort", set: "high" },
+      ],
+    });
+    const view = await selfheal.view(1);
+    expect(view.lines.map((line) => [line.file, line.text, line.warning !== undefined])).toEqual([
+      [
+        "config.toml",
+        '[mcp.tracker] added: command = "sh", args = ["-c","tracker-mcp"], env = {"TRACKER_TOKEN":"***"}',
+        true,
+      ],
+      ["role developer", "mcp + tracker", false],
+      ["config.toml", '[main] effort = "high"', false],
+    ]);
+    expect(view.noSessionOnly).toBeDefined();
+    expect(view.files.map((entry) => entry.label).sort()).toEqual([
+      "config.toml",
+      "role developer",
+    ]);
+
+    // Without the server the role's list would name nothing: that is refused, nothing written.
+    const half = await selfheal.view(1, ["c1"]);
+    expect(half.error).toContain("tracker");
+    await selfheal.decide({ id: 1, action: "role", base: view.base });
+    expect(readFileSync(configPath, "utf8")).toBe(
+      `${before}\n[mcp.tracker]\ncommand = "sh"\nargs = ["-c", "tracker-mcp"]\nenv = { TRACKER_TOKEN = "fill me in" }\n\n[main]\neffort = "high"\n`,
+    );
+    expect(readFileSync(file("developer.toml"), "utf8")).toContain('mcp = ["tracker"]');
+  });
+
   test("a change to the prompt cannot be given to one session", async () => {
     await workspace.up();
     const { receipt } = await gap();
@@ -358,7 +413,7 @@ describe("self-heal", () => {
       reason: "the prompt forbids it",
       changes: [{ key: "prompt", set: "You write code and publish it.\n" }],
     });
-    expect((await selfheal.view(1)).noSessionOnly).toContain("only a role file holds");
+    expect((await selfheal.view(1)).noSessionOnly).toContain("which only a file holds");
     await expect(selfheal.decide({ id: 1, action: "session" })).rejects.toThrow(
       "cannot be given to the reporting sessions alone",
     );
@@ -476,6 +531,39 @@ describe("self-heal", () => {
     expect(heard[0]).toContain(
       "dev reported a gap in its setup (git push was refused). Outcome: answered.",
     );
+  });
+
+  test("a report about a role whose fix still waits gets a session again, and the user's reports each stand", async () => {
+    await workspace.up();
+    const first = await selfheal.report({
+      from: "user",
+      target: "developer",
+      what: "let them push",
+    });
+    const firstHealer = healer(first.id);
+    await selfheal.propose(firstHealer, {
+      summary: "let developers push",
+      reason: "asked for",
+      changes: [push],
+    });
+    // The workspace stops: the session is gone, the proposal still waits.
+    await workspace.stop(firstHealer);
+    await settled();
+    expect(store.pendingProposals()).toHaveLength(1);
+    expect(store.getReport(first.id)?.state).toBe("open");
+
+    const second = await selfheal.report({ from: "user", target: "developer", what: "and opus" });
+    expect(second.id).not.toBe(first.id);
+    expect(second.joined).toBe(false);
+    const nextHealer = healer(second.id);
+    expect(nextHealer).not.toBe(firstHealer);
+    expect(store.getRunning(nextHealer)?.role).toBe(SELFHEAL_ROLE);
+    expect(store.openCases()).toHaveLength(1);
+    const text = await selfheal.context(nextHealer);
+    expect(text).toContain("What: let them push");
+    expect(text).toContain("What: and opus");
+    expect(text).toContain("# Fix #1 of this case waits for the user's decision");
+    expect(text).toContain("let developers push (allow + Bash(git push *))");
   });
 
   test("the user reports on a role nobody runs", async () => {

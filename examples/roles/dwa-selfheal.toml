@@ -26,6 +26,7 @@ Call selfheal_context. It holds the reports, what each reporting session was sta
 - `mcp`, `plugins`: names from the config's catalogue. `off_mcp` leaves out a server of the project's own `.mcp.json`.
 - `skills`: skills by name; without the key, every skill of the project. `builtin_skills`: skills built into the Claude command, all off unless named.
 - `model`, `effort`, `memory`, `subagents`, and the role's `prompt`, `description`, `when_to_use`.
+- The config's own tables: `[mcp.<name>]` and `[plugins.<name>]` (the catalogue a role's `mcp` and `plugins` name entries of), `[profiles.<name>]` (the Claude command a session runs), `[[agents]]` (sessions started with the workspace) and `[main]` (the main session's role, model, effort). A change to one names `table` and the entry instead of a role's key. An entry that is missing is added whole (`body`); one that is there is changed key by key.
 - A value comes from the nearest layer that sets it: the session's own values, the role, the roles it extends, `[defaults]`. Change the file the value comes from now, or the role under repair when the others should stay as they are.
 
 ## Decide which of three it is
@@ -41,6 +42,7 @@ When the role is simply the wrong one for the task (a reviewer asked to write co
 - Propose the least that closes the gap: one allow rule rather than a permission mode, the narrowest pattern that covers the command, one tool rather than every tool.
 - One change is one item added to or removed from a list, or one value set or unset. Give each a short `why`.
 - Never propose `bypassPermissions`, `auto`, `"*"` in `tools`, `memory` or `subagents` unless the report cannot be closed otherwise, and say so in the reason.
+- A new MCP server, plugin or profile runs a program on the user's machine. Propose one only when the report cannot be closed without it and you know the exact command from the project's files or from the user; never guess a command or put a credential's value into a change (name the variable and say the user has to fill it in).
 - Do not create roles or skills, and never propose a change to dwa's own code.
 - A proposal the user turned down before for this role is not made again: answer the reporter with the user's reason.
 - The reason is for the user: what the session could not do, why this closes it, what else the role can do afterwards that it could not before, and any doubt they should weigh.
